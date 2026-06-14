@@ -65,8 +65,8 @@ const STORAGE_KEY = "shiftwise_v2";
 const fmt = v => {
   if (v == null) return "";
   const h = Math.floor(v), m = Math.round((v - h) * 60);
-  const hr12 = h % 12 === 0 ? 12 : h % 12;
-  return `${hr12}:${String(m).padStart(2,"0")} ${h < 12 ? "AM" : "PM"}`;
+  const hr = h % 12 === 0 ? 12 : h % 12;
+  return `${hr}:${m === 0 ? "00" : "30"} ${h < 12 ? "AM" : "PM"}`;
 };
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end - s.start).toFixed(2))));
 const getSunday = ds => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()-d.getDay()); return d.toISOString().split("T")[0]; };
@@ -86,18 +86,6 @@ body { margin:0; padding:0; min-height:100vh; overflow-x:hidden; overflow-y:auto
 a, button { -webkit-tap-highlight-color:transparent; }
 input,select,button,textarea { font-family:inherit; }
 .grid-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:12px; }
-@media print {
-  body * { visibility: hidden !important; }
-  #sw-print-area, #sw-print-area * { visibility: visible !important; }
-  #sw-print-area {
-    position: fixed !important; top: 0 !important; left: 0 !important;
-    width: 100vw !important; margin: 0 !important; padding: 0 !important; overflow: visible !important;
-  }
-  #sw-print-area table { width: 100% !important; min-width: 0 !important; border-collapse: collapse !important; table-layout: fixed !important; font-size: 10px !important; }
-  #sw-print-area td, #sw-print-area th { padding: 6px 8px !important; word-break: break-word !important; font-size: 10px !important; }
-  .no-print { display: none !important; }
-  @page { size: landscape; margin: 0.3in; }
-}
 .payroll-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
 @media (hover:hover) {
   .add-shift-btn:hover { border-color:#aaa !important; background:#EEF0EB !important; color:#6B7B6E !important; }
@@ -228,9 +216,10 @@ export default function App() {
   const [biz,         setBiz]         = useState("My Business");
   const [weekMode,    setWeekMode]     = useState("1");
   const [wk1Start,    setWk1Start]     = useState(defaultSun);
-  const [wk2Start,    setWk2Start]     = useState(()=>addDays(getSunday(new Date().toISOString().split("T")[0]),7));
+  const [wk2Start,    setWk2Start]     = useState(addDays(defaultSun,7));
   const [activeWeek,  setActiveWeek]   = useState(null);
   const [printWeek,   setPrintWeek]    = useState(defaultSun);
+  const [payWeek,     setPayWeek]      = useState(defaultSun);
   const [printView,   setPrintView]    = useState("weekly");
   const [weeklyBudget,setWeeklyBudget] = useState("");
   const [clipboard,   setClipboard]    = useState(null);
@@ -258,9 +247,6 @@ export default function App() {
   const [actionsOpen,  setActionsOpen] = useState(false);
   const [templates,    setTemplates]   = useState([]);
   const [salesData,   setSalesData]   = useState([]);
-  const [squareToken,    setSquareToken]    = useState(null);
-  const [squareSyncing,  setSquareSyncing]  = useState(false);
-  const [squareLastSync, setSquareLastSync] = useState(null);
   const [punches,        setPunches]        = useState([]);
 const [tsWeekStart, setTsWeekStart] = useState(()=>getSunday(new Date().toISOString().split("T")[0]));
 const [tsOpenCell, setTsOpenCell] = useState(null);
@@ -304,26 +290,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // ─────────────────────────────────────────────────────────────────────────
   // AUTH FUNCTIONS
   // ─────────────────────────────────────────────────────────────────────────
- async function handleForgotPassword(e) {
-    if(e?.preventDefault) e.preventDefault();
-    setAuthError("");
-    if (!authEmail.trim()) { setAuthError("Enter your email address first"); return; }
-    try {
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
-        method:"POST",
-        headers:{ "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
-        body: JSON.stringify({ email: authEmail }),
-      });
-      if (!res.ok) throw new Error("Could not send reset email");
-      setAuthError(""); 
-      setAuthMode("signin");
-      alert("Password reset email sent! Check your inbox and click the link, then sign in with your new password.");
-    } catch(err) {
-      setAuthError("Could not send reset email: " + err.message);
-    }
-  }
-
-  async function handleSignIn(e) {
+ async function handleSignIn(e) {
     if(e?.preventDefault) e.preventDefault();
     setAuthError("");
     try {
@@ -390,9 +357,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setBizId(business.id);
       setBiz(business.name || "My Business");
       setWeeklyBudget(business.weekly_budget ? String(business.weekly_budget) : "");
-      if (business.square_access_token) {
-        setSquareToken(business.square_access_token);
-      }
       // Load theme from local preference (kept local — it's a UI pref not business data)
       const localTheme = localStorage.getItem("sw_theme");
       if (localTheme && THEMES[localTheme]) setThemeId(localTheme);
@@ -428,24 +392,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       wks.forEach(w => { newWeekMap[w.week_start] = w.id; });
       setWeekMap(newWeekMap);
 
-      // 5. Set week dates
-      if (wks.length > 0) {
+      // 5. Set week dates - always default to current week
+      {
         const todaySun = getSunday(new Date().toISOString().split("T")[0]);
-        const best = wks.reduce((prev, curr) => {
-          const prevDiff = Math.abs(new Date(prev.week_start) - new Date(todaySun));
-          const currDiff = Math.abs(new Date(curr.week_start) - new Date(todaySun));
-          return currDiff < prevDiff ? curr : prev;
-        });
-        setWk1Start(best.week_start);
-        setActiveWeek(best.week_start);
-        setPrintWeek(best.week_start);
-        if (wks.length > 1 && wks[1].week_start !== wks[0].week_start) {
-          setWk2Start(wks[1].week_start);
-          setWeekMode("2");
-        } else {
-          // Ensure wk2Start is always 7 days after wk1 to prevent data bleed
-          setWk2Start(addDays(wks[0].week_start, 7));
-        }
+        setWk1Start(todaySun);
+        setActiveWeek(todaySun);
+        setPrintWeek(todaySun);
+        if (wks.length > 1) { setWk2Start(wks[1].week_start); setWeekMode("2"); }
       }
 
       // 6. Transform employees
@@ -517,21 +470,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   useEffect(() => {
     if (authState === "loading") { loadAllData(); }
   }, []);
-
-  // Handle Square OAuth redirect params
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("square_connected") === "1") {
-      showToast("Square connected! Syncing sales data…", 4000);
-      window.history.replaceState({}, "", window.location.pathname);
-      // Token is stored in Supabase — reload to pick it up
-      if (authState === "authenticated") syncSquareData();
-    }
-    if (params.get("square_error")) {
-      showToast("Square connection failed: " + params.get("square_error"), 5000);
-      window.history.replaceState({}, "", window.location.pathname);
-    }
-  }, [authState]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // DATA SNAPSHOT — single function to package all business context for AI.
@@ -822,36 +760,6 @@ Rules:
     reader.readAsText(file);
   }
 
-  async function syncSquareData(token) {
-    const useToken = token || squareToken;
-    if (!useToken) return;
-    setSquareSyncing(true);
-    try {
-      const res = await fetch(`/api/square-sync?access_token=${encodeURIComponent(useToken)}`);
-      const json = await res.json();
-      if (!json.ok) throw new Error(json.error || "Sync failed");
-      const result = json.data;
-      setSalesData(prev => {
-        const map = {};
-        prev.forEach(d => map[d.date] = d);
-        result.forEach(d => map[d.date] = d);
-        const merged = Object.values(map).sort((a,b) => a.date.localeCompare(b.date));
-        // Persist to Supabase
-        if (bizId) {
-          const rows = merged.map(d => ({ business_id:bizId, sale_date:d.date, revenue:d.revenue, transactions:d.transactions||0 }));
-          dbUpsert("sales_data", rows).catch(e => console.warn("Sales data write failed:", e));
-        }
-        return merged;
-      });
-      setSquareLastSync(new Date().toISOString());
-      showToast(`Square synced — ${result.length} days of data ✓`, 4000);
-    } catch(err) {
-      showToast("Square sync failed: " + err.message, 5000);
-    } finally {
-      setSquareSyncing(false);
-    }
-  }
-
   async function saveBizSettings(fields) {
     if (!bizId) return;
     try { await dbPatch(`businesses?id=eq.${bizId}`, fields); }
@@ -981,9 +889,8 @@ Rules:
     setOpenCell({ empId:eid, weekKey:wk, dayIdx:di, isNew:true });
   }
 
-function changeWkStart(oldKey, newKey, setKey) {
-    // Do NOT migrate schedule data — each week key is independent
-    // Only update UI pointers
+  function changeWkStart(oldKey, newKey, setKey) {
+    setSchedule(p => { const n=JSON.parse(JSON.stringify(p)); if(p[oldKey]){n[newKey]=p[oldKey];delete n[oldKey];} return n; });
     if (activeWeek===oldKey) setActiveWeek(newKey);
     if (printWeek===oldKey)  setPrintWeek(newKey);
     setKey(newKey);
@@ -1282,7 +1189,7 @@ function changeWkStart(oldKey, newKey, setKey) {
     function remove() { setShift(weekKey,empId,dayIdx,null); setOpenCell(null); }
 
     return (
-      <div onClick={()=>{setOpenCell(null);setDraft(d=>d?{...d,_openPanel:null}:d);}} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+      <div onClick={()=>setOpenCell(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
         <div onClick={e=>e.stopPropagation()} style={{background:"white",borderRadius:"20px 20px 0 0",padding:"20px 20px calc(20px + env(safe-area-inset-bottom,0px))",width:"100%",maxWidth:500,boxShadow:"0 -12px 48px rgba(0,0,0,0.2)",borderTop:`4px solid ${emp.color}`}}>
           <div style={{width:36,height:4,borderRadius:2,background:"#E0DAD2",margin:"0 auto 16px"}}/>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
@@ -1297,158 +1204,119 @@ function changeWkStart(oldKey, newKey, setKey) {
             </div>
             <button onClick={()=>setOpenCell(null)} style={{background:T.muted,border:"none",borderRadius:"50%",width:34,height:34,fontSize:20,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
           </div>
-          
-          {/* ── Time pickers: hybrid scroll + type ── */}
-          {(()=>{
-            const HOURS = [1,2,3,4,5,6,7,8,9,10,11,12];
-            const MINS  = [0,5,10,15,20,25,30,35,40,45,50,55];
-            // Parse state: draft stores "HH:MM" 24h strings
-            function getHr(field) {
-              if (!draft[field]) return null;
-              const [h] = draft[field].split(":").map(Number);
-              return h % 12 === 0 ? 12 : h % 12;
-            }
-            function getMin(field) {
-              if (!draft[field]) return null;
-              const [,m] = draft[field].split(":").map(Number);
-              return m;
-            }
-            function getAP(field) {
-              if (!draft[field]) return field === "start" ? "AM" : "PM";
-              const [h] = draft[field].split(":").map(Number);
-              return h < 12 ? "AM" : "PM";
-            }
-            function buildVal(hr, min, ap) {
-              let h = hr % 12;
-              if (ap === "PM") h += 12;
-              return String(h).padStart(2,"0") + ":" + String(min).padStart(2,"0");
-            }
-            function setField(field, hr, min, ap) {
-              setDraft(d => ({...d, [field]: buildVal(hr, min, ap)}));
-            }
-            function toggleAP(field) {
-              const hr = getHr(field) || (field==="start"?9:5);
-              const min = getMin(field) ?? 0;
-              const ap = getAP(field) === "AM" ? "PM" : "AM";
-              setField(field, hr, min, ap);
-            }
-            const openKey = draft._openPanel; // "start" | "end" | null
-            function openPanel(field) {
-              setDraft(d => ({...d, _openPanel: d._openPanel===field ? null : field}));
-            }
-            function closePanel() {
-              setDraft(d => ({...d, _openPanel: null}));
-            }
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+            {[["Start Time","start"],["End Time","end"]].map(([lbl,field])=>{
+              // Parse "HH:MM" → decimal; format decimal → "HH:MM"
+              const valDec = draft[field] ? timeToDec(draft[field]) : null;
 
-            return (
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
-                {[["Start Time","start"],["End Time","end"]].map(([lbl,field],fi)=>{
-                  const hr  = getHr(field);
-                  const min = getMin(field);
-                  const ap  = getAP(field);
-                  const filled = draft[field] != null && draft[field] !== "";
-                  const isOpen = openKey === field;
+              // Snap a decimal to nearest 15-min increment
+              const snapTo15 = v => Math.round(v * 4) / 4;
 
-                  return (
-                    <div key={field} style={{position:"relative"}}>
-                      <label style={{fontSize:11,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>{lbl}</label>
+              // Format decimal to display string "9:30 AM"
+              const fmtDisplay = v => {
+                if (v == null) return "";
+                const h = Math.floor(v), m = Math.round((v - h) * 60);
+                const hr = h % 12 === 0 ? 12 : h % 12;
+                const mm = String(m).padStart(2,"0");
+                return hr + ":" + mm + " " + (h < 12 ? "AM" : "PM");
+              };
 
-                      {/* ── Time box ── */}
-                      <div style={{display:"flex",alignItems:"center",border:`2px solid ${isOpen||filled?emp.color:T.border}`,borderRadius:10,overflow:"hidden",transition:"border 0.15s",boxShadow:isOpen?`0 0 0 3px ${emp.color}22`:"none"}}>
-                        {/* Hour input */}
-                        <input
-                          id={`tp-${field}-hr`}
-                          type="number" min="1" max="12" inputMode="numeric"
-                          placeholder={field==="start"?"9":"5"}
-                          value={hr ?? ""}
-                          onChange={e=>{
-                            const v = parseInt(e.target.value);
-                            if (!isNaN(v)) setField(field, Math.max(1,Math.min(12,v)), min??0, ap);
-                            else setDraft(d=>({...d,[field]:""}));
+              // Parse typed input → "HH:MM" 24h string or null
+              function parseTyped(raw) {
+                const s = raw.trim().toUpperCase();
+                // Patterns: "9:30 AM", "930am", "9:30", "930", "9am", "9"
+                let h, m = 0, pm = false;
+                const ampm = s.includes("AM") ? "AM" : s.includes("PM") ? "PM" : null;
+                const digits = s.replace(/[^0-9:]/g,"");
+                if (digits.includes(":")) {
+                  const parts = digits.split(":");
+                  h = parseInt(parts[0]||"0");
+                  m = parseInt(parts[1]||"0");
+                } else if (digits.length <= 2) {
+                  h = parseInt(digits||"0"); m = 0;
+                } else if (digits.length === 3) {
+                  h = parseInt(digits[0]); m = parseInt(digits.slice(1));
+                } else {
+                  h = parseInt(digits.slice(0,2)); m = parseInt(digits.slice(2,4));
+                }
+                if (ampm === "PM" && h !== 12) h += 12;
+                if (ampm === "AM" && h === 12) h = 0;
+                // If no AM/PM and h < 7, assume PM (e.g. "3" → 3 PM)
+                if (!ampm && h >= 1 && h <= 6) h += 12;
+                m = Math.round(m / 15) * 15; // snap to 15
+                if (m === 60) { m = 0; h += 1; }
+                if (h < 0 || h > 23 || m < 0 || m > 59 || isNaN(h) || isNaN(m)) return null;
+                return String(h).padStart(2,"0") + ":" + String(m).padStart(2,"0");
+              }
+
+              function handleBlur(e) {
+                const parsed = parseTyped(e.target.value);
+                setDraft(d => ({...d, [field]: parsed || d[field] || ""}));
+              }
+
+              function handleKeyDown(e) {
+                if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                e.preventDefault();
+                // Scroll in 30-min increments
+                const step = 0.5;
+                const current = valDec != null ? valDec : (field === "start" ? 9 : 17);
+                const next = Math.max(0, Math.min(23.75, current + (e.key === "ArrowUp" ? step : -step)));
+                const snapped = snapTo15(next);
+                const hh = Math.floor(snapped);
+                const mm = Math.round((snapped - hh) * 60);
+                setDraft(d => ({...d, [field]: String(hh).padStart(2,"0") + ":" + String(mm).padStart(2,"0")}));
+              }
+
+              return (
+                <div key={field}>
+                  <label style={{fontSize:11,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>{lbl}</label>
+                  <div style={{position:"relative"}}>
+                    <input
+                      type="text"
+                      placeholder="e.g. 9:00 AM"
+                      defaultValue={draft[field] ? fmtDisplay(valDec) : ""}
+                      key={field + (draft[field]||"none")}
+                      onBlur={handleBlur}
+                      onKeyDown={handleKeyDown}
+                      style={{
+                        width:"100%",
+                        border:`2px solid ${draft[field] ? emp.color : T.border}`,
+                        borderRadius:10,
+                        padding:"11px 10px 11px 10px",
+                        fontSize:15,
+                        fontWeight:700,
+                        outline:"none",
+                        background:"white",
+                        color:draft[field] ? T.text : "#aaa",
+                        textAlign:"center",
+                        transition:"border 0.15s",
+                      }}
+                    />
+                    {/* Up / Down nudge buttons — 30-min steps */}
+                    <div style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",display:"flex",flexDirection:"column",gap:1}}>
+                      {["▲","▼"].map((arrow, ai) => (
+                        <button key={arrow} type="button"
+                          onMouseDown={e=>{ e.preventDefault();
+                            const step = 0.5;
+                            const current = valDec != null ? valDec : (field==="start"?9:17);
+                            const next = Math.max(0, Math.min(23.75, current + (ai===0?step:-step)));
+                            const snapped = snapTo15(next);
+                            const hh = Math.floor(snapped);
+                            const mm = Math.round((snapped-hh)*60);
+                            setDraft(d=>({...d,[field]:String(hh).padStart(2,"0")+":"+String(mm).padStart(2,"0")}));
                           }}
-                          onFocus={()=>openPanel(field)}
-                          onKeyDown={e=>{
-                            if(e.key==="Enter"){e.preventDefault();document.getElementById(`tp-${field}-min`)?.focus();}
-                          }}
-                          style={{flex:1,border:"none",outline:"none",fontSize:20,fontWeight:800,color:filled?T.text:"#C8C3BC",padding:"11px 2px 11px 10px",textAlign:"center",background:"transparent",minWidth:0,WebkitAppearance:"none",MozAppearance:"textfield"}}
-                        />
-                        <span style={{fontSize:20,fontWeight:800,color:"#DDD8CE",flexShrink:0}}>:</span>
-                        {/* Minute input */}
-                        <input
-                          id={`tp-${field}-min`}
-                          type="number" min="0" max="59" inputMode="numeric"
-                          placeholder="00"
-                          value={min != null ? String(min).padStart(2,"0") : ""}
-                          onChange={e=>{
-                            const v = parseInt(e.target.value);
-                            if (!isNaN(v)) setField(field, hr??(field==="start"?9:5), v, ap);
-                            else setDraft(d=>({...d,[field]:""}));
-                          }}
-                          onFocus={()=>openPanel(field)}
-                          onKeyDown={e=>{
-                            if(e.key==="Enter"){e.preventDefault();closePanel();if(fi===1)document.getElementById("tp-save-btn")?.click();}
-                          }}
-                          style={{flex:1,border:"none",outline:"none",fontSize:20,fontWeight:800,color:filled?T.text:"#C8C3BC",padding:"11px 4px 11px 2px",textAlign:"center",background:"transparent",minWidth:0,WebkitAppearance:"none",MozAppearance:"textfield"}}
-                        />
-                        {/* AM/PM toggle */}
-                        <button onMouseDown={e=>e.preventDefault()} onClick={()=>toggleAP(field)}
-                          style={{background:ap==="PM"?emp.color:"#EEF0EB",color:ap==="PM"?"white":"#6B7B6E",border:"none",borderLeft:`1px solid ${filled?emp.color:T.border}`,padding:"0 10px",fontSize:11,fontWeight:800,cursor:"pointer",letterSpacing:"0.04em",alignSelf:"stretch",display:"flex",alignItems:"center",transition:"all 0.12s",flexShrink:0}}>
-                          {ap}
+                          style={{background:"none",border:"none",cursor:"pointer",padding:"1px 3px",fontSize:9,color:T.sub,lineHeight:1,opacity:0.7}}>
+                          {arrow}
                         </button>
-                      </div>
-
-                      {/* ── Scroll panel ── */}
-                      {isOpen && (
-                        <div style={{position:"absolute",left:0,right:0,top:"calc(100% + 5px)",background:"white",borderRadius:12,boxShadow:"0 8px 32px rgba(0,0,0,0.2)",border:`1.5px solid ${emp.color}44`,zIndex:400,overflow:"hidden"}}>
-                          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",height:160}}>
-                            {/* Hours col */}
-                            <div style={{overflowY:"auto",scrollSnapType:"y mandatory",borderRight:`1px solid ${T.border}`}}
-                              onMouseDown={e=>e.preventDefault()}>
-                              <div style={{fontSize:9,fontWeight:700,color:"#C8C3BC",letterSpacing:"0.08em",textTransform:"uppercase",textAlign:"center",padding:"6px 0 4px",background:"#FAFAFA",borderBottom:`1px solid ${T.border}`,position:"sticky",top:0,zIndex:1}}>HR</div>
-                              {HOURS.map(h=>(
-                                <div key={h}
-                                  onClick={()=>{ setField(field,h,min??0,ap); }}
-                                  style={{scrollSnapAlign:"start",padding:"10px 0",textAlign:"center",fontSize:15,fontWeight:700,cursor:"pointer",borderBottom:`1px solid #F8F6F2`,background:hr===h?emp.color:"transparent",color:hr===h?"white":"#6B7B6E",transition:"background 0.08s"}}>
-                                  {h}
-                                </div>
-                              ))}
-                            </div>
-                            {/* Minutes col */}
-                            <div style={{overflowY:"auto",scrollSnapType:"y mandatory",borderRight:`1px solid ${T.border}`}}
-                              onMouseDown={e=>e.preventDefault()}>
-                              <div style={{fontSize:9,fontWeight:700,color:"#C8C3BC",letterSpacing:"0.08em",textTransform:"uppercase",textAlign:"center",padding:"6px 0 4px",background:"#FAFAFA",borderBottom:`1px solid ${T.border}`,position:"sticky",top:0,zIndex:1}}>MIN</div>
-                              {MINS.map(m=>(
-                                <div key={m}
-                                  onClick={()=>{ setField(field,hr??(field==="start"?9:5),m,ap); }}
-                                  style={{scrollSnapAlign:"start",padding:"10px 0",textAlign:"center",fontSize:15,fontWeight:700,cursor:"pointer",borderBottom:`1px solid #F8F6F2`,background:min===m?emp.color:"transparent",color:min===m?"white":"#6B7B6E",transition:"background 0.08s"}}>
-                                  {String(m).padStart(2,"0")}
-                                </div>
-                              ))}
-                            </div>
-                            {/* AM/PM col */}
-                            <div style={{overflowY:"auto"}}
-                              onMouseDown={e=>e.preventDefault()}>
-                              <div style={{fontSize:9,fontWeight:700,color:"#C8C3BC",letterSpacing:"0.08em",textTransform:"uppercase",textAlign:"center",padding:"6px 0 4px",background:"#FAFAFA",borderBottom:`1px solid ${T.border}`,position:"sticky",top:0,zIndex:1}}>AM/PM</div>
-                              {["AM","PM"].map(a=>(
-                                <div key={a}
-                                  onClick={()=>{ setField(field,hr??(field==="start"?9:5),min??0,a); }}
-                                  style={{padding:"10px 0",textAlign:"center",fontSize:15,fontWeight:700,cursor:"pointer",borderBottom:`1px solid #F8F6F2`,background:ap===a?emp.color:"transparent",color:ap===a?"white":"#6B7B6E",transition:"background 0.08s"}}>
-                                  {a}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                      ))}
                     </div>
-                  );
-                })}
-              </div>
-            );
-          })()}
-
-         
-         {draft.start&&draft.end&&!canSave&&(
+                  </div>
+                  {draft[field] && <div style={{fontSize:10,color:T.sub,marginTop:4,textAlign:"center"}}>{fmtDisplay(valDec)}</div>}
+                </div>
+              );
+            })}
+          </div>
+          {draft.start&&draft.end&&!canSave&&(
             <div style={{background:"#FEF3E2",border:"1px solid #F39C12",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:12,color:"#E67E22",fontWeight:600}}>End time must be after start time</div>
           )}
           {canSave&&(
@@ -1554,7 +1422,7 @@ function changeWkStart(oldKey, newKey, setKey) {
 
           <div style={{display:"grid",gridTemplateColumns:existing?"1fr 2fr":"1fr",gap:10}}>
             {existing&&<button onClick={remove} style={{background:"#FDECEA",color:"#C0392B",border:"none",borderRadius:10,padding:"13px 0",fontSize:13,fontWeight:700,cursor:"pointer"}}>Remove</button>}
-            <button id="tp-save-btn" tabIndex={4} onClick={save} disabled={!canSave} onKeyDown={e=>{if(e.key==="Enter"&&canSave)save();}} style={{background:canSave?emp.color:"#DDD",color:canSave?"white":"#aaa",border:"none",borderRadius:10,padding:"13px 0",fontSize:14,fontWeight:700,cursor:canSave?"pointer":"not-allowed",transition:"background 0.15s"}}>
+            <button onClick={save} disabled={!canSave} style={{background:canSave?emp.color:"#DDD",color:canSave?"white":"#aaa",border:"none",borderRadius:10,padding:"13px 0",fontSize:14,fontWeight:700,cursor:canSave?"pointer":"not-allowed",transition:"background 0.15s"}}>
               {canSave ? ((draft.applyToDays||[]).length > 0 ? `Save + Apply to ${(draft.applyToDays||[]).length} day${(draft.applyToDays||[]).length!==1?"s":""}` : "Save Shift ✓") : "Select times to save"}
             </button>
           </div>
@@ -1568,41 +1436,34 @@ function changeWkStart(oldKey, newKey, setKey) {
     {key:"coverage",    icon:"🚨", label:"Coverage"},
     {key:"insights",    icon:"🧠", label:"Insights"},
     {key:"payroll",     icon:"💵", label:"Payroll"},
+    {key:"recognition", icon:"⭐", label:"Team"},
     {key:"settings",    icon:"⚙️", label:"Settings"},
   ];
 
- // ── LOGIN SCREEN ───────────────────────────────────────────────────────────
+  // ── LOGIN SCREEN ───────────────────────────────────────────────────────────
   if (authState === "unauthenticated") {
     return (
       <div style={{minHeight:"100vh",background:"#0A0F0A",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Inter',system-ui,sans-serif"}}>
         <style>{CSS}</style>
         <div style={{width:"100%",maxWidth:400}}>
+          {/* Logo */}
           <div style={{textAlign:"center",marginBottom:32}}>
             <div style={{width:56,height:56,background:"#2D6A4F",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 16px"}}>📅</div>
             <div style={{fontSize:26,fontWeight:900,color:"white",letterSpacing:"-0.01em"}}>ShiftWise</div>
             <div style={{fontSize:13,color:"#4B5563",marginTop:4}}>Schedule smarter. Run better.</div>
           </div>
 
+          {/* Card */}
           <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:18,padding:"28px 28px 24px"}}>
-
-            {/* Tab switcher — hidden in reset mode */}
-            {authMode !== "reset" && (
-              <div style={{display:"flex",background:"rgba(0,0,0,0.3)",borderRadius:10,padding:4,marginBottom:24}}>
-                {[["signin","Sign In"],["signup","Create Account"]].map(([m,lbl])=>(
-                  <button key={m} onClick={()=>{setAuthMode(m);setAuthError("");}}
-                    style={{flex:1,background:authMode===m?"white":"transparent",color:authMode===m?"#1C1C1C":"#6B7280",border:"none",borderRadius:7,padding:"9px 0",fontWeight:700,fontSize:13,cursor:"pointer",transition:"all 0.15s"}}>
-                    {lbl}
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {authMode === "reset" && (
-              <div style={{textAlign:"center",marginBottom:20}}>
-                <div style={{fontSize:15,fontWeight:800,color:"white",marginBottom:4}}>Reset your password</div>
-                <div style={{fontSize:12,color:"#6B7280"}}>Enter your email and we will send a reset link</div>
-              </div>
-            )}
+            {/* Tab switcher */}
+            <div style={{display:"flex",background:"rgba(0,0,0,0.3)",borderRadius:10,padding:4,marginBottom:24}}>
+              {[["signin","Sign In"],["signup","Create Account"]].map(([m,lbl])=>(
+                <button key={m} onClick={()=>{setAuthMode(m);setAuthError("");}}
+                  style={{flex:1,background:authMode===m?"white":"transparent",color:authMode===m?"#1C1C1C":"#6B7280",border:"none",borderRadius:7,padding:"9px 0",fontWeight:700,fontSize:13,cursor:"pointer",transition:"all 0.15s"}}>
+                  {lbl}
+                </button>
+              ))}
+            </div>
 
             <div style={{display:"flex",flexDirection:"column",gap:12}}>
               {authMode==="signup" && (
@@ -1610,29 +1471,14 @@ function changeWkStart(oldKey, newKey, setKey) {
                   placeholder="Business name"
                   style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
               )}
-
               <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
                 placeholder="Email address" type="email"
-                onKeyDown={e=>{
-                  if(e.key==="Enter") {
-                    if(authMode==="signin") handleSignIn();
-                    else if(authMode==="signup") handleSignUp();
-                    else if(authMode==="reset") handleForgotPassword();
-                  }
-                }}
+                onKeyDown={e=>e.key==="Enter"&&(authMode==="signin"?handleSignIn():handleSignUp())}
                 style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-
-              {authMode !== "reset" && (
-                <input value={authPass} onChange={e=>setAuthPass(e.target.value)}
-                  placeholder="Password" type="password"
-                  onKeyDown={e=>{
-                    if(e.key==="Enter") {
-                      if(authMode==="signin") handleSignIn();
-                      else handleSignUp();
-                    }
-                  }}
-                  style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-              )}
+              <input value={authPass} onChange={e=>setAuthPass(e.target.value)}
+                placeholder="Password" type="password"
+                onKeyDown={e=>e.key==="Enter"&&(authMode==="signin"?handleSignIn():handleSignUp())}
+                style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
 
               {authError && (
                 <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
@@ -1640,24 +1486,10 @@ function changeWkStart(oldKey, newKey, setKey) {
                 </div>
               )}
 
-              <button onClick={authMode==="signin"?handleSignIn:authMode==="reset"?handleForgotPassword:handleSignUp}
+              <button onClick={authMode==="signin"?handleSignIn:handleSignUp}
                 style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
-                {authMode==="signin" ? "Sign In" : authMode==="reset" ? "Send Reset Email" : "Create Account"}
+                {authMode==="signin" ? "Sign In" : "Create Account"}
               </button>
-
-              {authMode==="signin" && (
-                <button onClick={()=>{setAuthMode("reset");setAuthError("");setAuthPass("");}}
-                  style={{background:"transparent",border:"none",color:"#6B7280",fontSize:12,cursor:"pointer",textAlign:"center",width:"100%",padding:"4px 0"}}>
-                  Forgot password?
-                </button>
-              )}
-
-              {authMode==="reset" && (
-                <button onClick={()=>{setAuthMode("signin");setAuthError("");}}
-                  style={{background:"transparent",border:"none",color:"#6B7280",fontSize:12,cursor:"pointer",textAlign:"center",width:"100%",padding:"4px 0"}}>
-                  ← Back to sign in
-                </button>
-              )}
             </div>
           </div>
 
@@ -1683,12 +1515,12 @@ function changeWkStart(oldKey, newKey, setKey) {
   }
 
   return (
-    <div style={{minHeight:"100vh",width:"100%",background:T.bg,color:T.text}}>
+    <div style={{minHeight:"100vh",background:T.bg,color:T.text}}>
       <style>{CSS}</style>
 
         {/* TOP BAR */}
         <div style={{background:T.dark,position:"sticky",top:0,zIndex:400,borderBottom:"1px solid #2A2A2A"}}>
-          <div className="top-bar-inner" style={{display:"flex",alignItems:"center",gap:14,height:54,padding:"0 24px"}}>
+          <div className="top-bar-inner" style={{maxWidth:1400,margin:"0 auto",display:"flex",alignItems:"center",gap:14,height:54,padding:"0 18px"}}>
             <div style={{display:"flex",alignItems:"center",gap:9,flexShrink:0}}>
               <div style={{width:30,height:30,background:T.accent,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>📅</div>
               <input className="biz-input" value={biz} onChange={e=>setBiz(e.target.value)}
@@ -1707,21 +1539,27 @@ function changeWkStart(oldKey, newKey, setKey) {
             </div>
             <div className="top-stats" style={{display:"flex",alignItems:"center",gap:8,flexShrink:0,minWidth:0}}>
 
+              <span style={{fontSize:12,color:"#888",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:180}}>
+                <span style={{color:T.accent,fontWeight:700}}>${grandPay.toFixed(0)}</span>
+                {" · "}{grandHrs}h · {employees.length} staff
+              </span>
               <button onClick={exportData} style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Export</button>
-              {(()=>{
-                const unreviewed = punches.filter(p => p.flags?.length > 0 && !punchReviews[p.id]).length;
-                return (
-                  <button onClick={()=>setAlertsOpen(p=>!p)}
-                    style={{position:"relative",background:"transparent",border:"none",cursor:"pointer",padding:"4px 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
-                    <span style={{fontSize:20,lineHeight:1}}>🔔</span>
-                    {unreviewed > 0 && (
-                      <span style={{position:"absolute",top:0,right:0,background:"#C0392B",color:"white",borderRadius:"50%",width:16,height:16,fontSize:9,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",border:"2px solid #1C2B22"}}>
-                        {unreviewed > 9 ? "9+" : unreviewed}
-                      </span>
-                    )}
-                  </button>
-                );
-              })()}
+
+              {/* 🔔 Alert Bell */}
+{(()=>{
+  const unreviewed = punches.filter(p => p.flags?.length > 0 && !punchReviews[p.id]).length;
+  return (
+    <button onClick={()=>setAlertsOpen(p=>!p)}
+      style={{position:"relative",background:"transparent",border:"none",cursor:"pointer",padding:"4px 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <span style={{fontSize:20,lineHeight:1}}>🔔</span>
+      {unreviewed > 0 && (
+        <span style={{position:"absolute",top:0,right:0,background:"#C0392B",color:"white",borderRadius:"50%",width:16,height:16,fontSize:9,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",border:"2px solid #1C2B22"}}>
+          {unreviewed > 9 ? "9+" : unreviewed}
+        </span>
+      )}
+    </button>
+  );
+})()}
               <button onClick={handleSignOut} style={{background:"rgba(255,255,255,0.05)",color:"#666",border:"1px solid rgba(255,255,255,0.08)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}} title="Sign Out">⎋</button>
               <label style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
                 Import<input type="file" accept=".json" onChange={e=>{importData(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
@@ -1731,10 +1569,17 @@ function changeWkStart(oldKey, newKey, setKey) {
         </div>
 
         {/* MOBILE SUMMARY STRIP */}
-        
+        {tab==="grid"&&(
+          <div style={{display:"none"}} className="mobile-summary-strip">
+            <style>{".mobile-summary-strip{display:none!important} @media(max-width:767px){.mobile-summary-strip{display:flex!important;background:#1C1C1C;padding:7px 16px;gap:16px;justify-content:space-between;align-items:center;border-bottom:1px solid #2A2A2A}}"}</style>
+            <span style={{fontSize:11,color:"#888"}}><span style={{color:T.accent,fontWeight:700}}>${activeWkPay.toFixed(0)}</span> est. this wk</span>
+            {weeklyBudget&&(()=>{const b=parseFloat(weeklyBudget)||0,s=activeWkPay,over=s>b,pct=b>0?Math.min((s/b)*100,100):0;return <span style={{fontSize:11,color:over?"#C0392B":pct>85?"#E8A93A":"#4CAF7D",fontWeight:700}}>{over?`$${(s-b).toFixed(0)} over`:`$${(b-s).toFixed(0)} left`}</span>})()}
+            <span style={{fontSize:11,color:"#888"}}>{employees.length} staff</span>
+          </div>
+        )}
 
         {/* PAGE CONTENT */}
-        <div className="page-pad" style={{padding:"18px 24px 28px"}}>
+        <div className="page-pad" style={{maxWidth:1400,margin:"0 auto",padding:"18px 16px 28px"}}>
 
           {/* SCHEDULE GRID */}
           {tab==="grid" && (
@@ -2303,23 +2148,26 @@ function changeWkStart(oldKey, newKey, setKey) {
                   </div>
                   <Divider T={T}/>
                   <div>
-                    <SectionLabel T={T}>Schedule Week</SectionLabel>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <button onClick={()=>{ const prev=getSunday(addDays(activeWeek||wk1Start,-7)); setWk1Start(prev); setActiveWeek(prev); setPrintWeek(prev); }}
-                        style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
-                      <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
-                        <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
-                          <span style={{fontSize:10}}>●</span>
-                          {activeWeek ? `${dl(weekDatesFromSunday(activeWeek)[0])} – ${dl(weekDatesFromSunday(activeWeek)[6])}` : "Select a week"}
-                        </div>
-                        <div style={{position:"relative",flexShrink:0,borderLeft:`1px solid ${T.accent}40`}}>
-                          <input type="date" value={activeWeek?toInputDate(weekDatesFromSunday(activeWeek)[0]):""} onChange={e=>{ const s=getSunday(e.target.value); setWk1Start(s); setActiveWeek(s); setPrintWeek(s); }}
-                            style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
-                          <div style={{background:T.accent+"18",padding:"8px 10px",fontSize:13,cursor:"pointer",userSelect:"none",color:T.accent}}>📅</div>
-                        </div>
-                      </div>
-                      <button onClick={()=>{ const next=getSunday(addDays(activeWeek||wk1Start,7)); setWk1Start(next); setActiveWeek(next); setPrintWeek(next); }}
-                        style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
+                    <SectionLabel T={T}>{activeWeek ? "Schedule Week" : "Select a Week"}</SectionLabel>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                      {weeks.map((wk,wi)=>{
+                        const isActive = activeWeek === wk.key;
+                        const changeFn = (newKey) => changeWkStart(wk.key,newKey,wi===0?setWk1Start:setWk2Start);
+                        const dateRange = `${dl(wk.dates[0])} – ${dl(wk.dates[6])}`;
+                        return (
+                          <div key={wk.key} style={{display:"flex",gap:6,alignItems:"center"}}>
+                            <button onClick={()=>setActiveWeek(wk.key)} className="action-btn"
+                              style={{ background:isActive?T.dark:T.muted, color:isActive?"white":T.sub, border:isActive?"none":`1.5px dashed ${T.border}`, borderRadius:8, padding:"7px 14px", fontWeight:700, fontSize:12, cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap" }}>
+                              {dateRange}
+                            </button>
+                            <div style={{position:"relative",flexShrink:0}} title="Change week start date">
+                              <input type="date" value={toInputDate(wk.dates[0])} onChange={e=>changeFn(getSunday(e.target.value))}
+                                style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
+                              <div style={{background:T.muted,borderRadius:8,padding:"7px 10px",fontSize:14,cursor:"pointer",userSelect:"none"}}>📅</div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -2590,11 +2438,12 @@ function changeWkStart(oldKey, newKey, setKey) {
                         <th style={{padding:"11px 12px",textAlign:"left",color:"#666",fontSize:10,fontWeight:700,letterSpacing:"0.08em"}}>EMPLOYEE</th>
                         {DAYS.map((d,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
+                          const dp=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i)*(parseFloat(e.hourlyRate)||0),0);
                           return (
                             <th key={d} style={{padding:"9px 4px",textAlign:"center",color:"white",fontSize:11,fontWeight:700}}>
                               <div>{d}</div>
                               <div style={{fontSize:9,color:"#666",fontWeight:400}}>{activeWkObj?dl(activeWkObj.dates[i]):""}</div>
-                              {dh>0&&<div style={{fontSize:9,color:T.accent,fontWeight:700,marginTop:1}}>{dh}h</div>}
+                              {dh>0&&<div style={{fontSize:9,color:T.accent,fontWeight:700,marginTop:1}}>{dh}h · ${dp.toFixed(0)}</div>}
                             </th>
                           );
                         })}
@@ -2652,7 +2501,7 @@ function changeWkStart(oldKey, newKey, setKey) {
                                         <div style={{opacity:0.85,fontSize:9}}>–{fmt(shift.end)}</div>
                                         <div style={{fontWeight:800,fontSize:11,marginTop:2}}>{h}h</div>
                                         {shift.notes&&<div style={{fontSize:9,opacity:0.8,marginTop:1}}>📝</div>}
-                                        
+                                        <div className="sh-pay" style={{opacity:0.8,fontSize:9}}>${pay.toFixed(0)}</div>
                                       </div>
                                       <button onClick={()=>{setShift(activeWeek,emp.id,di,null);setOpenCell(null);}}
                                         style={{position:"absolute",top:2,right:2,background:"rgba(0,0,0,0.25)",color:"white",border:"none",borderRadius:"50%",width:14,height:14,fontSize:10,cursor:"pointer",padding:0,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>×</button>
@@ -2703,9 +2552,10 @@ function changeWkStart(oldKey, newKey, setKey) {
                         <td style={{padding:"10px 12px",color:"#777",fontWeight:700,fontSize:10,letterSpacing:"0.06em"}}>TOTALS</td>
                         {DAYS.map((_,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
+                          const dp=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i)*(parseFloat(e.hourlyRate)||0),0);
                           return (
                             <td key={i} style={{padding:"10px 3px",textAlign:"center",fontWeight:700}}>
-                              {dh>0?<><div style={{color:T.accent,fontSize:11}}>{dh}h</div></>:<span style={{color:"#3A3A3A"}}>—</span>}
+                              {dh>0?<><div style={{color:T.accent,fontSize:11}}>{dh}h</div><div style={{color:"#666",fontSize:9}}>${dp.toFixed(0)}</div></>:<span style={{color:"#3A3A3A"}}>—</span>}
                             </td>
                           );
                         })}
@@ -3168,20 +3018,49 @@ function changeWkStart(oldKey, newKey, setKey) {
           {/* PAYROLL */}
           {tab==="payroll" && (
             <div style={{display:"flex",flexDirection:"column",gap:16}}>
-              <div className="stat-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12}}>
-                {[
-                  {l:"Est. Gross Payroll",v:"$"+grandPay.toFixed(2),c:T.accent,sub:weekMode==="2"?"2-week combined":"1-week total"},
-                  {l:"Total Hours",v:grandHrs+"h",c:"#3A9BE8",sub:"scheduled"},
-                  {l:"Staff Scheduled",v:employees.filter(e=>eTotalH(e.id)>0).length+"/"+employees.length,c:"#4CAF7D",sub:"have shifts"},
-                  {l:"Weeks Tracked",v:weekMode==="2"?"2":"1",c:"#9B59B6",sub:weekMode==="2"?"rolling 2-week":"single week"},
-                ].map(s=>(
-                  <div key={s.l} style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,padding:"16px 18px",borderLeft:`4px solid ${s.c}`,overflow:"hidden"}}>
-                    <div style={{fontSize:11,color:T.sub,marginBottom:5,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>{s.l}</div>
-                    <div style={{fontSize:26,fontWeight:800,color:s.c,lineHeight:1}}>{s.v}</div>
-                    <div style={{fontSize:10,color:"#bbb",marginTop:5}}>{s.sub}</div>
+              {(()=>{
+                const paySun=getSunday(new Date().toISOString().split("T")[0]);
+                const pwDates=weekDatesFromSunday(payWeek);
+                const pwLabel=dl(pwDates[0])+" – "+dl(pwDates[6]);
+                const pwHrs=employees.reduce((s,e)=>s+DAYS.reduce((d,_,i)=>d+eDayH(payWeek,e.id,i),0),0);
+                const pwPay=employees.reduce((s,e)=>s+DAYS.reduce((d,_,i)=>d+eDayH(payWeek,e.id,i)*(parseFloat(e.hourlyRate)||0),0),0);
+                const pwStaff=employees.filter(e=>DAYS.some((_,i)=>eDayH(payWeek,e.id,i)>0)).length;
+                const bgt=parseFloat(weeklyBudget)||0;
+                const over=bgt>0&&pwPay>bgt;
+                const warn=!over&&bgt>0&&pwPay/bgt>0.85;
+                const bc=over?"#C0392B":warn?"#E8A93A":"#4CAF7D";
+                const pct=bgt>0?Math.min((pwPay/bgt)*100,100):0;
+                return (
+                  <div style={{display:"flex",flexDirection:"column",gap:16}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                      <button onClick={()=>setPayWeek(getSunday(addDays(payWeek,-7)))} style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>‹</button>
+                      <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,borderRadius:8,whiteSpace:"nowrap"}}>{pwLabel}</div>
+                      <button onClick={()=>setPayWeek(getSunday(addDays(payWeek,7)))} style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>›</button>
+                      {payWeek===paySun&&<span style={{fontSize:11,color:T.accent,fontWeight:700}}>Current week</span>}
+                      {payWeek!==paySun&&<button onClick={()=>setPayWeek(paySun)} style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Today</button>}
+                    </div>
+                    <div className="stat-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12}}>
+                      {[
+                        {l:"Est. Gross Payroll",v:"$"+pwPay.toFixed(2),c:T.accent,sub:"this week"},
+                        {l:"Total Hours",v:pwHrs+"h",c:"#3A9BE8",sub:"scheduled"},
+                        {l:"Staff Scheduled",v:pwStaff+"/"+employees.length,c:"#4CAF7D",sub:"have shifts"},
+                        {l:"Weekly Budget",v:bgt>0?"$"+bgt.toFixed(0):"Not set",c:"#9B59B6",sub:over?"OVER budget":warn?"Near limit":bgt>0?"On track":"Set in schedule tab"},
+                      ].map(s=>(
+                        <div key={s.l} style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,padding:"16px 18px",borderLeft:`4px solid ${s.c}`,overflow:"hidden"}}>
+                          <div style={{fontSize:11,color:T.sub,marginBottom:5,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>{s.l}</div>
+                          <div style={{fontSize:26,fontWeight:800,color:s.c,lineHeight:1}}>{s.v}</div>
+                          <div style={{fontSize:10,color:"#bbb",marginTop:5}}>{s.sub}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {bgt>0&&<div style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,padding:"16px 18px"}}>
+                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontWeight:700,fontSize:13,color:T.text}}>Budget Tracker</span><span style={{fontSize:12,fontWeight:700,color:bc}}>{over?"$"+(pwPay-bgt).toFixed(0)+" over":warn?"$"+(bgt-pwPay).toFixed(0)+" left":"$"+(bgt-pwPay).toFixed(0)+" remaining"}</span></div>
+                      <div style={{height:10,background:T.muted,borderRadius:5,overflow:"hidden"}}><div style={{height:"100%",width:`${pct}%`,background:bc,borderRadius:5,transition:"width 0.3s"}}/></div>
+                      <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:11,color:T.sub}}><span>$0</span><span>${bgt.toFixed(0)}</span></div>
+                    </div>}
                   </div>
-                ))}
-              </div>
+                );
+              })()}
 
               {/* Sales Intelligence */}
               {(()=>{
@@ -3204,24 +3083,10 @@ function changeWkStart(oldKey, newKey, setKey) {
                         <span style={{color:"white",fontWeight:800,fontSize:14}}>Sales Intelligence</span>
                         <span style={{color:"#666",fontSize:11,marginLeft:10}}>Powered by Square</span>
                       </div>
-                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                        {squareToken ? (
-                          <button onClick={()=>syncSquareData()}
-                            disabled={squareSyncing}
-                            style={{background:squareSyncing?"#666":T.accent,color:"white",border:"none",borderRadius:7,padding:"5px 14px",fontSize:11,fontWeight:700,cursor:squareSyncing?"not-allowed":"pointer",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
-                            {squareSyncing ? "⟳ Syncing…" : "⟳ Sync Square"}
-                          </button>
-                        ) : (
-                          <a href="/api/square-auth"
-                            style={{background:"#006AFF",color:"white",border:"none",borderRadius:7,padding:"5px 14px",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap",textDecoration:"none",display:"flex",alignItems:"center",gap:6}}>
-                            <span style={{fontSize:14}}>■</span> Connect Square
-                          </a>
-                        )}
-                        <label style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.15)",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
-                          CSV Import
-                          <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
-                        </label>
-                      </div>
+                      <label style={{background:hasSalesData?"rgba(255,255,255,0.1)":T.accent,color:"white",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                        {hasSalesData ? "Update Sales Data" : "Import Square CSV"}
+                        <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
+                      </label>
                     </div>
                     {!hasSalesData ? (
                       <div style={{padding:"32px 24px",textAlign:"center"}}>
@@ -3270,24 +3135,10 @@ function changeWkStart(oldKey, newKey, setKey) {
                         )}
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                           <span style={{fontSize:11,color:T.sub}}>{salesData.length} days of data · {salesData[0]?.date} to {salesData[salesData.length-1]?.date}</span>
-                          <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                          {squareLastSync && <span style={{fontSize:10,color:T.sub}}>Last sync {new Date(squareLastSync).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</span>}
-                          {squareToken && (
-                            <button onClick={()=>{
-                              if(window.confirm("Disconnect Square? Your existing sales data stays.")) {
-                                setSquareToken(null);
-                                if(bizId) dbPatch(`businesses?id=eq.${bizId}`,{square_access_token:null,square_token_expiry:null,square_merchant_id:null}).catch(()=>{});
-                                showToast("Square disconnected");
-                              }
-                            }} style={{background:"transparent",color:"#C0392B",border:`1px solid #C0392B30`,borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                              Disconnect
-                            </button>
-                          )}
-                          <button onClick={()=>{ if(window.confirm("Clear all sales data?")) { setSalesData([]); if(bizId) dbDelete(`sales_data?business_id=eq.${bizId}`).catch(()=>{}); }; }}
+                          <button onClick={()=>{ if(window.confirm("Clear all imported sales data?")) { setSalesData([]); if(bizId) dbDelete(`sales_data?business_id=eq.${bizId}`).catch(()=>{}); }; }}
                             style={{background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
                             Clear Data
                           </button>
-                        </div>
                         </div>
                       </div>
                     )}
@@ -3295,82 +3146,6 @@ function changeWkStart(oldKey, newKey, setKey) {
                 );
               })()}
 
-              {/* Per-week summaries */}
-              {weeks.map(wk=>{
-                const wkTP=employees.reduce((s,e)=>s+eWkP(wk.key,e),0);
-                return (
-                  <Card T={T} key={wk.key}>
-                    <div style={{padding:"12px 16px",background:T.dark,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <div>
-                        <span style={{color:"white",fontWeight:800,fontSize:14}}>{wk.label}</span>
-                        <span style={{color:"#666",fontSize:11,marginLeft:8}}>{dl(wk.dates[0])} – {dl(wk.dates[6])}</span>
-                      </div>
-                      <div style={{color:T.accent,fontWeight:800,fontSize:15}}>${wkTP.toFixed(2)}</div>
-                    </div>
-                    {employees.map((emp,i)=>{
-                      const wH=eWkH(wk.key,emp.id), wP=eWkP(wk.key,emp);
-                      return (
-                        <div key={emp.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 16px",borderBottom:i<employees.length-1?`1px solid ${T.border}`:"none",background:wH>0?T.surface:"#FDFCFA"}}>
-                          <div style={{display:"flex",alignItems:"center",gap:10}}>
-                            <div style={{width:32,height:32,borderRadius:"50%",background:wH>0?emp.color:"#DDD",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:12,flexShrink:0}}>{emp.name?emp.name[0].toUpperCase():"?"}</div>
-                            <div>
-                              <div style={{fontWeight:700,fontSize:13,color:wH>0?T.text:"#aaa"}}>{emp.name||"—"}</div>
-                              <div style={{fontSize:10,color:T.sub}}>{emp.role||"No role"}</div>
-                            </div>
-                          </div>
-                          {wH>0?(<div style={{textAlign:"right"}}><div style={{fontWeight:800,fontSize:15}}>${wP.toFixed(2)}</div><div style={{fontSize:11,color:T.sub,marginTop:1}}>{wH}h scheduled</div></div>):<div style={{fontSize:12,color:"#CCC",fontStyle:"italic"}}>Not scheduled</div>}
-                        </div>
-                      );
-                    })}
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 16px",background:T.muted,borderTop:`2px solid ${T.border}`}}>
-                      <div><span style={{fontWeight:700,fontSize:13,color:T.sub}}>Week Total</span><span style={{fontSize:11,color:T.sub,marginLeft:8}}>{employees.reduce((s,e)=>s+eWkH(wk.key,e.id),0)}h</span></div>
-                      <span style={{fontWeight:800,fontSize:16,color:T.accent}}>${wkTP.toFixed(2)}</span>
-                    </div>
-                  </Card>
-                );
-              })}
-
-              {/* Clock-In Log */}
-              {punches.length > 0 && (()=>{
-                const missed = getMissedPunches();
-                const flagged = punches.filter(p => p.flags && p.flags.length > 0);
-                return (
-                  <Card T={T}>
-                    <div style={{padding:"12px 16px",background:T.dark,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <span style={{color:"white",fontWeight:800,fontSize:14}}>Clock-In Log</span>
-                      <span style={{color:T.sub,fontSize:11}}>{punches.length} punch{punches.length!==1?"es":""} recorded</span>
-                    </div>
-                    {missed.length > 0 && (
-                      <div style={{padding:"10px 16px",background:"#FDECEA",borderBottom:`1px solid ${T.border}`}}>
-                        <div style={{fontWeight:700,color:"#C0392B",fontSize:13,marginBottom:6}}>🚨 Missed Clock-Out — Requires Review</div>
-                        {missed.map(m => (<div key={m.emp.id} style={{display:"flex",alignItems:"center",gap:10,marginBottom:4}}><div style={{width:8,height:8,borderRadius:"50%",background:m.emp.color,flexShrink:0}}/><span style={{fontSize:12,color:"#C0392B",fontWeight:600}}>{m.emp.name} — clocked in, never clocked out. Shift ended {m.missedAt}.</span></div>))}
-                      </div>
-                    )}
-                    <div style={{maxHeight:240,overflowY:"auto"}}>
-                      {[...punches].reverse().slice(0,20).map((p,i,arr) => (
-                        <div key={p.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"9px 16px",borderBottom:i<arr.length-1?`1px solid ${T.border}`:"none"}}>
-                          <div style={{display:"flex",alignItems:"center",gap:10}}>
-                            <div style={{width:28,height:28,borderRadius:"50%",background:employees.find(e=>e.id===p.empId)?.color||T.muted,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:10,flexShrink:0}}>{p.empName?p.empName[0].toUpperCase():"?"}</div>
-                            <div>
-                              <div style={{fontWeight:700,fontSize:12,color:T.text}}>{p.empName}</div>
-                              <div style={{fontSize:10,color:T.sub}}>{new Date(p.time).toLocaleString("en-US",{weekday:"short",month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</div>
-                            </div>
-                          </div>
-                          <div style={{display:"flex",alignItems:"center",gap:8}}>
-                            {p.flags?.map(f=><span key={f} style={{background:T.muted,color:T.sub,borderRadius:4,padding:"1px 6px",fontSize:9,fontWeight:700}}>{f}</span>)}
-                            <span style={{background:p.type==="in"?T.accent+"20":"#3A9BE820",color:p.type==="in"?T.accent:"#3A9BE8",borderRadius:6,padding:"3px 9px",fontSize:11,fontWeight:800}}>{p.type==="in"?"IN":"OUT"}</span>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                    <div style={{padding:"10px 16px",borderTop:`1px solid ${T.border}`,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <span style={{fontSize:11,color:T.sub}}>{punches.length} total punches</span>
-                      <button onClick={()=>{if(window.confirm("Clear all clock-in records?"))setPunches([]);}}
-                        style={{background:"#FDECEA",color:"#C0392B",border:"none",borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Clear Log</button>
-                    </div>
-                  </Card>
-                );
-              })()}
             </div>
           )}
 
@@ -3554,7 +3329,7 @@ function changeWkStart(oldKey, newKey, setKey) {
                         <div style={{display:"flex", gap:12, alignItems:"flex-start"}}>
                           <span style={{fontSize:22, flexShrink:0}}>🎯</span>
                           <div>
-                            <div style={{fontWeight:700, fontSize:13, color:T.accent, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.05em", fontSize:10}}>Next Week Focus</div>
+                            <div style={{fontWeight:700, fontSize:10, color:T.accent, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.05em"}}>Next Week Focus</div>
                             <div style={{fontSize:13, color:T.text, lineHeight:1.6, fontWeight:600}}>{insight.nextWeekFocus}</div>
                           </div>
                         </div>
@@ -3705,7 +3480,7 @@ function changeWkStart(oldKey, newKey, setKey) {
             ];
 
             return (
-              <div style={{maxWidth: settingsSection==="print" ? "none" : 600, paddingBottom:20}}>
+              <div style={{maxWidth:600, paddingBottom:20}}>
                 <div style={{marginBottom:20, display:"flex", alignItems:"center", gap:12}}>
                   {settingsSection && (
                     <button onClick={()=>setSettingsSection(null)}
@@ -3992,13 +3767,8 @@ function changeWkStart(oldKey, newKey, setKey) {
                         <button onClick={addEmp} style={{background:T.accent,color:"white",border:"none",borderRadius:10,padding:"12px 28px",fontWeight:800,fontSize:14,cursor:"pointer"}}>+ Add First Employee</button>
                       </Card>
                     )}
-                    {employees.length > 1 && (
-                      <div style={{fontSize:11,color:T.sub,marginBottom:8,display:"flex",alignItems:"center",gap:6,opacity:0.7}}>
-                        <span>⠿</span> Drag cards to reorder your roster
-                      </div>
-                    )}
                     <div className="team-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:14}}>
-                      {employees.map((emp,empIdx)=>{
+                      {employees.map(emp=>{
                         const isEditing=editEmpId===emp.id;
                         const totalH=eTotalH(emp.id), totalP=eTotalP(emp);
                         const maxWkH=Math.max(...weeks.map(w=>eWkH(w.key,emp.id)));
@@ -4006,22 +3776,7 @@ function changeWkStart(oldKey, newKey, setKey) {
                         const overAvail=avail>0&&maxWkH>avail;
                         const almostAvail=avail>0&&!overAvail&&maxWkH>=avail*0.85;
                         return (
-                          <div key={emp.id} className="emp-card" id={`emp-card-${emp.id}`}
-                            draggable
-                            onDragStart={e=>{e.dataTransfer.setData("rosterIdx",String(empIdx));e.dataTransfer.effectAllowed="move";}}
-                            onDragOver={e=>e.preventDefault()}
-                            onDrop={e=>{
-                              e.preventDefault();
-                              const from=parseInt(e.dataTransfer.getData("rosterIdx"));
-                              if(isNaN(from)||from===empIdx) return;
-                              const updated=[...employees];
-                              const [moved]=updated.splice(from,1);
-                              updated.splice(empIdx,0,moved);
-                              setEmployees(updated);
-                              if(bizId) updated.forEach((emp,i)=>dbPatch(`employees?id=eq.${emp.id}`,{sort_order:i}).catch(()=>{}));
-                              showToast("Roster order updated ✓");
-                            }}
-                            style={{background:T.surface,borderRadius:T.radius,overflow:"hidden",boxShadow:T.shadow,border:`2px solid ${isEditing?emp.color:"transparent"}`,transition:"all 0.15s",cursor:"grab"}}>
+                          <div key={emp.id} className="emp-card" id={`emp-card-${emp.id}`} style={{background:T.surface,borderRadius:T.radius,overflow:"hidden",boxShadow:T.shadow,border:`2px solid ${isEditing?emp.color:"transparent"}`,transition:"all 0.15s"}}>
                             <div style={{background:emp.color,padding:"14px 16px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                               <div style={{display:"flex",alignItems:"center",gap:12}}>
                                 <div style={{width:42,height:42,borderRadius:"50%",background:"rgba(255,255,255,0.2)",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:18,flexShrink:0}}>{emp.name?emp.name[0].toUpperCase():"?"}</div>
@@ -4242,7 +3997,7 @@ function changeWkStart(oldKey, newKey, setKey) {
                             <label style={{fontSize:10,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.06em"}}>Week</label>
                             <select value={printWeek} onChange={e=>setPrintWeek(e.target.value)}
                               style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"9px 12px",fontSize:13,fontWeight:700,outline:"none",background:T.surface,cursor:"pointer",color:T.text}}>
-                              {weeks.map(wk=>(<option key={wk.key} value={wk.key}>{dl(wk.dates[0])} – {dl(wk.dates[6])}</option>))}
+                              {weeks.map(wk=>(<option key={wk.key} value={wk.key}>{wk.label} — {dl(wk.dates[0])} to {dl(wk.dates[6])}</option>))}
                             </select>
                           </div>
                           {/* View toggle */}
@@ -4272,14 +4027,14 @@ function changeWkStart(oldKey, newKey, setKey) {
 
                       {/* ── WEEKLY TABLE VIEW ── */}
                       {printView==="weekly" && (
-                        <div id="sw-print-area" ref={printRef} style={{background:"white",borderRadius:T.radius,boxShadow:T.shadowMd,overflowX:"auto",border:`1px solid ${T.border}`}}>
+                        <div ref={printRef} style={{background:"white",borderRadius:T.radius,boxShadow:T.shadowMd,overflow:"hidden",border:`1px solid ${T.border}`}}>
                           {/* Header */}
                           <div style={{padding:"20px 28px 16px",borderBottom:"2px solid #1C1C1C"}}>
                             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                               <div>
                                 <div style={{fontSize:22,fontWeight:900,color:"#1C1C1C",letterSpacing:"-0.01em"}}>{biz}</div>
                                 <div style={{fontSize:13,color:"#666",marginTop:3,fontWeight:500}}>
-                                  Employee Schedule &nbsp;·&nbsp;
+                                  Employee Schedule &nbsp;·&nbsp; {wk.label} &nbsp;·&nbsp;
                                   {wkDates[0].toLocaleDateString("en-US",{month:"long",day:"numeric"})} – {wkDates[6].toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"})}
                                 </div>
                               </div>
@@ -4292,17 +4047,17 @@ function changeWkStart(oldKey, newKey, setKey) {
                           </div>
 
                           {/* Table */}
-                          <table style={{width:"100%",minWidth:900,borderCollapse:"collapse",tableLayout:"fixed"}}>
+                          <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed"}}>
                             <colgroup>
-                              <col style={{width:160}}/>
-                              {DAYS.map(d=><col key={d}/>)}
-                              <col style={{width:52}}/>
+                              <col style={{width:"14%"}}/>
+                              {DAYS.map(d=><col key={d} style={{width:"12%"}}/>)}
+                              <col style={{width:"4%"}}/>
                             </colgroup>
                             <thead>
                               <tr style={{background:"#1C1C1C"}}>
-                                <th style={{padding:"12px 16px",color:"white",textAlign:"left",fontWeight:800,fontSize:13,letterSpacing:"0.05em",textTransform:"uppercase"}}>Employee</th>
+                                <th style={{padding:"12px 16px",color:"white",textAlign:"left",fontWeight:800,fontSize:12,letterSpacing:"0.05em",textTransform:"uppercase"}}>Employee</th>
                                 {DAYS.map((d,i)=>(
-                                  <th key={d} style={{padding:"12px 10px",color:"white",textAlign:"center",fontWeight:700,fontSize:13,borderLeft:"1px solid #333"}}>
+                                  <th key={d} style={{padding:"12px 8px",color:"white",textAlign:"center",fontWeight:700,fontSize:12,borderLeft:"1px solid #333"}}>
                                     <div style={{fontSize:13,fontWeight:800}}>{d}</div>
                                     <div style={{fontSize:10,color:"#aaa",fontWeight:400,marginTop:2}}>
                                       {wkDates[i].toLocaleDateString("en-US",{month:"short",day:"numeric"})}
@@ -4319,14 +4074,14 @@ function changeWkStart(oldKey, newKey, setKey) {
                                 return (
                                   <tr key={emp.id} style={{background:ei%2===0?"white":"#FAFAFA",borderBottom:"1px solid #E8E4DF"}}>
                                     {/* Employee name */}
-                                    <td style={{padding:"12px 14px",borderRight:"2px solid #E8E4DF",verticalAlign:"middle"}}>
+                                    <td style={{padding:"14px 16px",borderRight:"2px solid #E8E4DF",verticalAlign:"middle"}}>
                                       <div style={{display:"flex",alignItems:"center",gap:10}}>
                                         <div style={{width:32,height:32,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:14,flexShrink:0}}>
                                           {emp.name?emp.name[0].toUpperCase():"?"}
                                         </div>
                                         <div>
-                                          <div style={{fontWeight:800,fontSize:14,color:"#1C1C1C",lineHeight:1.3}}>{emp.name||"—"}</div>
-                                          {emp.role&&<div style={{fontSize:10,color:"#888",marginTop:2}}>{emp.role}</div>}
+                                          <div style={{fontWeight:800,fontSize:14,color:"#1C1C1C",lineHeight:1.2}}>{emp.name||"—"}</div>
+                                          
                                         </div>
                                       </div>
                                     </td>
@@ -4342,10 +4097,10 @@ function changeWkStart(oldKey, newKey, setKey) {
                                         <td key={di} style={{padding:"10px 8px",textAlign:"center",borderLeft:"1px solid #E8E4DF",verticalAlign:"middle",background:isOff?"#F8F6F3":shift?st.color+"0D":"white"}}>
                                           {shift ? (
                                             <div>
-                                              <div style={{fontSize:12,fontWeight:800,color:"#1C1C1C",whiteSpace:"nowrap"}}>{fmt(shift.start)}–{fmt(shift.end)}</div>
-                                              
-                                              <div style={{display:"inline-block",background:st.color,color:"white",borderRadius:4,padding:"2px 7px",fontSize:10,fontWeight:800,textTransform:"uppercase",marginTop:3}}>{st.label}</div>
-                                              <div style={{fontSize:11,fontWeight:700,color:"#555",marginTop:2}}>{h}h</div>
+                                              <div style={{fontSize:14,fontWeight:900,color:"#1C1C1C",lineHeight:1.1}}>{fmt(shift.start)}</div>
+                                              <div style={{fontSize:12,color:"#555",margin:"3px 0",fontWeight:600}}>to {fmt(shift.end)}</div>
+                                              <div style={{display:"inline-block",background:st.color,color:"white",borderRadius:4,padding:"2px 6px",fontSize:9,fontWeight:800,letterSpacing:"0.04em",textTransform:"uppercase"}}>{st.label}</div>
+                                              <div style={{fontSize:11,fontWeight:700,color:"#1C1C1C",marginTop:4}}>{h}h</div>
                                               {shift.notes&&<div style={{fontSize:9,color:"#888",marginTop:3,fontStyle:"italic",lineHeight:1.3}}>{shift.notes}</div>}
                                             </div>
                                           ) : isOff ? (
@@ -4369,11 +4124,13 @@ function changeWkStart(oldKey, newKey, setKey) {
                                 <td style={{padding:"12px 16px",fontWeight:800,fontSize:12,color:"#1C1C1C",textTransform:"uppercase",letterSpacing:"0.05em"}}>Daily Total</td>
                                 {DAYS.map((_,di)=>{
                                   const dh = employees.reduce((s,e)=>s+eDayH(wk.key,e.id,di),0);
+                                  const dp = employees.reduce((s,e)=>s+eDayH(wk.key,e.id,di)*(parseFloat(e.hourlyRate)||0),0);
                                   return (
                                     <td key={di} style={{padding:"12px 8px",textAlign:"center",borderLeft:"1px solid #DDD",verticalAlign:"middle"}}>
                                       {dh>0?(
                                         <div>
                                           <div style={{fontWeight:800,fontSize:13,color:"#1C1C1C"}}>{dh}h</div>
+                                          {dp>0&&<div style={{fontSize:10,color:"#666",marginTop:1}}>${dp.toFixed(0)}</div>}
                                         </div>
                                       ):<span style={{color:"#CCC",fontSize:11}}>—</span>}
                                     </td>
@@ -4388,7 +4145,7 @@ function changeWkStart(oldKey, newKey, setKey) {
 
                       {/* ── PER-EMPLOYEE CARD VIEW ── */}
                       {printView==="employee" && (
-                        <div id="sw-print-area" ref={printRef} style={{background:"white",borderRadius:T.radius,boxShadow:T.shadowMd,overflowX:"auto",border:`1px solid ${T.border}`}}>
+                        <div ref={printRef} style={{background:"white",borderRadius:T.radius,boxShadow:T.shadowMd,overflow:"hidden",border:`1px solid ${T.border}`}}>
                           {/* Header */}
                           <div style={{padding:"20px 28px 16px",borderBottom:"2px solid #1C1C1C",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
                             <div>
@@ -4424,7 +4181,7 @@ function changeWkStart(oldKey, newKey, setKey) {
                                       </div>
                                       <div>
                                         <div style={{color:"white",fontWeight:900,fontSize:18,lineHeight:1}}>{emp.name||"—"}</div>
-                                        {emp.role&&<div style={{color:"rgba(255,255,255,0.75)",fontSize:12,marginTop:2}}>{emp.role}</div>}
+                                        
                                       </div>
                                     </div>
                                     <div style={{textAlign:"right"}}>
