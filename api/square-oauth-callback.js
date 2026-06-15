@@ -10,7 +10,7 @@ const SQUARE_BASE = process.env.SQUARE_ENV === "sandbox"
 
 const SUPABASE_URL = process.env.SUPABASE_URL || "https://kyrjgfeowmflazywsuir.supabase.co";
 const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const APP_BASE_URL = process.env.APP_BASE_URL || "https://shiftwise-lime.vercel.app";
+const APP_BASE_URL = process.env.APP_BASE_URL || "https://shiftwise-mlcm.vercel.app";
 const SQUARE_VERSION = "2024-01-18";
 
 export default async function handler(req, res) {
