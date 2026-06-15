@@ -1520,7 +1520,7 @@ Rules:
 
         {/* TOP BAR */}
         <div style={{background:T.dark,position:"sticky",top:0,zIndex:400,borderBottom:"1px solid #2A2A2A"}}>
-          <div className="top-bar-inner" style={{maxWidth:1400,margin:"0 auto",display:"flex",alignItems:"center",gap:14,height:54,padding:"0 18px"}}>
+          <div className="top-bar-inner" style={{maxWidth:1800,margin:"0 auto",display:"flex",alignItems:"center",gap:14,height:54,padding:"0 18px"}}>
             <div style={{display:"flex",alignItems:"center",gap:9,flexShrink:0}}>
               <div style={{width:30,height:30,background:T.accent,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>📅</div>
               <input className="biz-input" value={biz} onChange={e=>setBiz(e.target.value)}
@@ -1539,10 +1539,6 @@ Rules:
             </div>
             <div className="top-stats" style={{display:"flex",alignItems:"center",gap:8,flexShrink:0,minWidth:0}}>
 
-              <span style={{fontSize:12,color:"#888",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",maxWidth:180}}>
-                <span style={{color:T.accent,fontWeight:700}}>${grandPay.toFixed(0)}</span>
-                {" · "}{grandHrs}h · {employees.length} staff
-              </span>
               <button onClick={exportData} style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Export</button>
 
               {/* 🔔 Alert Bell */}
@@ -1579,7 +1575,7 @@ Rules:
         )}
 
         {/* PAGE CONTENT */}
-        <div className="page-pad" style={{maxWidth:1400,margin:"0 auto",padding:"18px 16px 28px"}}>
+        <div className="page-pad" style={{maxWidth:1800,margin:"0 auto",padding:"18px 16px 28px"}}>
 
           {/* SCHEDULE GRID */}
           {tab==="grid" && (
@@ -2148,26 +2144,23 @@ Rules:
                   </div>
                   <Divider T={T}/>
                   <div>
-                    <SectionLabel T={T}>{activeWeek ? "Schedule Week" : "Select a Week"}</SectionLabel>
-                    <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                      {weeks.map((wk,wi)=>{
-                        const isActive = activeWeek === wk.key;
-                        const changeFn = (newKey) => changeWkStart(wk.key,newKey,wi===0?setWk1Start:setWk2Start);
-                        const dateRange = `${dl(wk.dates[0])} – ${dl(wk.dates[6])}`;
-                        return (
-                          <div key={wk.key} style={{display:"flex",gap:6,alignItems:"center"}}>
-                            <button onClick={()=>setActiveWeek(wk.key)} className="action-btn"
-                              style={{ background:isActive?T.dark:T.muted, color:isActive?"white":T.sub, border:isActive?"none":`1.5px dashed ${T.border}`, borderRadius:8, padding:"7px 14px", fontWeight:700, fontSize:12, cursor:"pointer", transition:"all 0.15s", whiteSpace:"nowrap" }}>
-                              {dateRange}
-                            </button>
-                            <div style={{position:"relative",flexShrink:0}} title="Change week start date">
-                              <input type="date" value={toInputDate(wk.dates[0])} onChange={e=>changeFn(getSunday(e.target.value))}
-                                style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
-                              <div style={{background:T.muted,borderRadius:8,padding:"7px 10px",fontSize:14,cursor:"pointer",userSelect:"none"}}>📅</div>
-                            </div>
-                          </div>
-                        );
-                      })}
+                    <SectionLabel T={T}>Schedule Week</SectionLabel>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <button onClick={()=>{ const prev=getSunday(addDays(activeWeek||wk1Start,-7)); setWk1Start(prev); setActiveWeek(prev); setPrintWeek(prev); }}
+                        style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
+                      <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
+                        <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
+                          <span style={{fontSize:10}}>●</span>
+                          {activeWeek ? `${dl(weekDatesFromSunday(activeWeek)[0])} – ${dl(weekDatesFromSunday(activeWeek)[6])}` : "Select a week"}
+                        </div>
+                        <div style={{position:"relative",flexShrink:0,borderLeft:`1px solid ${T.accent}40`}}>
+                          <input type="date" value={activeWeek?toInputDate(weekDatesFromSunday(activeWeek)[0]):""} onChange={e=>{ const s=getSunday(e.target.value); setWk1Start(s); setActiveWeek(s); setPrintWeek(s); }}
+                            style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
+                          <div style={{background:T.accent+"18",padding:"8px 10px",fontSize:13,cursor:"pointer",userSelect:"none",color:T.accent}}>📅</div>
+                        </div>
+                      </div>
+                      <button onClick={()=>{ const next=getSunday(addDays(activeWeek||wk1Start,7)); setWk1Start(next); setActiveWeek(next); setPrintWeek(next); }}
+                        style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
                     </div>
                   </div>
 
@@ -2446,7 +2439,7 @@ Rules:
                             </th>
                           );
                         })}
-                        <th style={{padding:"9px 6px",textAlign:"center",color:T.accent,fontSize:10,fontWeight:700,letterSpacing:"0.06em"}}>HRS<br/>PAY</th>
+                        <th style={{padding:"9px 6px",textAlign:"center",color:T.accent,fontSize:10,fontWeight:700,letterSpacing:"0.06em"}}>HRS</th>
                       </tr>
                     </thead>
                     <tbody>
