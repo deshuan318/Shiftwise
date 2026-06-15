@@ -11,7 +11,6 @@ const SQUARE_BASE = process.env.SQUARE_ENV === "sandbox"
 const SUPABASE_URL   = process.env.SUPABASE_URL || "https://kyrjgfeowmflazywsuir.supabase.co";
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SQUARE_VERSION = "2024-01-18";
-const LOCATION_ID    = "LEHXD3QTD5G6V";
 const LOOKBACK_DAYS  = 60;
 
 async function refreshAccessToken(conn) {
@@ -73,14 +72,33 @@ export default async function handler(req, res) {
       accessToken = await refreshAccessToken(conn);
     }
 
-    // 3. Pull completed orders for the lookback window (paginated)
+    // 3. Find this merchant's active locations
+    const locRes = await fetch(`${SQUARE_BASE}/v2/locations`, {
+      headers: {
+        "Authorization": `Bearer ${accessToken}`,
+        "Square-Version": SQUARE_VERSION,
+      },
+    });
+    const locData = await locRes.json();
+    if (!locRes.ok) {
+      console.error("Square locations fetch failed:", locData);
+      throw new Error(locData?.errors?.[0]?.detail || "Square locations fetch failed");
+    }
+    const locationIds = (locData.locations || [])
+      .filter(l => l.status === "ACTIVE")
+      .map(l => l.id);
+    if (locationIds.length === 0) {
+      throw new Error("No active Square locations found for this account");
+    }
+
+    // 4. Pull completed orders for the lookback window (paginated)
     const startAt = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
     let orders = [];
     let cursor = null;
 
     do {
       const body = {
-        location_ids: [LOCATION_ID],
+        location_ids: locationIds,
         query: {
           filter: {
             state_filter: { states: ["COMPLETED"] },
@@ -111,7 +129,7 @@ export default async function handler(req, res) {
       cursor = ordersData.cursor || null;
     } while (cursor);
 
-    // 4. Aggregate to daily revenue
+    // 5. Aggregate to daily revenue
     const dayTotals = {};
     for (const order of orders) {
       const ts = order.closed_at || order.created_at;
@@ -127,7 +145,7 @@ export default async function handler(req, res) {
       .map(([date, d]) => ({ date, revenue: Math.round(d.revenue * 100) / 100, transactions: d.transactions }))
       .sort((a, b) => a.date.localeCompare(b.date));
 
-    // 5. Upsert into sales_data
+    // 6. Upsert into sales_data
     if (salesData.length > 0) {
       const rows = salesData.map(d => ({
         business_id, sale_date: d.date, revenue: d.revenue, transactions: d.transactions,
@@ -149,7 +167,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // 6. Record sync time
+    // 7. Record sync time
     const now = new Date().toISOString();
     await fetch(`${SUPABASE_URL}/rest/v1/square_connections?business_id=eq.${business_id}`, {
       method: "PATCH",
