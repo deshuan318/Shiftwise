@@ -362,6 +362,10 @@ export default function App() {
   const [squareSyncing,      setSquareSyncing]      = useState(false);
   const [squareLoading,      setSquareLoading]      = useState(true);
   const [showDailyBreakdown, setShowDailyBreakdown] = useState(false);
+  const [widgets,        setWidgets]        = useState([]);
+  const [showAddWidget,  setShowAddWidget]  = useState(false);
+  const [newWidget,      setNewWidget]      = useState({ data_source:"sales", time_range:"last7", display:"stat" });
+  const [widgetSaving,   setWidgetSaving]   = useState(false);
   const [punches,        setPunches]        = useState([]);
 const [tsWeekStart, setTsWeekStart] = useState(()=>getSunday(new Date().toISOString().split("T")[0]));
 const [tsOpenCell, setTsOpenCell] = useState(null);
@@ -471,6 +475,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
       setBizId(business.id);
       checkSquareStatus(business.id);
+      try {
+        const w = await dbGet(`dashboard_widgets?business_id=eq.${business.id}&order=sort_order.asc`);
+        setWidgets(w || []);
+      } catch(e) { console.warn("Widgets load failed:", e); }
       setBiz(business.name || "My Business");
       setWeeklyBudget(business.weekly_budget ? String(business.weekly_budget) : "");
       // Load theme from local preference (kept local — it's a UI pref not business data)
@@ -962,6 +970,154 @@ Rules:
     } catch(err) {
       showToast("Could not disconnect: " + err.message, 5000);
     }
+  }
+
+  // ── DASHBOARD WIDGETS ────────────────────────────────────────────────────
+  async function addWidget() {
+    if (!bizId || widgetSaving) return;
+    setWidgetSaving(true);
+    try {
+      const [row] = await dbPost("dashboard_widgets", {
+        business_id: bizId,
+        data_source: newWidget.data_source,
+        time_range: newWidget.time_range,
+        display: newWidget.display,
+        sort_order: widgets.length,
+      });
+      setWidgets(prev => [...prev, row]);
+      setShowAddWidget(false);
+      setNewWidget({ data_source:"sales", time_range:"last7", display:"stat" });
+      showToast("Widget added ✓");
+    } catch(e) {
+      showToast("Could not add widget: " + e.message, 5000);
+    } finally {
+      setWidgetSaving(false);
+    }
+  }
+
+  async function removeWidget(id) {
+    setWidgets(prev => prev.filter(w => w.id !== id));
+    try { await dbDelete(`dashboard_widgets?id=eq.${id}`); }
+    catch(e) { console.warn("Widget delete failed:", e); }
+  }
+
+  // Resolves a widget config into the underlying Sales/Labor/Forecast data
+  function computeWidgetResult(config) {
+    const filter = FILTERS.find(f => f.key === config.time_range);
+    if (filter?.kind === "forecast") {
+      return { kind:"forecast", forecast: getForecast(config.time_range, salesData) };
+    }
+    const result = { kind:"history" };
+    if (config.data_source !== "labor") result.sales = getSales(config.time_range, salesData);
+    if (config.data_source !== "sales") result.labor = getLabor(config.time_range, salesData, employees, eDayH);
+    return result;
+  }
+
+  // Renders a small SVG line or bar chart for one or more series
+  function renderMiniChart(series, display) {
+    const W=300, H=80;
+    const n = series[0]?.values.length || 1;
+    const max = Math.max(1, ...series.flatMap(s=>s.values));
+    if (display === "line") {
+      return (
+        <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:H,display:"block"}} preserveAspectRatio="none">
+          {series.map((s,si)=>{
+            const pts = s.values.map((v,i)=>`${n>1?(i/(n-1))*W:W/2},${H-(v/max)*(H-4)-2}`).join(" ");
+            return <polyline key={si} points={pts} fill="none" stroke={s.color} strokeWidth="2"/>;
+          })}
+        </svg>
+      );
+    }
+    const groupW = W/n;
+    const barW = (groupW*0.6)/series.length;
+    return (
+      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:H,display:"block"}} preserveAspectRatio="none">
+        {series.flatMap((s,si)=>s.values.map((v,i)=>{
+          const h = Math.max(1,(v/max)*(H-4));
+          const x = i*groupW + groupW*0.2 + si*barW;
+          return <rect key={`${si}-${i}`} x={x} y={H-h} width={Math.max(1,barW-1)} height={h} fill={s.color}/>;
+        }))}
+      </svg>
+    );
+  }
+
+  // Renders one widget card based on its saved config
+  function renderWidgetCard(config) {
+    const filter = FILTERS.find(f => f.key === config.time_range);
+    const sourceLabel = {sales:"Sales", labor:"Labor", both:"Sales & Labor"}[config.data_source] || "Sales";
+    const title = config.title || `${sourceLabel} · ${filter?.label || config.time_range}`;
+    const result = computeWidgetResult(config);
+    let body = null;
+
+    if (config.display === "stat") {
+      if (result.kind === "forecast") {
+        body = result.forecast.hasEnoughData ? (
+          <>
+            <div style={{fontSize:22,fontWeight:800,color:"#3A9BE8"}}>${result.forecast.total.toFixed(0)}</div>
+            <div style={{fontSize:11,color:T.sub,marginTop:2}}>suggested labor: ${Math.round(result.forecast.total*0.3)}</div>
+          </>
+        ) : <div style={{fontSize:12,color:T.sub}}>Need {MIN_DOW_SAMPLES}+ weeks of history</div>;
+      } else {
+        body = (
+          <>
+            {result.sales && <div style={{fontSize:22,fontWeight:800,color:"#3A9BE8"}}>${result.sales.total.toFixed(0)}</div>}
+            {result.labor && <div style={{fontSize:result.sales?13:22,fontWeight:result.sales?700:800,color:"#E8A93A",marginTop:result.sales?2:0}}>${result.labor.total.toFixed(0)}{result.sales?" labor":""}</div>}
+            {result.sales && result.labor && result.sales.total>0 && (
+              <div style={{fontSize:11,color:T.sub,marginTop:2}}>{((result.labor.total/result.sales.total)*100).toFixed(1)}% labor cost</div>
+            )}
+          </>
+        );
+      }
+    } else if (config.display === "line" || config.display === "bar") {
+      if (result.kind === "forecast") {
+        body = result.forecast.hasEnoughData
+          ? renderMiniChart([{label:"Forecast", color:"#3A9BE8", values: result.forecast.days.map(d=>d.projectedRevenue)}], config.display)
+          : <div style={{fontSize:12,color:T.sub,padding:"20px 0",textAlign:"center"}}>Need {MIN_DOW_SAMPLES}+ weeks of history</div>;
+      } else {
+        const series = [];
+        if (result.sales) series.push({label:"Sales", color:"#2D6A4F", values: result.sales.days.map(d=>d.revenue)});
+        if (result.labor) series.push({label:"Labor", color:"#E8A93A", values: result.labor.days.map(d=>d.labor)});
+        body = series.length ? renderMiniChart(series, config.display) : null;
+      }
+    } else if (config.display === "table") {
+      let rows;
+      if (result.kind === "forecast") {
+        rows = result.forecast.days.map(d => ({date:d.date, revenue:d.projectedRevenue, labor:null}));
+      } else {
+        const base = result.sales?.days || result.labor?.days || [];
+        rows = base.map((d,i) => ({
+          date: d.date,
+          revenue: result.sales ? result.sales.days[i].revenue : null,
+          labor: result.labor ? result.labor.days[i].labor : null,
+        }));
+      }
+      body = (
+        <div style={{maxHeight:160,overflowY:"auto"}}>
+          {rows.map(d=>(
+            <div key={d.date} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:11,padding:"3px 0",borderBottom:`1px solid ${T.border}`}}>
+              <span style={{color:T.sub}}>{dl(d.date)}</span>
+              <span style={{display:"flex",gap:8}}>
+                {d.revenue!=null && <span style={{color:"#2D6A4F",fontWeight:700}}>${d.revenue.toFixed(0)}</span>}
+                {d.labor!=null && <span style={{color:"#E8A93A",fontWeight:700}}>${d.labor.toFixed(0)}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <div key={config.id} style={{background:T.muted,borderRadius:10,padding:"12px 14px",position:"relative"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8}}>
+          <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>{title}</div>
+          <button onClick={()=>removeWidget(config.id)} aria-label="Remove widget"
+            style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:14,lineHeight:1,padding:0,flexShrink:0}}>
+            ✕
+          </button>
+        </div>
+        {body}
+      </div>
+    );
   }
 
   async function saveBizSettings(fields) {
@@ -3402,10 +3558,89 @@ Rules:
                 );
               })()}
 
+              {/* Your Widgets */}
+              <div style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,overflow:"hidden"}}>
+                <div style={{padding:"12px 18px",background:T.dark,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span style={{color:"white",fontWeight:800,fontSize:14}}>Your Widgets</span>
+                  <button onClick={()=>setShowAddWidget(true)}
+                    style={{background:T.accent,color:"white",border:"none",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
+                    + Add
+                  </button>
+                </div>
+                <div style={{padding:"16px 18px"}}>
+                  {widgets.length===0 ? (
+                    <div style={{textAlign:"center",padding:"20px 0",color:T.sub,fontSize:12}}>
+                      No widgets yet — tap "+ Add" to build a sales, labor, or forecast view of your own.
+                    </div>
+                  ) : (
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
+                      {widgets.map(w=>renderWidgetCard(w))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
             </div>
           )}
 
-          {/* INSIGHTS */}
+          {/* Add Widget modal */}
+          {showAddWidget && (
+            <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"flex-end",justifyContent:"center",zIndex:1000}} onClick={()=>setShowAddWidget(false)}>
+              <div onClick={e=>e.stopPropagation()} style={{background:T.surface,borderRadius:"16px 16px 0 0",padding:"20px 18px",width:"100%",maxWidth:480,maxHeight:"80vh",overflowY:"auto"}}>
+                <div style={{fontWeight:800,fontSize:15,color:T.text,marginBottom:14}}>Add Widget</div>
+
+                <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:6}}>Data</div>
+                <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+                  {[{k:"sales",l:"Sales"},{k:"labor",l:"Labor"},{k:"both",l:"Sales & Labor"}].map(o=>(
+                    <button key={o.k} onClick={()=>setNewWidget(w=>({...w,data_source:o.k}))}
+                      style={{background:newWidget.data_source===o.k?T.accent:T.muted,color:newWidget.data_source===o.k?"white":T.text,border:"none",borderRadius:20,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                      {o.l}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:6}}>Time Range</div>
+                <div style={{display:"flex",gap:6,marginBottom:6,flexWrap:"wrap"}}>
+                  {FILTERS.filter(f=>f.kind==="history").map(f=>(
+                    <button key={f.key} onClick={()=>setNewWidget(w=>({...w,time_range:f.key}))}
+                      style={{background:newWidget.time_range===f.key?T.accent:T.muted,color:newWidget.time_range===f.key?"white":T.text,border:"none",borderRadius:20,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",margin:"8px 0 6px"}}>Forecast</div>
+                <div style={{display:"flex",gap:6,marginBottom:14,flexWrap:"wrap"}}>
+                  {FILTERS.filter(f=>f.kind==="forecast").map(f=>(
+                    <button key={f.key} onClick={()=>setNewWidget(w=>({...w,time_range:f.key}))}
+                      style={{background:newWidget.time_range===f.key?T.accent:T.muted,color:newWidget.time_range===f.key?"white":T.text,border:"none",borderRadius:20,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:6}}>Display</div>
+                <div style={{display:"flex",gap:6,marginBottom:18,flexWrap:"wrap"}}>
+                  {[{k:"stat",l:"Stat Card"},{k:"line",l:"Line Chart"},{k:"bar",l:"Bar Chart"},{k:"table",l:"Table"}].map(o=>(
+                    <button key={o.k} onClick={()=>setNewWidget(w=>({...w,display:o.k}))}
+                      style={{background:newWidget.display===o.k?T.accent:T.muted,color:newWidget.display===o.k?"white":T.text,border:"none",borderRadius:8,padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+                      {o.l}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{display:"flex",gap:8}}>
+                  <button onClick={()=>setShowAddWidget(false)}
+                    style={{flex:1,background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:10,padding:"12px 0",fontSize:13,fontWeight:700,cursor:"pointer"}}>
+                    Cancel
+                  </button>
+                  <button onClick={addWidget} disabled={widgetSaving}
+                    style={{flex:2,background:T.accent,color:"white",border:"none",borderRadius:10,padding:"12px 0",fontSize:13,fontWeight:700,cursor:widgetSaving?"default":"pointer",opacity:widgetSaving?0.6:1}}>
+                    {widgetSaving?"Adding…":"Add Widget"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {tab==="insights" && (()=>{
             const hasData = employees.length > 0 && Object.keys(schedule).length > 0;
             const urgencyColor = { low:"#4CAF7D", medium:"#E8A93A", high:"#C0392B" };
