@@ -392,13 +392,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       wks.forEach(w => { newWeekMap[w.week_start] = w.id; });
       setWeekMap(newWeekMap);
 
-      // 5. Set week dates - always default to current week
+      // 5. Set week dates - always default to current week, single-week mode
       {
         const todaySun = getSunday(new Date().toISOString().split("T")[0]);
         setWk1Start(todaySun);
         setActiveWeek(todaySun);
         setPrintWeek(todaySun);
-        if (wks.length > 1) { setWk2Start(wks[1].week_start); setWeekMode("2"); }
+        setWeekMode("1");
       }
 
       // 6. Transform employees
@@ -890,7 +890,7 @@ Rules:
   }
 
   function changeWkStart(oldKey, newKey, setKey) {
-    setSchedule(p => { const n=JSON.parse(JSON.stringify(p)); if(p[oldKey]){n[newKey]=p[oldKey];delete n[oldKey];} return n; });
+    // Do NOT migrate schedule data — each week key is independent
     if (activeWeek===oldKey) setActiveWeek(newKey);
     if (printWeek===oldKey)  setPrintWeek(newKey);
     setKey(newKey);
