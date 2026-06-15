@@ -1,8 +1,18 @@
 // /api/square-sync.js
-// Pulls completed orders for the last 60 days from Square, aggregates them
-// into daily revenue totals, and upserts into sales_data — the same table
-// the CSV import writes to, so the Sales Intelligence card doesn't care
-// which source the numbers came from.
+// Pulls completed orders from Square, aggregates them into daily revenue
+// totals, and upserts into sales_data — the same table the CSV import
+// writes to, so the Sales Intelligence card doesn't care which source the
+// numbers came from.
+//
+// Sync strategy:
+//  - First-ever sync (no last_synced_at on file): full historical backfill,
+//    capped at FULL_BACKFILL_DAYS so a long-lived Square account doesn't
+//    cause a single sync to run forever.
+//  - Every sync after that: incremental — only pull orders closed since the
+//    last sync, with a small overlap window to catch anything that closed
+//    late or was edited after the fact.
+
+export const config = { maxDuration: 60 };
 
 const SQUARE_BASE = process.env.SQUARE_ENV === "sandbox"
   ? "https://connect.squareupsandbox.com"
@@ -11,7 +21,8 @@ const SQUARE_BASE = process.env.SQUARE_ENV === "sandbox"
 const SUPABASE_URL   = process.env.SUPABASE_URL || "https://kyrjgfeowmflazywsuir.supabase.co";
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SQUARE_VERSION = "2024-01-18";
-const LOOKBACK_DAYS  = 60;
+const FULL_BACKFILL_DAYS     = 1095; // ~3 years, first sync only
+const INCREMENTAL_OVERLAP_DAYS = 3;  // re-check a small buffer on repeat syncs
 
 async function refreshAccessToken(conn) {
   const r = await fetch(`${SQUARE_BASE}/oauth2/token`, {
@@ -92,7 +103,17 @@ export default async function handler(req, res) {
     }
 
     // 4. Pull completed orders for the lookback window (paginated)
-    const startAt = new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
+    let startAt;
+    let syncType;
+    if (conn.last_synced_at) {
+      const since = new Date(conn.last_synced_at);
+      since.setUTCDate(since.getUTCDate() - INCREMENTAL_OVERLAP_DAYS);
+      startAt = since.toISOString();
+      syncType = "incremental";
+    } else {
+      startAt = new Date(Date.now() - FULL_BACKFILL_DAYS * 24 * 60 * 60 * 1000).toISOString();
+      syncType = "full_backfill";
+    }
     let orders = [];
     let cursor = null;
 
@@ -180,7 +201,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({ last_synced_at: now }),
     });
 
-    return res.status(200).json({ salesData, daysSynced: salesData.length, lastSyncedAt: now });
+    return res.status(200).json({ salesData, daysSynced: salesData.length, lastSyncedAt: now, syncType, since: startAt });
   } catch (err) {
     console.error("square-sync error:", err);
     return res.status(500).json({ error: err.message });
