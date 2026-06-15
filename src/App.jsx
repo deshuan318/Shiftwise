@@ -3150,15 +3150,15 @@ Rules:
 
               {/* Sales Intelligence */}
               {(()=>{
-                const wkDates = weeks.flatMap(w => w.dates.map(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toISOString().split("T")[0]; }));
-                const wkSales = salesData.filter(s => wkDates.includes(s.date));
+                const pwDates2 = weekDatesFromSunday(payWeek).map(d => d.toISOString().split("T")[0]);
+                const wkSales = salesData.filter(s => pwDates2.includes(s.date));
                 const totalRevenue = wkSales.reduce((s,d) => s+d.revenue, 0);
-                const laborCostPct = totalRevenue > 0 ? (grandPay / totalRevenue) * 100 : 0;
+                const payWeekLabor = employees.reduce((s,e)=>s+DAYS.reduce((d,_,i)=>d+eDayH(payWeek,e.id,i)*(parseFloat(e.hourlyRate)||0),0),0);
+                const laborCostPct = totalRevenue > 0 ? (payWeekLabor / totalRevenue) * 100 : 0;
                 const suggestedBudget = totalRevenue > 0 ? Math.round(totalRevenue * 0.3) : 0;
-                const activeWkDates = activeWkObj ? activeWkObj.dates.map(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toISOString().split("T")[0]; }) : [];
-                const dayData = activeWkDates.map((dateStr, i) => {
+                const dayData = pwDates2.map((dateStr, i) => {
                   const sale = salesData.find(s => s.date === dateStr);
-                  const labor = employees.reduce((s,e) => s + eDayH(activeWeek, e.id, i) * (parseFloat(e.hourlyRate)||0), 0);
+                  const labor = employees.reduce((s,e) => s + eDayH(payWeek, e.id, i) * (parseFloat(e.hourlyRate)||0), 0);
                   return { day:DAYS[i], date:dateStr, revenue:sale?.revenue||0, labor, pct:sale?.revenue>0?(labor/sale.revenue)*100:null };
                 });
                 const hasSalesData = wkSales.length > 0 || salesData.length > 0;
@@ -3227,9 +3227,9 @@ Rules:
                       <div style={{padding:"16px 18px",display:"flex",flexDirection:"column",gap:16}}>
                         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10}}>
                           {[
-                            { l:"Total Revenue", v:totalRevenue>0?`$${totalRevenue.toFixed(0)}`:"-", c:"#3A9BE8", sub:"this schedule period" },
+                            { l:"Total Revenue", v:totalRevenue>0?`$${totalRevenue.toFixed(0)}`:"-", c:"#3A9BE8", sub:"this week" },
                             { l:"Labor Cost %", v:laborCostPct>0?`${laborCostPct.toFixed(1)}%`:"-", c:laborCostPct>35?"#C0392B":laborCostPct>25?"#E8A93A":"#4CAF7D", sub:"target: 25–35%" },
-                            { l:"Labor vs Revenue", v:totalRevenue>0?`$${grandPay.toFixed(0)} / $${totalRevenue.toFixed(0)}`:"-", c:T.text, sub:"labor / revenue" },
+                            { l:"Labor vs Revenue", v:totalRevenue>0?`$${payWeekLabor.toFixed(0)} / $${totalRevenue.toFixed(0)}`:"-", c:T.text, sub:"labor / revenue" },
                             { l:"Suggested Budget", v:suggestedBudget>0?`$${suggestedBudget}`:"-", c:T.accent, sub:"30% of revenue" },
                           ].map(s=>(
                             <div key={s.l} style={{background:T.muted,borderRadius:10,padding:"12px 14px"}}>
@@ -3239,6 +3239,19 @@ Rules:
                             </div>
                           ))}
                         </div>
+
+                        <div>
+                          <div style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:6}}>Daily breakdown</div>
+                          {dayData.map((d,i)=>(
+                            <div key={d.date} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:i<dayData.length-1?`1px solid ${T.border}`:"none",fontSize:12}}>
+                              <span style={{color:T.text,fontWeight:700,width:36,flexShrink:0}}>{d.day}</span>
+                              <span style={{color:T.sub,flex:1}}>{d.revenue>0?`$${d.revenue.toFixed(0)} sales`:"no sales data"}</span>
+                              <span style={{color:T.sub,flex:1,textAlign:"right"}}>{d.labor>0?`$${d.labor.toFixed(0)} labor`:"-"}</span>
+                              <span style={{width:44,textAlign:"right",fontWeight:700,color:d.pct==null?T.sub:d.pct>35?"#C0392B":d.pct>25?"#E8A93A":"#4CAF7D"}}>{d.pct!=null?`${d.pct.toFixed(0)}%`:"-"}</span>
+                            </div>
+                          ))}
+                        </div>
+
                         {suggestedBudget > 0 && (
                           <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:T.accent+"12",border:`1px solid ${T.accent}28`,borderRadius:10}}>
                             <div style={{flex:1}}>
