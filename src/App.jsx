@@ -1,5 +1,24 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 
+// Preset color palette for widget styling — kept small and on-theme
+const WIDGET_COLORS = [
+  { key:"blue",   hex:"#3A9BE8" },
+  { key:"green",  hex:"#2D6A4F" },
+  { key:"amber",  hex:"#E8A93A" },
+  { key:"red",    hex:"#C0392B" },
+  { key:"purple", hex:"#9B59B6" },
+  { key:"teal",   hex:"#16A085" },
+];
+
+// Widget size presets — grid column/row spans in a 2-column layout
+const WIDGET_SIZES = {
+  sm:   { label:"Small", w:1, h:1 },
+  wide: { label:"Wide",  w:2, h:1 },
+  tall: { label:"Tall",  w:1, h:2 },
+  lg:   { label:"Large", w:2, h:2 },
+};
+const SIZE_CYCLE = ["sm","wide","tall","lg"];
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SUPABASE CONFIG
 // To update credentials: change SUPABASE_URL and SUPABASE_ANON_KEY only.
@@ -364,7 +383,7 @@ export default function App() {
   const [showDailyBreakdown, setShowDailyBreakdown] = useState(false);
   const [widgets,        setWidgets]        = useState([]);
   const [showAddWidget,  setShowAddWidget]  = useState(false);
-  const [newWidget,      setNewWidget]      = useState({ data_source:"sales", time_range:"last7", display:"stat" });
+  const [newWidget,      setNewWidget]      = useState({ data_source:"sales", time_range:"last7", display:"stat", color:null, show_axis:true, show_legend:true });
   const [widgetSaving,   setWidgetSaving]   = useState(false);
   const [punches,        setPunches]        = useState([]);
 const [tsWeekStart, setTsWeekStart] = useState(()=>getSunday(new Date().toISOString().split("T")[0]));
@@ -977,22 +996,40 @@ Rules:
     if (!bizId || widgetSaving) return;
     setWidgetSaving(true);
     try {
+      const sizeKey = newWidget.display === "stat" ? "sm" : "wide";
+      const { w, h } = WIDGET_SIZES[sizeKey];
       const [row] = await dbPost("dashboard_widgets", {
         business_id: bizId,
         data_source: newWidget.data_source,
         time_range: newWidget.time_range,
         display: newWidget.display,
+        color: newWidget.color || null,
+        show_axis: newWidget.show_axis,
+        show_legend: newWidget.show_legend,
+        grid_w: w, grid_h: h,
         sort_order: widgets.length,
       });
       setWidgets(prev => [...prev, row]);
       setShowAddWidget(false);
-      setNewWidget({ data_source:"sales", time_range:"last7", display:"stat" });
+      setNewWidget({ data_source:"sales", time_range:"last7", display:"stat", color:null, show_axis:true, show_legend:true });
       showToast("Widget added ✓");
     } catch(e) {
       showToast("Could not add widget: " + e.message, 5000);
     } finally {
       setWidgetSaving(false);
     }
+  }
+
+  // Cycles a widget through size presets (Small → Wide → Tall → Large → Small...)
+  async function resizeWidget(id) {
+    const widget = widgets.find(w=>w.id===id);
+    if (!widget) return;
+    const currentKey = Object.keys(WIDGET_SIZES).find(k => WIDGET_SIZES[k].w===widget.grid_w && WIDGET_SIZES[k].h===widget.grid_h) || "sm";
+    const nextKey = SIZE_CYCLE[(SIZE_CYCLE.indexOf(currentKey)+1) % SIZE_CYCLE.length];
+    const { w, h } = WIDGET_SIZES[nextKey];
+    setWidgets(prev => prev.map(item => item.id===id ? {...item, grid_w:w, grid_h:h} : item));
+    try { await dbPatch(`dashboard_widgets?id=eq.${id}`, { grid_w:w, grid_h:h }); }
+    catch(e) { console.warn("Resize save failed:", e); }
   }
 
   async function removeWidget(id) {
@@ -1013,31 +1050,67 @@ Rules:
     return result;
   }
 
-  // Renders a small SVG line or bar chart for one or more series
-  function renderMiniChart(series, display) {
-    const W=300, H=80;
+  // Renders a small SVG line or bar chart for one or more series, with
+  // optional axis labels (min/max value, first/last date) and a legend.
+  function renderMiniChart(series, display, options={}) {
+    const { dates=[], showAxis=true, showLegend=true, height=80 } = options;
+    const W=300, H=height;
+    const padL = showAxis ? 32 : 2;
+    const padB = showAxis ? 14 : 2;
+    const padT = 2, padR = 2;
+    const plotW = W - padL - padR;
+    const plotH = H - padT - padB;
     const n = series[0]?.values.length || 1;
     const max = Math.max(1, ...series.flatMap(s=>s.values));
+    const xOf = i => padL + (n>1 ? (i/(n-1))*plotW : plotW/2);
+    const yOf = v => padT + plotH - (v/max)*plotH;
+
+    let chartEls;
     if (display === "line") {
-      return (
-        <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:H,display:"block"}} preserveAspectRatio="none">
-          {series.map((s,si)=>{
-            const pts = s.values.map((v,i)=>`${n>1?(i/(n-1))*W:W/2},${H-(v/max)*(H-4)-2}`).join(" ");
-            return <polyline key={si} points={pts} fill="none" stroke={s.color} strokeWidth="2"/>;
-          })}
-        </svg>
-      );
+      chartEls = series.map((s,si)=>{
+        const pts = s.values.map((v,i)=>`${xOf(i)},${yOf(v)}`).join(" ");
+        return <polyline key={si} points={pts} fill="none" stroke={s.color} strokeWidth="2"/>;
+      });
+    } else {
+      const groupW = plotW/n;
+      const barW = (groupW*0.6)/series.length;
+      chartEls = series.flatMap((s,si)=>s.values.map((v,i)=>{
+        const h = Math.max(1,(v/max)*plotH);
+        const x = padL + i*groupW + groupW*0.2 + si*barW;
+        return <rect key={`${si}-${i}`} x={x} y={padT+plotH-h} width={Math.max(1,barW-1)} height={h} fill={s.color}/>;
+      }));
     }
-    const groupW = W/n;
-    const barW = (groupW*0.6)/series.length;
+
     return (
-      <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:H,display:"block"}} preserveAspectRatio="none">
-        {series.flatMap((s,si)=>s.values.map((v,i)=>{
-          const h = Math.max(1,(v/max)*(H-4));
-          const x = i*groupW + groupW*0.2 + si*barW;
-          return <rect key={`${si}-${i}`} x={x} y={H-h} width={Math.max(1,barW-1)} height={h} fill={s.color}/>;
-        }))}
-      </svg>
+      <div>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:H,display:"block"}} preserveAspectRatio="none">
+          {showAxis && (
+            <>
+              <line x1={padL} y1={padT} x2={padL} y2={padT+plotH} stroke={T.border} strokeWidth="1"/>
+              <line x1={padL} y1={padT+plotH} x2={padL+plotW} y2={padT+plotH} stroke={T.border} strokeWidth="1"/>
+              <text x={padL-3} y={padT+7} textAnchor="end" fontSize="7" fill={T.sub}>${Math.round(max)}</text>
+              <text x={padL-3} y={padT+plotH} textAnchor="end" fontSize="7" fill={T.sub}>$0</text>
+            </>
+          )}
+          {chartEls}
+          {showAxis && dates.length>0 && (
+            <>
+              <text x={padL} y={H-1} textAnchor="start" fontSize="7" fill={T.sub}>{dl(dates[0])}</text>
+              <text x={padL+plotW} y={H-1} textAnchor="end" fontSize="7" fill={T.sub}>{dl(dates[dates.length-1])}</text>
+            </>
+          )}
+        </svg>
+        {showLegend && (
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:4}}>
+            {series.map(s=>(
+              <div key={s.label} style={{display:"flex",alignItems:"center",gap:4,fontSize:9,color:T.sub}}>
+                <span style={{width:8,height:8,borderRadius:2,background:s.color,display:"inline-block",flexShrink:0}}/>
+                {s.label}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     );
   }
 
@@ -1047,21 +1120,25 @@ Rules:
     const sourceLabel = {sales:"Sales", labor:"Labor", both:"Sales & Labor"}[config.data_source] || "Sales";
     const title = config.title || `${sourceLabel} · ${filter?.label || config.time_range}`;
     const result = computeWidgetResult(config);
+    const gridH = config.grid_h || 1;
+    const primaryColor = config.color || "#3A9BE8";
+    const secondaryColor = "#E8A93A";
+    const chartHeight = gridH >= 2 ? 140 : 80;
     let body = null;
 
     if (config.display === "stat") {
       if (result.kind === "forecast") {
         body = result.forecast.hasEnoughData ? (
           <>
-            <div style={{fontSize:22,fontWeight:800,color:"#3A9BE8"}}>${result.forecast.total.toFixed(0)}</div>
+            <div style={{fontSize:22,fontWeight:800,color:primaryColor}}>${result.forecast.total.toFixed(0)}</div>
             <div style={{fontSize:11,color:T.sub,marginTop:2}}>suggested labor: ${Math.round(result.forecast.total*0.3)}</div>
           </>
         ) : <div style={{fontSize:12,color:T.sub}}>Need {MIN_DOW_SAMPLES}+ weeks of history</div>;
       } else {
         body = (
           <>
-            {result.sales && <div style={{fontSize:22,fontWeight:800,color:"#3A9BE8"}}>${result.sales.total.toFixed(0)}</div>}
-            {result.labor && <div style={{fontSize:result.sales?13:22,fontWeight:result.sales?700:800,color:"#E8A93A",marginTop:result.sales?2:0}}>${result.labor.total.toFixed(0)}{result.sales?" labor":""}</div>}
+            {result.sales && <div style={{fontSize:22,fontWeight:800,color:primaryColor}}>${result.sales.total.toFixed(0)}</div>}
+            {result.labor && <div style={{fontSize:result.sales?13:22,fontWeight:result.sales?700:800,color:result.sales?secondaryColor:primaryColor,marginTop:result.sales?2:0}}>${result.labor.total.toFixed(0)}{result.sales?" labor":""}</div>}
             {result.sales && result.labor && result.sales.total>0 && (
               <div style={{fontSize:11,color:T.sub,marginTop:2}}>{((result.labor.total/result.sales.total)*100).toFixed(1)}% labor cost</div>
             )}
@@ -1069,15 +1146,17 @@ Rules:
         );
       }
     } else if (config.display === "line" || config.display === "bar") {
+      const chartOpts = { showAxis: config.show_axis !== false, showLegend: config.show_legend !== false, height: chartHeight };
       if (result.kind === "forecast") {
         body = result.forecast.hasEnoughData
-          ? renderMiniChart([{label:"Forecast", color:"#3A9BE8", values: result.forecast.days.map(d=>d.projectedRevenue)}], config.display)
+          ? renderMiniChart([{label:"Forecast", color:primaryColor, values: result.forecast.days.map(d=>d.projectedRevenue)}], config.display, {...chartOpts, dates: result.forecast.days.map(d=>d.date)})
           : <div style={{fontSize:12,color:T.sub,padding:"20px 0",textAlign:"center"}}>Need {MIN_DOW_SAMPLES}+ weeks of history</div>;
       } else {
         const series = [];
-        if (result.sales) series.push({label:"Sales", color:"#2D6A4F", values: result.sales.days.map(d=>d.revenue)});
-        if (result.labor) series.push({label:"Labor", color:"#E8A93A", values: result.labor.days.map(d=>d.labor)});
-        body = series.length ? renderMiniChart(series, config.display) : null;
+        const dates = (result.sales?.days || result.labor?.days || []).map(d=>d.date);
+        if (result.sales) series.push({label:"Sales", color:primaryColor, values: result.sales.days.map(d=>d.revenue)});
+        if (result.labor) series.push({label:"Labor", color:result.sales?secondaryColor:primaryColor, values: result.labor.days.map(d=>d.labor)});
+        body = series.length ? renderMiniChart(series, config.display, {...chartOpts, dates}) : null;
       }
     } else if (config.display === "table") {
       let rows;
@@ -1092,13 +1171,13 @@ Rules:
         }));
       }
       body = (
-        <div style={{maxHeight:160,overflowY:"auto"}}>
+        <div style={{maxHeight:gridH>=2?320:160,overflowY:"auto"}}>
           {rows.map(d=>(
             <div key={d.date} style={{display:"flex",justifyContent:"space-between",gap:8,fontSize:11,padding:"3px 0",borderBottom:`1px solid ${T.border}`}}>
               <span style={{color:T.sub}}>{dl(d.date)}</span>
               <span style={{display:"flex",gap:8}}>
-                {d.revenue!=null && <span style={{color:"#2D6A4F",fontWeight:700}}>${d.revenue.toFixed(0)}</span>}
-                {d.labor!=null && <span style={{color:"#E8A93A",fontWeight:700}}>${d.labor.toFixed(0)}</span>}
+                {d.revenue!=null && <span style={{color:primaryColor,fontWeight:700}}>${d.revenue.toFixed(0)}</span>}
+                {d.labor!=null && <span style={{color:secondaryColor,fontWeight:700}}>${d.labor.toFixed(0)}</span>}
               </span>
             </div>
           ))}
@@ -1106,14 +1185,22 @@ Rules:
       );
     }
 
+    const sizeKey = Object.keys(WIDGET_SIZES).find(k => WIDGET_SIZES[k].w===(config.grid_w||1) && WIDGET_SIZES[k].h===(config.grid_h||1)) || "sm";
+
     return (
-      <div key={config.id} style={{background:T.muted,borderRadius:10,padding:"12px 14px",position:"relative"}}>
+      <div key={config.id} style={{background:T.muted,borderRadius:10,padding:"12px 14px",position:"relative",gridColumn:`span ${config.grid_w||1}`,gridRow:`span ${config.grid_h||1}`}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8}}>
           <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>{title}</div>
-          <button onClick={()=>removeWidget(config.id)} aria-label="Remove widget"
-            style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:14,lineHeight:1,padding:0,flexShrink:0}}>
-            ✕
-          </button>
+          <div style={{display:"flex",gap:8,flexShrink:0}}>
+            <button onClick={()=>resizeWidget(config.id)} aria-label={`Resize widget (currently ${WIDGET_SIZES[sizeKey].label})`} title={`Size: ${WIDGET_SIZES[sizeKey].label} — tap to cycle`}
+              style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:13,lineHeight:1,padding:0}}>
+              ⤢
+            </button>
+            <button onClick={()=>removeWidget(config.id)} aria-label="Remove widget"
+              style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:14,lineHeight:1,padding:0}}>
+              ✕
+            </button>
+          </div>
         </div>
         {body}
       </div>
@@ -3374,47 +3461,9 @@ Rules:
                 const pwDates=weekDatesFromSunday(payWeek);
                 const pwLabel=dl(pwDates[0])+" – "+dl(pwDates[6]);
                 const pwHrs=employees.reduce((s,e)=>s+DAYS.reduce((d,_,i)=>d+eDayH(payWeek,e.id,i),0),0);
-                const pwPay=employees.reduce((s,e)=>s+DAYS.reduce((d,_,i)=>d+eDayH(payWeek,e.id,i)*(parseFloat(e.hourlyRate)||0),0),0);
                 const pwStaff=employees.filter(e=>DAYS.some((_,i)=>eDayH(payWeek,e.id,i)>0)).length;
                 const bgt=parseFloat(weeklyBudget)||0;
-                const over=bgt>0&&pwPay>bgt;
-                const warn=!over&&bgt>0&&pwPay/bgt>0.85;
-                const bc=over?"#C0392B":warn?"#E8A93A":"#4CAF7D";
-                const pct=bgt>0?Math.min((pwPay/bgt)*100,100):0;
-                return (
-                  <div style={{display:"flex",flexDirection:"column",gap:16}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                      <button onClick={()=>setPayWeek(getSunday(addDays(payWeek,-7)))} style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>‹</button>
-                      <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,borderRadius:8,whiteSpace:"nowrap"}}>{pwLabel}</div>
-                      <button onClick={()=>setPayWeek(getSunday(addDays(payWeek,7)))} style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>›</button>
-                      {payWeek===paySun&&<span style={{fontSize:11,color:T.accent,fontWeight:700}}>Current week</span>}
-                      {payWeek!==paySun&&<button onClick={()=>setPayWeek(paySun)} style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Today</button>}
-                    </div>
-                    <div className="stat-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:12}}>
-                      {[
-                        {l:"Est. Gross Payroll",v:"$"+pwPay.toFixed(2),c:T.accent,sub:"this week"},
-                        {l:"Total Hours",v:pwHrs+"h",c:"#3A9BE8",sub:"scheduled"},
-                        {l:"Staff Scheduled",v:pwStaff+"/"+employees.length,c:"#4CAF7D",sub:"have shifts"},
-                        {l:"Weekly Budget",v:bgt>0?"$"+bgt.toFixed(0):"Not set",c:"#9B59B6",sub:over?"OVER budget":warn?"Near limit":bgt>0?"On track":"Set in schedule tab"},
-                      ].map(s=>(
-                        <div key={s.l} style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,padding:"16px 18px",borderLeft:`4px solid ${s.c}`,overflow:"hidden"}}>
-                          <div style={{fontSize:11,color:T.sub,marginBottom:5,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>{s.l}</div>
-                          <div style={{fontSize:26,fontWeight:800,color:s.c,lineHeight:1}}>{s.v}</div>
-                          <div style={{fontSize:10,color:"#bbb",marginTop:5}}>{s.sub}</div>
-                        </div>
-                      ))}
-                    </div>
-                    {bgt>0&&<div style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,padding:"16px 18px"}}>
-                      <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}><span style={{fontWeight:700,fontSize:13,color:T.text}}>Budget Tracker</span><span style={{fontSize:12,fontWeight:700,color:bc}}>{over?"$"+(pwPay-bgt).toFixed(0)+" over":warn?"$"+(bgt-pwPay).toFixed(0)+" left":"$"+(bgt-pwPay).toFixed(0)+" remaining"}</span></div>
-                      <div style={{height:10,background:T.muted,borderRadius:5,overflow:"hidden"}}><div style={{height:"100%",width:`${pct}%`,background:bc,borderRadius:5,transition:"width 0.3s"}}/></div>
-                      <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:11,color:T.sub}}><span>$0</span><span>${bgt.toFixed(0)}</span></div>
-                    </div>}
-                  </div>
-                );
-              })()}
 
-              {/* Sales Intelligence */}
-              {(()=>{
                 const salesThisWeek = getSales("thisWeek", salesData, payWeek);
                 const laborThisWeek = getLabor("thisWeek", salesData, employees, eDayH, payWeek);
                 const wkSales = salesThisWeek.days.filter(d=>d.hasData);
@@ -3428,24 +3477,37 @@ Rules:
                   return { day:DAYS[i], date:d.date, revenue:d.revenue, labor, pct:d.revenue>0?(labor/d.revenue)*100:null };
                 });
                 const hasSalesData = wkSales.length > 0 || salesData.length > 0;
+
+                const over=bgt>0&&payWeekLabor>bgt;
+                const warn=!over&&bgt>0&&payWeekLabor/bgt>0.85;
+                const bc=over?"#C0392B":warn?"#E8A93A":"#4CAF7D";
+                const pct=bgt>0?Math.min((payWeekLabor/bgt)*100,100):0;
+
                 return (
                   <div style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,overflow:"hidden"}}>
                     <div style={{padding:"12px 18px",background:T.dark,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
-                      <div>
-                        <span style={{color:"white",fontWeight:800,fontSize:14}}>Sales Intelligence</span>
-                        <span style={{color:"#666",fontSize:11,marginLeft:10}}>Powered by Square</span>
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                        <button onClick={()=>setPayWeek(getSunday(addDays(payWeek,-7)))} style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,width:32,height:32,fontSize:16,cursor:"pointer",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>‹</button>
+                        <div style={{background:T.accent,color:"white",padding:"6px 14px",fontWeight:700,fontSize:12,borderRadius:8,whiteSpace:"nowrap"}}>{pwLabel}</div>
+                        <button onClick={()=>setPayWeek(getSunday(addDays(payWeek,7)))} style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,width:32,height:32,fontSize:16,cursor:"pointer",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>›</button>
+                        {payWeek===paySun
+                          ? <span style={{fontSize:11,color:T.accent,fontWeight:700}}>Current week</span>
+                          : <button onClick={()=>setPayWeek(paySun)} style={{background:"rgba(255,255,255,0.1)",color:"white",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Today</button>}
                       </div>
-                      {squareConnected ? (
-                        <button onClick={handleSyncSquare} disabled={squareSyncing}
-                          style={{background:"rgba(255,255,255,0.1)",color:"white",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:squareSyncing?"default":"pointer",whiteSpace:"nowrap",opacity:squareSyncing?0.6:1}}>
-                          {squareSyncing ? "Syncing…" : "Sync Now"}
-                        </button>
-                      ) : (
-                        <button onClick={handleConnectSquare} disabled={squareLoading}
-                          style={{background:T.accent,color:"white",border:"none",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:squareLoading?"default":"pointer",whiteSpace:"nowrap",opacity:squareLoading?0.6:1}}>
-                          Connect to Square
-                        </button>
-                      )}
+                      <div style={{display:"flex",alignItems:"center",gap:10}}>
+                        <span style={{color:"#666",fontSize:11}}>Powered by Square</span>
+                        {squareConnected ? (
+                          <button onClick={handleSyncSquare} disabled={squareSyncing}
+                            style={{background:"rgba(255,255,255,0.1)",color:"white",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:squareSyncing?"default":"pointer",whiteSpace:"nowrap",opacity:squareSyncing?0.6:1}}>
+                            {squareSyncing ? "Syncing…" : "Sync Now"}
+                          </button>
+                        ) : (
+                          <button onClick={handleConnectSquare} disabled={squareLoading}
+                            style={{background:T.accent,color:"white",border:"none",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:squareLoading?"default":"pointer",whiteSpace:"nowrap",opacity:squareLoading?0.6:1}}>
+                            Connect to Square
+                          </button>
+                        )}
+                      </div>
                     </div>
                     {squareConnected && (
                       <div style={{padding:"7px 18px",background:T.muted,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,borderBottom:`1px solid ${T.border}`}}>
@@ -3458,87 +3520,86 @@ Rules:
                         </button>
                       </div>
                     )}
-                    {!hasSalesData ? (
-                      <div style={{padding:"32px 24px",textAlign:"center"}}>
-                        <div style={{fontSize:32,marginBottom:10}}>📊</div>
-                        {squareConnected ? (
+
+                    <div style={{padding:"16px 18px",display:"flex",flexDirection:"column",gap:16}}>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10}}>
+                        {[
+                          { l:"Total Revenue", v:totalRevenue>0?`$${totalRevenue.toFixed(0)}`:"-", c:"#3A9BE8", sub:"this week" },
+                          { l:"Labor Cost", v:`$${payWeekLabor.toFixed(2)}`, c:T.accent, sub:"this week" },
+                          { l:"Labor Cost %", v:laborCostPct>0?`${laborCostPct.toFixed(1)}%`:"-", c:laborCostPct>35?"#C0392B":laborCostPct>25?"#E8A93A":"#4CAF7D", sub:"target: 25–35%" },
+                          { l:"Total Hours", v:pwHrs+"h", c:"#3A9BE8", sub:"scheduled" },
+                          { l:"Staff Scheduled", v:pwStaff+"/"+employees.length, c:"#4CAF7D", sub:"have shifts" },
+                          { l:"Forecast (Next 7 Days)",
+                            v: forecastNext7.hasEnoughData ? `$${forecastNext7.total.toFixed(0)}` : "Need more data",
+                            c: forecastNext7.hasEnoughData ? "#3A9BE8" : T.sub,
+                            sub: forecastNext7.hasEnoughData ? `suggested labor: $${Math.round(forecastNext7.total*0.3)}` : `min ${MIN_DOW_SAMPLES} weeks of history needed` },
+                        ].map(s=>(
+                          <div key={s.l} style={{background:T.muted,borderRadius:10,padding:"12px 14px"}}>
+                            <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4}}>{s.l}</div>
+                            <div style={{fontSize:20,fontWeight:800,color:s.c,lineHeight:1}}>{s.v}</div>
+                            <div style={{fontSize:9,color:T.sub,marginTop:4}}>{s.sub}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div>
+                        <button onClick={()=>setShowDailyBreakdown(v=>!v)}
+                          style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",background:"transparent",border:"none",padding:"4px 0",cursor:"pointer"}}>
+                          <span style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.04em"}}>Daily breakdown</span>
+                          <span style={{fontSize:11,color:T.accent,fontWeight:700}}>{showDailyBreakdown ? "Hide ▲" : "Show ▼"}</span>
+                        </button>
+                        {showDailyBreakdown && dayData.map((d,i)=>(
+                          <div key={d.date} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:i<dayData.length-1?`1px solid ${T.border}`:"none",fontSize:12}}>
+                            <span style={{color:T.text,fontWeight:700,width:36,flexShrink:0}}>{d.day}</span>
+                            <span style={{color:T.sub,flex:1}}>{d.revenue>0?`$${d.revenue.toFixed(0)} sales`:"no sales data"}</span>
+                            <span style={{color:T.sub,flex:1,textAlign:"right"}}>{d.labor>0?`$${d.labor.toFixed(0)} labor`:"-"}</span>
+                            <span style={{width:44,textAlign:"right",fontWeight:700,color:d.pct==null?T.sub:d.pct>35?"#C0392B":d.pct>25?"#E8A93A":"#4CAF7D"}}>{d.pct!=null?`${d.pct.toFixed(0)}%`:"-"}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div style={{background:T.muted,borderRadius:10,padding:"14px 16px"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+                          <div>
+                            <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>Weekly Budget</div>
+                            <div style={{fontSize:20,fontWeight:800,color:T.text,marginTop:2}}>{bgt>0?`$${bgt.toFixed(0)}`:"Not set"}</div>
+                          </div>
+                          {bgt>0 && <span style={{fontSize:12,fontWeight:700,color:bc}}>{over?"$"+(payWeekLabor-bgt).toFixed(0)+" over":"$"+(bgt-payWeekLabor).toFixed(0)+(warn?" left":" remaining")}</span>}
+                        </div>
+                        {bgt>0 && (
                           <>
-                            <div style={{fontWeight:700,fontSize:15,color:T.text,marginBottom:6}}>Connected — ready to sync</div>
-                            <p style={{margin:"0 0 16px",fontSize:12,color:T.sub,lineHeight:1.6,maxWidth:340,marginLeft:"auto",marginRight:"auto"}}>
-                              Tap Sync Now above to pull your sales history from Square and unlock labor cost %, demand-based scheduling, and smarter budget targets.
-                            </p>
-                          </>
-                        ) : (
-                          <>
-                            <div style={{fontWeight:700,fontSize:15,color:T.text,marginBottom:6}}>Connect your Square data</div>
-                            <p style={{margin:"0 0 16px",fontSize:12,color:T.sub,lineHeight:1.6,maxWidth:340,marginLeft:"auto",marginRight:"auto"}}>
-                              Connect to Square above for automatic daily sync, or import a Sales Summary CSV manually to unlock labor cost %, demand-based scheduling, and smarter budget targets.
-                            </p>
-                            <div style={{background:T.muted,borderRadius:10,padding:"12px 16px",fontSize:11,color:T.sub,textAlign:"left",maxWidth:340,margin:"0 auto 16px",lineHeight:1.7}}>
-                              <strong style={{color:T.text}}>How to export from Square:</strong><br/>
-                              1. Sign into Square Dashboard<br/>
-                              2. Go to Reports → Sales Summary<br/>
-                              3. Set your date range (last 4–8 weeks)<br/>
-                              4. Click the export icon → Download CSV<br/>
-                              5. Import that file here
-                            </div>
-                            <label style={{background:T.muted,color:T.text,border:`1px solid ${T.border}`,borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",display:"inline-block"}}>
-                              Import Square CSV
-                              <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
-                            </label>
+                            <div style={{height:10,background:T.surface,borderRadius:5,overflow:"hidden",marginTop:8}}><div style={{height:"100%",width:`${pct}%`,background:bc,borderRadius:5,transition:"width 0.3s"}}/></div>
+                            <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:11,color:T.sub}}><span>$0</span><span>${bgt.toFixed(0)}</span></div>
                           </>
                         )}
-                      </div>
-                    ) : (
-                      <div style={{padding:"16px 18px",display:"flex",flexDirection:"column",gap:16}}>
-                        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10}}>
-                          {[
-                            { l:"Total Revenue", v:totalRevenue>0?`$${totalRevenue.toFixed(0)}`:"-", c:"#3A9BE8", sub:"this week" },
-                            { l:"Labor Cost %", v:laborCostPct>0?`${laborCostPct.toFixed(1)}%`:"-", c:laborCostPct>35?"#C0392B":laborCostPct>25?"#E8A93A":"#4CAF7D", sub:"target: 25–35%" },
-                            { l:"Labor vs Revenue", v:totalRevenue>0?`$${payWeekLabor.toFixed(0)} / $${totalRevenue.toFixed(0)}`:"-", c:T.text, sub:"labor / revenue" },
-                            { l:"Suggested Budget", v:suggestedBudget>0?`$${suggestedBudget}`:"-", c:T.accent, sub:"30% of revenue" },
-                            { l:"Forecast (Next 7 Days)",
-                              v: forecastNext7.hasEnoughData ? `$${forecastNext7.total.toFixed(0)}` : "Need more data",
-                              c: forecastNext7.hasEnoughData ? "#3A9BE8" : T.sub,
-                              sub: forecastNext7.hasEnoughData ? `suggested labor: $${Math.round(forecastNext7.total*0.3)}` : `min ${MIN_DOW_SAMPLES} weeks of history needed` },
-                          ].map(s=>(
-                            <div key={s.l} style={{background:T.muted,borderRadius:10,padding:"12px 14px"}}>
-                              <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4}}>{s.l}</div>
-                              <div style={{fontSize:20,fontWeight:800,color:s.c,lineHeight:1}}>{s.v}</div>
-                              <div style={{fontSize:9,color:T.sub,marginTop:4}}>{s.sub}</div>
-                            </div>
-                          ))}
-                        </div>
-
-                        <div>
-                          <button onClick={()=>setShowDailyBreakdown(v=>!v)}
-                            style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",background:"transparent",border:"none",padding:"4px 0",cursor:"pointer"}}>
-                            <span style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.04em"}}>Daily breakdown</span>
-                            <span style={{fontSize:11,color:T.accent,fontWeight:700}}>{showDailyBreakdown ? "Hide ▲" : "Show ▼"}</span>
-                          </button>
-                          {showDailyBreakdown && dayData.map((d,i)=>(
-                            <div key={d.date} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:i<dayData.length-1?`1px solid ${T.border}`:"none",fontSize:12}}>
-                              <span style={{color:T.text,fontWeight:700,width:36,flexShrink:0}}>{d.day}</span>
-                              <span style={{color:T.sub,flex:1}}>{d.revenue>0?`$${d.revenue.toFixed(0)} sales`:"no sales data"}</span>
-                              <span style={{color:T.sub,flex:1,textAlign:"right"}}>{d.labor>0?`$${d.labor.toFixed(0)} labor`:"-"}</span>
-                              <span style={{width:44,textAlign:"right",fontWeight:700,color:d.pct==null?T.sub:d.pct>35?"#C0392B":d.pct>25?"#E8A93A":"#4CAF7D"}}>{d.pct!=null?`${d.pct.toFixed(0)}%`:"-"}</span>
-                            </div>
-                          ))}
-                        </div>
-
                         {suggestedBudget > 0 && (
-                          <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:T.accent+"12",border:`1px solid ${T.accent}28`,borderRadius:10}}>
-                            <div style={{flex:1}}>
-                              <div style={{fontWeight:700,fontSize:13,color:T.text}}>Suggested Weekly Budget</div>
-                              <div style={{fontSize:11,color:T.sub,marginTop:2}}>Based on your average revenue × 30% labor target</div>
-                            </div>
-                            <div style={{fontWeight:800,fontSize:18,color:T.accent,flexShrink:0}}>${suggestedBudget}</div>
+                          <div style={{display:"flex",alignItems:"center",gap:10,marginTop:bgt>0?12:8,paddingTop:bgt>0?12:0,borderTop:bgt>0?`1px solid ${T.border}`:"none"}}>
+                            <div style={{flex:1,fontSize:11,color:T.sub}}>Suggested: <strong style={{color:T.text}}>${suggestedBudget}</strong> (30% of this week's revenue so far)</div>
                             <button onClick={()=>{ setWeeklyBudget(String(suggestedBudget)); showToast("Budget updated to $"+suggestedBudget+" ✓"); }}
-                              style={{background:T.accent,color:"white",border:"none",borderRadius:8,padding:"8px 14px",fontWeight:700,fontSize:12,cursor:"pointer",flexShrink:0}}>
+                              style={{background:T.accent,color:"white",border:"none",borderRadius:8,padding:"7px 14px",fontWeight:700,fontSize:12,cursor:"pointer",flexShrink:0}}>
                               Apply
                             </button>
                           </div>
                         )}
+                      </div>
+
+                      {!hasSalesData && (
+                        <div style={{background:T.muted,borderRadius:10,padding:"14px 16px",textAlign:"center"}}>
+                          {squareConnected ? (
+                            <div style={{fontSize:12,color:T.sub}}>Connected — tap Sync Now above to pull your sales history.</div>
+                          ) : (
+                            <>
+                              <div style={{fontSize:12,color:T.sub,marginBottom:10}}>Connect to Square above for automatic sync, or import a Sales Summary CSV.</div>
+                              <label style={{background:T.surface,color:T.text,border:`1px solid ${T.border}`,borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",display:"inline-block"}}>
+                                Import Square CSV
+                                <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
+                              </label>
+                            </>
+                          )}
+                        </div>
+                      )}
+
+                      {salesData.length > 0 && (
                         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                           <span style={{fontSize:11,color:T.sub}}>{salesData.length} days of data · {salesData[0]?.date} to {salesData[salesData.length-1]?.date}</span>
                           <div style={{display:"flex",gap:8}}>
@@ -3552,8 +3613,8 @@ Rules:
                             </button>
                           </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 );
               })()}
@@ -3573,7 +3634,7 @@ Rules:
                       No widgets yet — tap "+ Add" to build a sales, labor, or forecast view of your own.
                     </div>
                   ) : (
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:10}}>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(2, 1fr)",gridAutoRows:"auto",gap:10}}>
                       {widgets.map(w=>renderWidgetCard(w))}
                     </div>
                   )}
@@ -3627,6 +3688,27 @@ Rules:
                     </button>
                   ))}
                 </div>
+
+                <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:6}}>Color</div>
+                <div style={{display:"flex",gap:8,marginBottom:18}}>
+                  {WIDGET_COLORS.map(c=>(
+                    <button key={c.key} onClick={()=>setNewWidget(w=>({...w,color:c.hex}))} aria-label={`Color: ${c.key}`}
+                      style={{width:28,height:28,borderRadius:"50%",background:c.hex,border:newWidget.color===c.hex?`2px solid ${T.text}`:"2px solid transparent",cursor:"pointer",padding:0}}/>
+                  ))}
+                </div>
+
+                {(newWidget.display==="line" || newWidget.display==="bar") && (
+                  <div style={{display:"flex",gap:18,marginBottom:18,flexWrap:"wrap"}}>
+                    <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:T.text,cursor:"pointer"}}>
+                      <input type="checkbox" checked={newWidget.show_axis} onChange={e=>setNewWidget(w=>({...w,show_axis:e.target.checked}))}/>
+                      Show axis labels
+                    </label>
+                    <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:T.text,cursor:"pointer"}}>
+                      <input type="checkbox" checked={newWidget.show_legend} onChange={e=>setNewWidget(w=>({...w,show_legend:e.target.checked}))}/>
+                      Show legend
+                    </label>
+                  </div>
+                )}
 
                 <div style={{display:"flex",gap:8}}>
                   <button onClick={()=>setShowAddWidget(false)}
