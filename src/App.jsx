@@ -79,10 +79,11 @@ const loadSaved = () => { try { const r=localStorage.getItem(STORAGE_KEY); retur
 
 const CSS = `
 *, *::before, *::after { box-sizing: border-box; }
-html { margin:0; padding:0; -webkit-text-size-adjust:100%; }
-body { margin:0; padding:0; min-height:100vh; overflow-x:hidden; overflow-y:auto;
+html { margin:0; padding:0; width:100%; -webkit-text-size-adjust:100%; }
+body { margin:0; padding:0; width:100%; min-height:100vh; overflow-x:hidden; overflow-y:auto;
   -webkit-overflow-scrolling:touch; overscroll-behavior-y:auto;
   font-family:'Inter','Segoe UI',system-ui,-apple-system,sans-serif; }
+#root { width:100%; min-height:100vh; }
 a, button { -webkit-tap-highlight-color:transparent; }
 input,select,button,textarea { font-family:inherit; }
 .grid-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:12px; }
@@ -1515,7 +1516,7 @@ Rules:
   }
 
   return (
-    <div style={{minHeight:"100vh",background:T.bg,color:T.text}}>
+    <div style={{minHeight:"100vh",width:"100%",background:T.bg,color:T.text}}>
       <style>{CSS}</style>
 
         {/* TOP BAR */}
