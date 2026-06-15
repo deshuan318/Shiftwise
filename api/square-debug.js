@@ -14,12 +14,25 @@ const SERVICE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const SQUARE_VERSION = "2024-01-18";
 
 export default async function handler(req, res) {
-  const { business_id } = req.query;
-  if (!business_id) {
-    return res.status(400).json({ error: "Missing business_id query param" });
-  }
+  let { business_id } = req.query;
 
   try {
+    // Always list businesses on file so we can confirm/find the right id
+    const bizRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/businesses?select=id,name`,
+      { headers: { "apikey": SERVICE_KEY, "Authorization": `Bearer ${SERVICE_KEY}` } }
+    );
+    const businesses = bizRes.ok ? await bizRes.json() : [];
+
+    // If no business_id given, default to the first business on file
+    if (!business_id && businesses.length > 0) {
+      business_id = businesses[0].id;
+    }
+
+    if (!business_id) {
+      return res.status(200).json({ error: "No business_id given and no businesses found", businesses });
+    }
+
     const connRes = await fetch(
       `${SUPABASE_URL}/rest/v1/square_connections?business_id=eq.${business_id}&select=*`,
       { headers: { "apikey": SERVICE_KEY, "Authorization": `Bearer ${SERVICE_KEY}` } }
@@ -33,11 +46,13 @@ export default async function handler(req, res) {
     const conns = await connRes.json();
     const conn = conns?.[0];
     if (!conn) {
-      return res.status(200).json({ connected: false, message: "No square_connections row for this business_id" });
+      return res.status(200).json({ connected: false, business_id_used: business_id, businesses, message: "No square_connections row for this business_id" });
     }
 
     const result = {
       connected: true,
+      business_id_used: business_id,
+      businesses,
       merchant_id: conn.merchant_id,
       merchant_name: conn.merchant_name,
       token_expires_at: conn.token_expires_at,
