@@ -2438,12 +2438,11 @@ Rules:
                         <th style={{padding:"11px 12px",textAlign:"left",color:"#666",fontSize:10,fontWeight:700,letterSpacing:"0.08em"}}>EMPLOYEE</th>
                         {DAYS.map((d,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
-                          const dp=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i)*(parseFloat(e.hourlyRate)||0),0);
                           return (
                             <th key={d} style={{padding:"9px 4px",textAlign:"center",color:"white",fontSize:11,fontWeight:700}}>
                               <div>{d}</div>
                               <div style={{fontSize:9,color:"#666",fontWeight:400}}>{activeWkObj?dl(activeWkObj.dates[i]):""}</div>
-                              {dh>0&&<div style={{fontSize:9,color:T.accent,fontWeight:700,marginTop:1}}>{dh}h · ${dp.toFixed(0)}</div>}
+                              {dh>0&&<div style={{fontSize:9,color:T.accent,fontWeight:700,marginTop:1}}>{dh}h</div>}
                             </th>
                           );
                         })}
@@ -2501,7 +2500,6 @@ Rules:
                                         <div style={{opacity:0.85,fontSize:9}}>–{fmt(shift.end)}</div>
                                         <div style={{fontWeight:800,fontSize:11,marginTop:2}}>{h}h</div>
                                         {shift.notes&&<div style={{fontSize:9,opacity:0.8,marginTop:1}}>📝</div>}
-                                        <div className="sh-pay" style={{opacity:0.8,fontSize:9}}>${pay.toFixed(0)}</div>
                                       </div>
                                       <button onClick={()=>{setShift(activeWeek,emp.id,di,null);setOpenCell(null);}}
                                         style={{position:"absolute",top:2,right:2,background:"rgba(0,0,0,0.25)",color:"white",border:"none",borderRadius:"50%",width:14,height:14,fontSize:10,cursor:"pointer",padding:0,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>×</button>
@@ -2552,10 +2550,9 @@ Rules:
                         <td style={{padding:"10px 12px",color:"#777",fontWeight:700,fontSize:10,letterSpacing:"0.06em"}}>TOTALS</td>
                         {DAYS.map((_,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
-                          const dp=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i)*(parseFloat(e.hourlyRate)||0),0);
                           return (
                             <td key={i} style={{padding:"10px 3px",textAlign:"center",fontWeight:700}}>
-                              {dh>0?<><div style={{color:T.accent,fontSize:11}}>{dh}h</div><div style={{color:"#666",fontSize:9}}>${dp.toFixed(0)}</div></>:<span style={{color:"#3A3A3A"}}>—</span>}
+                              {dh>0?<><div style={{color:T.accent,fontSize:11}}>{dh}h</div></>:<span style={{color:"#3A3A3A"}}>—</span>}
                             </td>
                           );
                         })}
@@ -3993,12 +3990,25 @@ Rules:
                       <Card T={T} style={{padding:"16px 18px",marginBottom:16,overflow:"visible"}}>
                         <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
                           {/* Week picker */}
-                          <div style={{flex:1,minWidth:150}}>
-                            <label style={{fontSize:10,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.06em"}}>Week</label>
-                            <select value={printWeek} onChange={e=>setPrintWeek(e.target.value)}
-                              style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"9px 12px",fontSize:13,fontWeight:700,outline:"none",background:T.surface,cursor:"pointer",color:T.text}}>
-                              {weeks.map(wk=>(<option key={wk.key} value={wk.key}>{wk.label} — {dl(wk.dates[0])} to {dl(wk.dates[6])}</option>))}
-                            </select>
+                          <div>
+                            <label style={{fontSize:10,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.06em"}}>Schedule Week</label>
+                            <div style={{display:"flex",alignItems:"center",gap:8}}>
+                              <button onClick={()=>setPrintWeek(getSunday(addDays(printWeek,-7)))}
+                                style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
+                              <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
+                                <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
+                                  <span style={{fontSize:10}}>●</span>
+                                  {printWeek ? `${dl(weekDatesFromSunday(printWeek)[0])} – ${dl(weekDatesFromSunday(printWeek)[6])}` : "Select a week"}
+                                </div>
+                                <div style={{position:"relative",flexShrink:0,borderLeft:`1px solid ${T.accent}40`}}>
+                                  <input type="date" value={printWeek?toInputDate(weekDatesFromSunday(printWeek)[0]):""} onChange={e=>setPrintWeek(getSunday(e.target.value))}
+                                    style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
+                                  <div style={{background:T.accent+"18",padding:"8px 10px",fontSize:13,cursor:"pointer",userSelect:"none",color:T.accent}}>📅</div>
+                                </div>
+                              </div>
+                              <button onClick={()=>setPrintWeek(getSunday(addDays(printWeek,7)))}
+                                style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
+                            </div>
                           </div>
                           {/* View toggle */}
                           <div>
@@ -4124,13 +4134,11 @@ Rules:
                                 <td style={{padding:"12px 16px",fontWeight:800,fontSize:12,color:"#1C1C1C",textTransform:"uppercase",letterSpacing:"0.05em"}}>Daily Total</td>
                                 {DAYS.map((_,di)=>{
                                   const dh = employees.reduce((s,e)=>s+eDayH(wk.key,e.id,di),0);
-                                  const dp = employees.reduce((s,e)=>s+eDayH(wk.key,e.id,di)*(parseFloat(e.hourlyRate)||0),0);
                                   return (
                                     <td key={di} style={{padding:"12px 8px",textAlign:"center",borderLeft:"1px solid #DDD",verticalAlign:"middle"}}>
                                       {dh>0?(
                                         <div>
                                           <div style={{fontWeight:800,fontSize:13,color:"#1C1C1C"}}>{dh}h</div>
-                                          {dp>0&&<div style={{fontSize:10,color:"#666",marginTop:1}}>${dp.toFixed(0)}</div>}
                                         </div>
                                       ):<span style={{color:"#CCC",fontSize:11}}>—</span>}
                                     </td>
