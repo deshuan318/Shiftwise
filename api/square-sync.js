@@ -95,12 +95,15 @@ export default async function handler(req, res) {
       console.error("Square locations fetch failed:", locData);
       throw new Error(locData?.errors?.[0]?.detail || "Square locations fetch failed");
     }
-    const locationIds = (locData.locations || [])
-      .filter(l => l.status === "ACTIVE")
-      .map(l => l.id);
+    const activeLocations = (locData.locations || []).filter(l => l.status === "ACTIVE");
+    const locationIds = activeLocations.map(l => l.id);
     if (locationIds.length === 0) {
       throw new Error("No active Square locations found for this account");
     }
+    // Use the first active location's timezone for bucketing order dates.
+    // Falls back to Central Time if Square doesn't report one.
+    const timeZone = activeLocations[0]?.timezone || "America/Chicago";
+    const dayFormatter = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" });
 
     // 4. Pull completed orders for the lookback window (paginated)
     let startAt;
@@ -150,12 +153,12 @@ export default async function handler(req, res) {
       cursor = ordersData.cursor || null;
     } while (cursor);
 
-    // 5. Aggregate to daily revenue
+    // 5. Aggregate to daily revenue (using the location's local date, not UTC)
     const dayTotals = {};
     for (const order of orders) {
       const ts = order.closed_at || order.created_at;
       if (!ts) continue;
-      const date = ts.split("T")[0];
+      const date = dayFormatter.format(new Date(ts)); // YYYY-MM-DD in location's timezone
       const amount = (order.total_money?.amount || 0) / 100;
       if (!dayTotals[date]) dayTotals[date] = { revenue: 0, transactions: 0 };
       dayTotals[date].revenue += amount;
@@ -201,7 +204,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({ last_synced_at: now }),
     });
 
-    return res.status(200).json({ salesData, daysSynced: salesData.length, lastSyncedAt: now, syncType, since: startAt });
+    return res.status(200).json({ salesData, daysSynced: salesData.length, lastSyncedAt: now, syncType, since: startAt, timeZone });
   } catch (err) {
     console.error("square-sync error:", err);
     return res.status(500).json({ error: err.message });
