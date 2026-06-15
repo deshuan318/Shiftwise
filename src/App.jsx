@@ -2423,7 +2423,7 @@ Rules:
                   </div>
                 )}
                 {activeWeek && <div className="grid-scroll" style={{borderRadius:T.radius,boxShadow:T.shadowMd}}>
-                  <table className="sched-table" style={{borderCollapse:"collapse",width:"100%",background:T.surface,minWidth:760}}>
+                  <table className="sched-table" style={{borderCollapse:"collapse",width:"100%",background:T.surface,minWidth:760,tableLayout:"fixed"}}>
                     <colgroup>
                       <col style={{width:200}}/>{DAYS.map(d=><col key={d}/>)}<col style={{width:90}}/>
                     </colgroup>
