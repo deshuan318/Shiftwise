@@ -1520,7 +1520,7 @@ Rules:
 
         {/* TOP BAR */}
         <div style={{background:T.dark,position:"sticky",top:0,zIndex:400,borderBottom:"1px solid #2A2A2A"}}>
-          <div className="top-bar-inner" style={{maxWidth:1800,margin:"0 auto",display:"flex",alignItems:"center",gap:14,height:54,padding:"0 18px"}}>
+          <div className="top-bar-inner" style={{width:"100%",display:"flex",alignItems:"center",gap:14,height:54,padding:"0 24px"}}>
             <div style={{display:"flex",alignItems:"center",gap:9,flexShrink:0}}>
               <div style={{width:30,height:30,background:T.accent,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>📅</div>
               <input className="biz-input" value={biz} onChange={e=>setBiz(e.target.value)}
@@ -1575,7 +1575,7 @@ Rules:
         )}
 
         {/* PAGE CONTENT */}
-        <div className="page-pad" style={{maxWidth:1800,margin:"0 auto",padding:"18px 16px 28px"}}>
+        <div className="page-pad" style={{width:"100%",padding:"18px 24px 28px"}}>
 
           {/* SCHEDULE GRID */}
           {tab==="grid" && (
