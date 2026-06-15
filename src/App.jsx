@@ -2423,24 +2423,24 @@ Rules:
                   </div>
                 )}
                 {activeWeek && <div className="grid-scroll" style={{borderRadius:T.radius,boxShadow:T.shadowMd}}>
-                  <table className="sched-table" style={{borderCollapse:"collapse",width:"100%",background:T.surface,minWidth:560}}>
+                  <table className="sched-table" style={{borderCollapse:"collapse",width:"100%",background:T.surface,minWidth:760}}>
                     <colgroup>
-                      <col style={{width:110}}/>{DAYS.map(d=><col key={d}/>)}<col style={{width:76}}/>
+                      <col style={{width:200}}/>{DAYS.map(d=><col key={d}/>)}<col style={{width:90}}/>
                     </colgroup>
                     <thead>
                       <tr style={{background:T.dark}}>
-                        <th style={{padding:"11px 12px",textAlign:"left",color:"#666",fontSize:10,fontWeight:700,letterSpacing:"0.08em"}}>EMPLOYEE</th>
+                        <th style={{padding:"13px 16px",textAlign:"left",color:"#777",fontSize:11,fontWeight:700,letterSpacing:"0.08em"}}>EMPLOYEE</th>
                         {DAYS.map((d,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
                           return (
-                            <th key={d} style={{padding:"9px 4px",textAlign:"center",color:"white",fontSize:11,fontWeight:700}}>
+                            <th key={d} style={{padding:"12px 6px",textAlign:"center",color:"white",fontSize:13,fontWeight:700}}>
                               <div>{d}</div>
-                              <div style={{fontSize:9,color:"#666",fontWeight:400}}>{activeWkObj?dl(activeWkObj.dates[i]):""}</div>
-                              {dh>0&&<div style={{fontSize:9,color:T.accent,fontWeight:700,marginTop:1}}>{dh}h</div>}
+                              <div style={{fontSize:10,color:"#777",fontWeight:400,marginTop:2}}>{activeWkObj?dl(activeWkObj.dates[i]):""}</div>
+                              {dh>0&&<div style={{fontSize:10,color:T.accent,fontWeight:700,marginTop:2}}>{dh}h</div>}
                             </th>
                           );
                         })}
-                        <th style={{padding:"9px 6px",textAlign:"center",color:T.accent,fontSize:10,fontWeight:700,letterSpacing:"0.06em"}}>HRS</th>
+                        <th style={{padding:"12px 8px",textAlign:"center",color:T.accent,fontSize:11,fontWeight:700,letterSpacing:"0.06em"}}>HRS</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -2457,11 +2457,12 @@ Rules:
                         const overAvail=avail>0&&wH>avail;
                         return (
                           <tr key={emp.id} style={{borderBottom:`1px solid ${T.border}`,background:ei%2===0?T.surface:"#FDFCFA"}}>
-                            <td className="emp-name-cell" style={{padding:"9px 12px",verticalAlign:"middle",minWidth:100,maxWidth:120}}>
-                              <div style={{display:"flex",alignItems:"center",gap:7}}>
-                                <div style={{width:26,height:26,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:10,flexShrink:0}}>{emp.name?emp.name[0].toUpperCase():"?"}</div>
+                            <td className="emp-name-cell" style={{padding:"12px 16px",verticalAlign:"middle",minWidth:180,maxWidth:220}}>
+                              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                                <div style={{width:34,height:34,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:13,flexShrink:0}}>{emp.name?emp.name[0].toUpperCase():"?"}</div>
                                 <div style={{minWidth:0}}>
-                                  <div style={{fontWeight:700,fontSize:12,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{emp.name||"New"}</div>
+                                  <div style={{fontWeight:700,fontSize:13,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:T.text}}>{emp.name||"New"}</div>
+                                  {emp.role&&<div style={{fontSize:11,color:T.sub,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",marginTop:1}}>{emp.role}</div>}
                                 </div>
                               </div>
                             </td>
@@ -2473,12 +2474,12 @@ Rules:
                               const availDays = emp.availableDays ?? [0,1,2,3,4,5,6];
                               const isDayAvail = availDays.includes(di);
                               return (
-                                <td key={di} style={{padding:"4px 3px",textAlign:"center",verticalAlign:"middle",position:"relative",
+                                <td key={di} style={{padding:"6px 6px",textAlign:"center",verticalAlign:"middle",position:"relative",
                                   background:!isDayAvail?`repeating-linear-gradient(45deg,${T.muted},${T.muted} 3px,${T.bg} 3px,${T.bg} 8px)`:"transparent"}}>
                                   {!isDayAvail ? (
-                                    <div style={{minHeight:54,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,opacity:0.6}}>
-                                      <span style={{fontSize:12}}>🚫</span>
-                                      <span style={{fontSize:8,color:T.sub,fontWeight:700,letterSpacing:"0.04em",textTransform:"uppercase"}}>Unavail.</span>
+                                    <div style={{minHeight:64,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:3,opacity:0.6}}>
+                                      <span style={{fontSize:14}}>🚫</span>
+                                      <span style={{fontSize:9,color:T.sub,fontWeight:700,letterSpacing:"0.04em",textTransform:"uppercase"}}>Unavail.</span>
                                     </div>
                                   ) : shift ? (
                                     <div style={{position:"relative"}}
@@ -2486,14 +2487,14 @@ Rules:
                                       onDragStart={e=>{ e.dataTransfer.effectAllowed="move"; setDraggedShift({empId:emp.id,weekKey:activeWeek,dayIdx:di,shift}); }}
                                       onDragEnd={()=>{ setDraggedShift(null); setDragOverCell(null); }}>
                                       <div className="shift-badge" onClick={()=>setOpenCell({empId:emp.id,weekKey:activeWeek,dayIdx:di})}
-                                        style={{background:emp.color,color:"white",borderRadius:8,padding:"5px 3px",cursor:"grab",fontSize:10,lineHeight:1.35,transition:"opacity 0.12s",opacity:draggedShift?.empId===emp.id&&draggedShift?.dayIdx===di?0.4:1}}>
-                                        <div style={{background:"rgba(255,255,255,0.22)",borderRadius:4,padding:"2px 4px",fontSize:8,fontWeight:800,marginBottom:3,letterSpacing:"0.05em",color:"white"}}>
+                                        style={{background:emp.color,color:"white",borderRadius:10,padding:"8px 6px",cursor:"grab",fontSize:11,lineHeight:1.4,transition:"opacity 0.12s",opacity:draggedShift?.empId===emp.id&&draggedShift?.dayIdx===di?0.4:1,minHeight:64,display:"flex",flexDirection:"column",justifyContent:"center"}}>
+                                        <div style={{background:"rgba(255,255,255,0.22)",borderRadius:4,padding:"2px 6px",fontSize:9,fontWeight:800,marginBottom:4,letterSpacing:"0.05em",color:"white"}}>
                                           {types.length>1?`${st.label} +${types.length-1}`:st.label.toUpperCase()}
                                         </div>
-                                        <div style={{fontWeight:800,fontSize:10}}>{fmt(shift.start)}</div>
-                                        <div style={{opacity:0.85,fontSize:9}}>–{fmt(shift.end)}</div>
-                                        <div style={{fontWeight:800,fontSize:11,marginTop:2}}>{h}h</div>
-                                        {shift.notes&&<div style={{fontSize:9,opacity:0.8,marginTop:1}}>📝</div>}
+                                        <div style={{fontWeight:800,fontSize:12}}>{fmt(shift.start)}</div>
+                                        <div style={{opacity:0.85,fontSize:11}}>–{fmt(shift.end)}</div>
+                                        <div style={{fontWeight:800,fontSize:13,marginTop:3}}>{h}h</div>
+                                        {shift.notes&&<div style={{fontSize:10,opacity:0.8,marginTop:2}}>📝</div>}
                                       </div>
                                       <button onClick={()=>{setShift(activeWeek,emp.id,di,null);setOpenCell(null);}}
                                         style={{position:"absolute",top:2,right:2,background:"rgba(0,0,0,0.25)",color:"white",border:"none",borderRadius:"50%",width:14,height:14,fontSize:10,cursor:"pointer",padding:0,display:"flex",alignItems:"center",justifyContent:"center",lineHeight:1}}>×</button>
@@ -2518,9 +2519,9 @@ Rules:
                                         setDraggedShift(null);
                                         setDragOverCell(null);
                                       }}
-                                      style={{width:"100%",minHeight:54}}>
+                                      style={{width:"100%",minHeight:64}}>
                                       <button className="add-shift-btn" onClick={()=>toggleShift(activeWeek,emp.id,di)}
-                                        style={{width:"100%",minHeight:54,background:dragOverCell?.empId===emp.id&&dragOverCell?.dayIdx===di?T.accent+"18":"transparent",border:`1.5px dashed ${dragOverCell?.empId===emp.id&&dragOverCell?.dayIdx===di?T.accent:T.border}`,borderRadius:8,color:dragOverCell?.empId===emp.id&&dragOverCell?.dayIdx===di?T.accent:"#C8C3BC",fontSize:20,cursor:"pointer",transition:"all 0.15s"}}>
+                                        style={{width:"100%",minHeight:64,background:dragOverCell?.empId===emp.id&&dragOverCell?.dayIdx===di?T.accent+"18":"transparent",border:`1.5px dashed ${dragOverCell?.empId===emp.id&&dragOverCell?.dayIdx===di?T.accent:T.border}`,borderRadius:10,color:dragOverCell?.empId===emp.id&&dragOverCell?.dayIdx===di?T.accent:"#C8C3BC",fontSize:22,cursor:"pointer",transition:"all 0.15s"}}>
                                         {dragOverCell?.empId===emp.id&&dragOverCell?.dayIdx===di?"↓":"+"}
                                       </button>
                                     </div>
@@ -2528,12 +2529,12 @@ Rules:
                                 </td>
                               );
                             })}
-                            <td style={{padding:"8px 6px",textAlign:"center",verticalAlign:"middle"}}>
-                              <div style={{fontWeight:800,fontSize:13,color:overAvail||wH>40?"#C0392B":T.text}}>{wH}h</div>
-                              {avail>0&&<div style={{fontSize:9,color:overAvail?"#C0392B":wH>=avail*0.85?"#E8A93A":T.sub,fontWeight:600}}>/{avail}h</div>}
-                              <div style={{fontSize:10,color:T.accent,fontWeight:700}}>${wP.toFixed(0)}</div>
-                              {overAvail&&<div style={{fontSize:8,color:"#C0392B",fontWeight:800,marginTop:1}}>OVER</div>}
-                              {!overAvail&&wH>40&&<div style={{fontSize:8,color:"#C0392B",fontWeight:700}}>OT</div>}
+                            <td style={{padding:"12px 8px",textAlign:"center",verticalAlign:"middle"}}>
+                              <div style={{fontWeight:800,fontSize:15,color:overAvail||wH>40?"#C0392B":T.text}}>{wH}h</div>
+                              {avail>0&&<div style={{fontSize:10,color:overAvail?"#C0392B":wH>=avail*0.85?"#E8A93A":T.sub,fontWeight:600,marginTop:1}}>/{avail}h</div>}
+                              <div style={{fontSize:11,color:T.accent,fontWeight:700,marginTop:2}}>${wP.toFixed(0)}</div>
+                              {overAvail&&<div style={{fontSize:9,color:"#C0392B",fontWeight:800,marginTop:2}}>OVER</div>}
+                              {!overAvail&&wH>40&&<div style={{fontSize:9,color:"#C0392B",fontWeight:700,marginTop:2}}>OT</div>}
                             </td>
                           </tr>
                         );
@@ -2541,18 +2542,18 @@ Rules:
                     </tbody>
                     <tfoot>
                       <tr style={{background:T.dark}}>
-                        <td style={{padding:"10px 12px",color:"#777",fontWeight:700,fontSize:10,letterSpacing:"0.06em"}}>TOTALS</td>
+                        <td style={{padding:"13px 16px",color:"#777",fontWeight:700,fontSize:11,letterSpacing:"0.06em"}}>TOTALS</td>
                         {DAYS.map((_,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
                           return (
-                            <td key={i} style={{padding:"10px 3px",textAlign:"center",fontWeight:700}}>
-                              {dh>0?<><div style={{color:T.accent,fontSize:11}}>{dh}h</div></>:<span style={{color:"#3A3A3A"}}>—</span>}
+                            <td key={i} style={{padding:"12px 6px",textAlign:"center",fontWeight:700}}>
+                              {dh>0?<><div style={{color:T.accent,fontSize:13}}>{dh}h</div></>:<span style={{color:"#3A3A3A"}}>—</span>}
                             </td>
                           );
                         })}
-                        <td style={{padding:"10px 6px",textAlign:"center"}}>
-                          <div style={{color:T.accent,fontWeight:800,fontSize:12}}>{employees.reduce((s,e)=>s+eWkH(activeWeek,e.id),0)}h</div>
-                          <div style={{color:T.accent,fontWeight:700,fontSize:11}}>${activeWkPay.toFixed(0)}</div>
+                        <td style={{padding:"12px 8px",textAlign:"center"}}>
+                          <div style={{color:T.accent,fontWeight:800,fontSize:14}}>{employees.reduce((s,e)=>s+eWkH(activeWeek,e.id),0)}h</div>
+                          <div style={{color:T.accent,fontWeight:700,fontSize:12,marginTop:1}}>${activeWkPay.toFixed(0)}</div>
                         </td>
                       </tr>
                     </tfoot>
