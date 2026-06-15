@@ -74,6 +74,114 @@ const addDays = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getD
 const weekDatesFromSunday = s => { const sun=new Date(s+"T00:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return d; }); };
 const dl = d => { if(!d) return ""; const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
 const toInputDate = d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toISOString().split("T")[0]; };
+
+// ── REPORTING FILTERS — shared time-range engine for Sales/Labor/Forecast ──
+// Every widget (stat card, trend chart, comparison, forecast) asks one of
+// these for a date range or a computed result, so they all speak the same
+// "language" regardless of what's displaying them.
+const FILTERS = [
+  { key:"yesterday", label:"Yesterday",      kind:"history" },
+  { key:"last7",     label:"Last 7 Days",    kind:"history" },
+  { key:"last14",    label:"Last 14 Days",   kind:"history" },
+  { key:"lastWeek",  label:"Last Week",      kind:"history" },
+  { key:"thisWeek",  label:"This Week",      kind:"history" },
+  { key:"lastMonth", label:"Last Month",     kind:"history" },
+  { key:"last3mo",   label:"Last 3 Months",  kind:"history" },
+  { key:"last6mo",   label:"Last 6 Months",  kind:"history" },
+  { key:"allTime",   label:"All Time",       kind:"history" },
+  { key:"next7",     label:"Next 7 Days",    kind:"forecast" },
+  { key:"next14",    label:"Next 14 Days",   kind:"forecast" },
+  { key:"next30",    label:"Next 30 Days",   kind:"forecast" },
+  { key:"next60",    label:"Next 60 Days",   kind:"forecast" },
+  { key:"next90",    label:"Next 90 Days",   kind:"forecast" },
+];
+
+const addMonths = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setMonth(d.getMonth()+n); return d.toISOString().split("T")[0]; };
+const datesInRange = (startStr,endStr) => { const out=[]; let cur=startStr; while(cur<=endStr){ out.push(cur); cur=addDays(cur,1); } return out; };
+
+// Returns an array of YYYY-MM-DD date strings for the given filter.
+// `anchor` defaults to today, but can be set to a specific Sunday (e.g.
+// payWeek) so "thisWeek" can represent whatever week is being viewed.
+function getFilterDates(filterKey, salesData, anchor) {
+  const today = anchor || new Date().toISOString().split("T")[0];
+  switch (filterKey) {
+    case "yesterday": return [addDays(today,-1)];
+    case "last7":     return datesInRange(addDays(today,-6), today);
+    case "last14":    return datesInRange(addDays(today,-13), today);
+    case "lastWeek":  return weekDatesFromSunday(addDays(getSunday(today),-7)).map(toInputDate);
+    case "thisWeek":  return weekDatesFromSunday(getSunday(today)).map(toInputDate);
+    case "lastMonth": {
+      const d = new Date(today+"T00:00:00");
+      const firstThis = new Date(d.getFullYear(), d.getMonth(), 1);
+      const firstLast = new Date(d.getFullYear(), d.getMonth()-1, 1);
+      const lastOfLast = new Date(firstThis.getTime() - 86400000);
+      return datesInRange(toInputDate(firstLast), toInputDate(lastOfLast));
+    }
+    case "last3mo":   return datesInRange(addMonths(today,-3), today);
+    case "last6mo":   return datesInRange(addMonths(today,-6), today);
+    case "allTime":   return salesData.length ? datesInRange(salesData[0].date, today) : [];
+    case "next7":     return datesInRange(addDays(today,1), addDays(today,7));
+    case "next14":    return datesInRange(addDays(today,1), addDays(today,14));
+    case "next30":    return datesInRange(addDays(today,1), addDays(today,30));
+    case "next60":    return datesInRange(addDays(today,1), addDays(today,60));
+    case "next90":    return datesInRange(addDays(today,1), addDays(today,90));
+    default:          return [];
+  }
+}
+
+// The Sales object — total + day-by-day revenue for any filter.
+function getSales(filterKey, salesData, anchor) {
+  const dates = getFilterDates(filterKey, salesData, anchor);
+  const byDate = Object.fromEntries(salesData.map(d => [d.date, d]));
+  const days = dates.map(date => {
+    const s = byDate[date];
+    return { date, revenue: s?.revenue || 0, transactions: s?.transactions || 0, hasData: !!s };
+  });
+  const total = days.reduce((s,d) => s+d.revenue, 0);
+  const daysWithData = days.filter(d => d.hasData).length;
+  return { filterKey, dates, days, total, daysWithData };
+}
+
+// The Labor object — total + day-by-day scheduled labor cost for any filter.
+// Note: this is only as complete as the schedule data that's been loaded —
+// for weeks that were never built out in the Schedule tab, labor comes
+// back as $0 for those dates (there's nothing to sum).
+function getLabor(filterKey, salesData, employees, eDayH, anchor) {
+  const dates = getFilterDates(filterKey, salesData, anchor);
+  const days = dates.map(date => {
+    const weekStart = getSunday(date);
+    const dayIdx = Math.round((new Date(date+"T00:00:00") - new Date(weekStart+"T00:00:00")) / 86400000);
+    const labor = employees.reduce((s,e) => s + eDayH(weekStart, e.id, dayIdx) * (parseFloat(e.hourlyRate)||0), 0);
+    return { date, labor };
+  });
+  const total = days.reduce((s,d) => s+d.labor, 0);
+  return { filterKey, dates, days, total };
+}
+
+// The Forecast object — projects revenue for future dates based on the
+// historical average for that date's day-of-week. `hasEnoughData` is true
+// only once every weekday has at least MIN_DOW_SAMPLES data points; below
+// that, projections would be built on too little history to be meaningful.
+const MIN_DOW_SAMPLES = 2;
+function getForecast(filterKey, salesData, anchor) {
+  const dates = getFilterDates(filterKey, salesData, anchor);
+  const dowTotals = [0,0,0,0,0,0,0];
+  const dowCounts = [0,0,0,0,0,0,0];
+  salesData.forEach(d => {
+    const dow = new Date(d.date+"T00:00:00").getDay();
+    dowTotals[dow] += d.revenue;
+    dowCounts[dow] += 1;
+  });
+  const dowAverages = dowTotals.map((t,i) => dowCounts[i] ? t/dowCounts[i] : 0);
+  const hasEnoughData = dowCounts.every(c => c >= MIN_DOW_SAMPLES);
+  const days = dates.map(date => {
+    const dow = new Date(date+"T00:00:00").getDay();
+    return { date, projectedRevenue: dowAverages[dow], dataPoints: dowCounts[dow] };
+  });
+  const total = days.reduce((s,d) => s+d.projectedRevenue, 0);
+  return { filterKey, dates, days, total, hasEnoughData, dowCounts };
+}
+
 const mkEmp = (o={}) => ({ id:(Date.now()+Math.random()).toString(), name:"", role:"", hourlyRate:"", color:COLORS[0], notes:"", availableHours:"40", availableDays:[0,1,2,3,4,5,6], pin:"", ...o });
 const loadSaved = () => { try { const r=localStorage.getItem(STORAGE_KEY); return r?JSON.parse(r):null; } catch { return null; } };
 
@@ -253,6 +361,7 @@ export default function App() {
   const [squareLastSync,     setSquareLastSync]     = useState(null);
   const [squareSyncing,      setSquareSyncing]      = useState(false);
   const [squareLoading,      setSquareLoading]      = useState(true);
+  const [showDailyBreakdown, setShowDailyBreakdown] = useState(false);
   const [punches,        setPunches]        = useState([]);
 const [tsWeekStart, setTsWeekStart] = useState(()=>getSunday(new Date().toISOString().split("T")[0]));
 const [tsOpenCell, setTsOpenCell] = useState(null);
@@ -3150,16 +3259,17 @@ Rules:
 
               {/* Sales Intelligence */}
               {(()=>{
-                const pwDates2 = weekDatesFromSunday(payWeek).map(d => d.toISOString().split("T")[0]);
-                const wkSales = salesData.filter(s => pwDates2.includes(s.date));
-                const totalRevenue = wkSales.reduce((s,d) => s+d.revenue, 0);
-                const payWeekLabor = employees.reduce((s,e)=>s+DAYS.reduce((d,_,i)=>d+eDayH(payWeek,e.id,i)*(parseFloat(e.hourlyRate)||0),0),0);
+                const salesThisWeek = getSales("thisWeek", salesData, payWeek);
+                const laborThisWeek = getLabor("thisWeek", salesData, employees, eDayH, payWeek);
+                const wkSales = salesThisWeek.days.filter(d=>d.hasData);
+                const totalRevenue = salesThisWeek.total;
+                const payWeekLabor = laborThisWeek.total;
                 const laborCostPct = totalRevenue > 0 ? (payWeekLabor / totalRevenue) * 100 : 0;
                 const suggestedBudget = totalRevenue > 0 ? Math.round(totalRevenue * 0.3) : 0;
-                const dayData = pwDates2.map((dateStr, i) => {
-                  const sale = salesData.find(s => s.date === dateStr);
-                  const labor = employees.reduce((s,e) => s + eDayH(payWeek, e.id, i) * (parseFloat(e.hourlyRate)||0), 0);
-                  return { day:DAYS[i], date:dateStr, revenue:sale?.revenue||0, labor, pct:sale?.revenue>0?(labor/sale.revenue)*100:null };
+                const forecastNext7 = getForecast("next7", salesData);
+                const dayData = salesThisWeek.days.map((d, i) => {
+                  const labor = laborThisWeek.days[i].labor;
+                  return { day:DAYS[i], date:d.date, revenue:d.revenue, labor, pct:d.revenue>0?(labor/d.revenue)*100:null };
                 });
                 const hasSalesData = wkSales.length > 0 || salesData.length > 0;
                 return (
@@ -3231,6 +3341,10 @@ Rules:
                             { l:"Labor Cost %", v:laborCostPct>0?`${laborCostPct.toFixed(1)}%`:"-", c:laborCostPct>35?"#C0392B":laborCostPct>25?"#E8A93A":"#4CAF7D", sub:"target: 25–35%" },
                             { l:"Labor vs Revenue", v:totalRevenue>0?`$${payWeekLabor.toFixed(0)} / $${totalRevenue.toFixed(0)}`:"-", c:T.text, sub:"labor / revenue" },
                             { l:"Suggested Budget", v:suggestedBudget>0?`$${suggestedBudget}`:"-", c:T.accent, sub:"30% of revenue" },
+                            { l:"Forecast (Next 7 Days)",
+                              v: forecastNext7.hasEnoughData ? `$${forecastNext7.total.toFixed(0)}` : "Need more data",
+                              c: forecastNext7.hasEnoughData ? "#3A9BE8" : T.sub,
+                              sub: forecastNext7.hasEnoughData ? `suggested labor: $${Math.round(forecastNext7.total*0.3)}` : `min ${MIN_DOW_SAMPLES} weeks of history needed` },
                           ].map(s=>(
                             <div key={s.l} style={{background:T.muted,borderRadius:10,padding:"12px 14px"}}>
                               <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4}}>{s.l}</div>
@@ -3241,8 +3355,12 @@ Rules:
                         </div>
 
                         <div>
-                          <div style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:6}}>Daily breakdown</div>
-                          {dayData.map((d,i)=>(
+                          <button onClick={()=>setShowDailyBreakdown(v=>!v)}
+                            style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",background:"transparent",border:"none",padding:"4px 0",cursor:"pointer"}}>
+                            <span style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.04em"}}>Daily breakdown</span>
+                            <span style={{fontSize:11,color:T.accent,fontWeight:700}}>{showDailyBreakdown ? "Hide ▲" : "Show ▼"}</span>
+                          </button>
+                          {showDailyBreakdown && dayData.map((d,i)=>(
                             <div key={d.date} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:i<dayData.length-1?`1px solid ${T.border}`:"none",fontSize:12}}>
                               <span style={{color:T.text,fontWeight:700,width:36,flexShrink:0}}>{d.day}</span>
                               <span style={{color:T.sub,flex:1}}>{d.revenue>0?`$${d.revenue.toFixed(0)} sales`:"no sales data"}</span>
