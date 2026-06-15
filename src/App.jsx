@@ -87,7 +87,7 @@ body { margin:0; padding:0; width:100%; min-height:100vh; overflow-x:hidden; ove
 a, button { -webkit-tap-highlight-color:transparent; }
 input,select,button,textarea { font-family:inherit; }
 .grid-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:12px; }
-.payroll-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.dashboard-scroll { overflow-x:auto; -webkit-overflow-scrolling:touch; }
 @media (hover:hover) {
   .add-shift-btn:hover { border-color:#aaa !important; background:#EEF0EB !important; color:#6B7B6E !important; }
   .emp-card:hover { box-shadow:0 6px 20px rgba(0,0,0,0.1) !important; transform:translateY(-1px); }
@@ -248,6 +248,11 @@ export default function App() {
   const [actionsOpen,  setActionsOpen] = useState(false);
   const [templates,    setTemplates]   = useState([]);
   const [salesData,   setSalesData]   = useState([]);
+  const [squareConnected,    setSquareConnected]    = useState(false);
+  const [squareMerchantName, setSquareMerchantName] = useState("");
+  const [squareLastSync,     setSquareLastSync]     = useState(null);
+  const [squareSyncing,      setSquareSyncing]      = useState(false);
+  const [squareLoading,      setSquareLoading]      = useState(true);
   const [punches,        setPunches]        = useState([]);
 const [tsWeekStart, setTsWeekStart] = useState(()=>getSunday(new Date().toISOString().split("T")[0]));
 const [tsOpenCell, setTsOpenCell] = useState(null);
@@ -356,6 +361,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       if (!business) { setAuthState("unauthenticated"); clearSession(); return; }
 
       setBizId(business.id);
+      checkSquareStatus(business.id);
       setBiz(business.name || "My Business");
       setWeeklyBudget(business.weekly_budget ? String(business.weekly_budget) : "");
       // Load theme from local preference (kept local — it's a UI pref not business data)
@@ -471,6 +477,21 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   useEffect(() => {
     if (authState === "loading") { loadAllData(); }
   }, []);
+
+  // Handle redirect back from Square OAuth (?square=connected | error)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sq = params.get("square");
+    if (sq === "connected") {
+      showToast("Square connected ✓", 4000);
+      setTab("dashboard");
+      if (bizId) checkSquareStatus(bizId);
+    } else if (sq === "error") {
+      showToast("Square connection failed — please try again", 5000);
+      setTab("dashboard");
+    }
+    if (sq) window.history.replaceState({}, "", window.location.pathname);
+  }, [bizId]);
 
   // ─────────────────────────────────────────────────────────────────────────
   // DATA SNAPSHOT — single function to package all business context for AI.
@@ -759,6 +780,79 @@ Rules:
       }
     };
     reader.readAsText(file);
+  }
+
+  // ── SQUARE INTEGRATION ──────────────────────────────────────────────────
+  async function checkSquareStatus(businessId) {
+    if (!businessId) { setSquareLoading(false); return; }
+    try {
+      const res = await fetch(`/api/square-status?business_id=${businessId}`);
+      if (!res.ok) throw new Error("not connected");
+      const data = await res.json();
+      setSquareConnected(!!data.connected);
+      setSquareMerchantName(data.merchantName || "");
+      setSquareLastSync(data.lastSyncedAt || null);
+    } catch {
+      setSquareConnected(false);
+      setSquareMerchantName("");
+      setSquareLastSync(null);
+    } finally {
+      setSquareLoading(false);
+    }
+  }
+
+  function handleConnectSquare() {
+    if (!bizId) return;
+    window.location.href = `/api/square-oauth-start?business_id=${bizId}`;
+  }
+
+  async function handleSyncSquare() {
+    if (!bizId || squareSyncing) return;
+    setSquareSyncing(true);
+    try {
+      const res = await fetch("/api/square-sync", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ business_id: bizId }),
+      });
+      if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.error || "Sync failed"); }
+      const data = await res.json();
+      if (Array.isArray(data.salesData)) {
+        setSalesData(prev => {
+          const map = {};
+          prev.forEach(d => map[d.date] = d);
+          data.salesData.forEach(d => map[d.date] = d);
+          return Object.values(map).sort((a,b) => a.date.localeCompare(b.date));
+        });
+      }
+      setSquareLastSync(data.lastSyncedAt || new Date().toISOString());
+      showToast(`Square sales synced ✓${data.daysSynced ? ` (${data.daysSynced} days)` : ""}`, 4000);
+      addAudit("Square Sync", `Synced sales data from Square${data.daysSynced ? ` — ${data.daysSynced} days` : ""}`);
+    } catch(err) {
+      showToast("Square sync failed: " + err.message, 5000);
+    } finally {
+      setSquareSyncing(false);
+    }
+  }
+
+  async function handleDisconnectSquare() {
+    if (!bizId) return;
+    if (!window.confirm("Disconnect Square? You can reconnect anytime — your imported sales history will stay.")) return;
+    try {
+      const res = await fetch("/api/square-disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ business_id: bizId }),
+      });
+      if (!res.ok) throw new Error("Could not disconnect");
+      setSquareConnected(false);
+      setSquareMerchantName("");
+      setSquareLastSync(null);
+      showToast("Square disconnected");
+      addAudit("Square Disconnected", "Square integration disconnected");
+    } catch(err) {
+      showToast("Could not disconnect: " + err.message, 5000);
+    }
   }
 
   async function saveBizSettings(fields) {
@@ -1436,7 +1530,7 @@ Rules:
     {key:"grid",        icon:"📋", label:"Schedule"},
     {key:"coverage",    icon:"🚨", label:"Coverage"},
     {key:"insights",    icon:"🧠", label:"Insights"},
-    {key:"payroll",     icon:"💵", label:"Payroll"},
+    {key:"dashboard",   icon:"💵", label:"Dashboard"},
     {key:"recognition", icon:"⭐", label:"Team"},
     {key:"settings",    icon:"⚙️", label:"Settings"},
   ];
@@ -3007,8 +3101,8 @@ Rules:
             );
           })()}
 
-          {/* PAYROLL */}
-          {tab==="payroll" && (
+          {/* DASHBOARD */}
+          {tab==="dashboard" && (
             <div style={{display:"flex",flexDirection:"column",gap:16}}>
               {(()=>{
                 const paySun=getSunday(new Date().toISOString().split("T")[0]);
@@ -3075,26 +3169,59 @@ Rules:
                         <span style={{color:"white",fontWeight:800,fontSize:14}}>Sales Intelligence</span>
                         <span style={{color:"#666",fontSize:11,marginLeft:10}}>Powered by Square</span>
                       </div>
-                      <label style={{background:hasSalesData?"rgba(255,255,255,0.1)":T.accent,color:"white",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
-                        {hasSalesData ? "Update Sales Data" : "Import Square CSV"}
-                        <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
-                      </label>
+                      {squareConnected ? (
+                        <button onClick={handleSyncSquare} disabled={squareSyncing}
+                          style={{background:"rgba(255,255,255,0.1)",color:"white",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:squareSyncing?"default":"pointer",whiteSpace:"nowrap",opacity:squareSyncing?0.6:1}}>
+                          {squareSyncing ? "Syncing…" : "Sync Now"}
+                        </button>
+                      ) : (
+                        <button onClick={handleConnectSquare} disabled={squareLoading}
+                          style={{background:T.accent,color:"white",border:"none",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:squareLoading?"default":"pointer",whiteSpace:"nowrap",opacity:squareLoading?0.6:1}}>
+                          Connect to Square
+                        </button>
+                      )}
                     </div>
+                    {squareConnected && (
+                      <div style={{padding:"7px 18px",background:T.muted,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,borderBottom:`1px solid ${T.border}`}}>
+                        <span style={{fontSize:11,color:T.sub}}>
+                          {squareMerchantName ? squareMerchantName+" · " : ""}Last synced {squareLastSync ? new Date(squareLastSync).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : "never"}
+                        </span>
+                        <button onClick={handleDisconnectSquare}
+                          style={{background:"transparent",color:T.sub,border:"none",fontSize:11,fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>
+                          Disconnect
+                        </button>
+                      </div>
+                    )}
                     {!hasSalesData ? (
                       <div style={{padding:"32px 24px",textAlign:"center"}}>
                         <div style={{fontSize:32,marginBottom:10}}>📊</div>
-                        <div style={{fontWeight:700,fontSize:15,color:T.text,marginBottom:6}}>Connect your Square data</div>
-                        <p style={{margin:"0 0 16px",fontSize:12,color:T.sub,lineHeight:1.6,maxWidth:340,marginLeft:"auto",marginRight:"auto"}}>
-                          Export a Sales Summary from your Square Dashboard, then import it here to unlock labor cost %, demand-based scheduling, and smarter budget targets.
-                        </p>
-                        <div style={{background:T.muted,borderRadius:10,padding:"12px 16px",fontSize:11,color:T.sub,textAlign:"left",maxWidth:340,margin:"0 auto",lineHeight:1.7}}>
-                          <strong style={{color:T.text}}>How to export from Square:</strong><br/>
-                          1. Sign into Square Dashboard<br/>
-                          2. Go to Reports → Sales Summary<br/>
-                          3. Set your date range (last 4–8 weeks)<br/>
-                          4. Click the export icon → Download CSV<br/>
-                          5. Import that file here
-                        </div>
+                        {squareConnected ? (
+                          <>
+                            <div style={{fontWeight:700,fontSize:15,color:T.text,marginBottom:6}}>Connected — ready to sync</div>
+                            <p style={{margin:"0 0 16px",fontSize:12,color:T.sub,lineHeight:1.6,maxWidth:340,marginLeft:"auto",marginRight:"auto"}}>
+                              Tap Sync Now above to pull your sales history from Square and unlock labor cost %, demand-based scheduling, and smarter budget targets.
+                            </p>
+                          </>
+                        ) : (
+                          <>
+                            <div style={{fontWeight:700,fontSize:15,color:T.text,marginBottom:6}}>Connect your Square data</div>
+                            <p style={{margin:"0 0 16px",fontSize:12,color:T.sub,lineHeight:1.6,maxWidth:340,marginLeft:"auto",marginRight:"auto"}}>
+                              Connect to Square above for automatic daily sync, or import a Sales Summary CSV manually to unlock labor cost %, demand-based scheduling, and smarter budget targets.
+                            </p>
+                            <div style={{background:T.muted,borderRadius:10,padding:"12px 16px",fontSize:11,color:T.sub,textAlign:"left",maxWidth:340,margin:"0 auto 16px",lineHeight:1.7}}>
+                              <strong style={{color:T.text}}>How to export from Square:</strong><br/>
+                              1. Sign into Square Dashboard<br/>
+                              2. Go to Reports → Sales Summary<br/>
+                              3. Set your date range (last 4–8 weeks)<br/>
+                              4. Click the export icon → Download CSV<br/>
+                              5. Import that file here
+                            </div>
+                            <label style={{background:T.muted,color:T.text,border:`1px solid ${T.border}`,borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",display:"inline-block"}}>
+                              Import Square CSV
+                              <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
+                            </label>
+                          </>
+                        )}
                       </div>
                     ) : (
                       <div style={{padding:"16px 18px",display:"flex",flexDirection:"column",gap:16}}>
@@ -3125,12 +3252,18 @@ Rules:
                             </button>
                           </div>
                         )}
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
                           <span style={{fontSize:11,color:T.sub}}>{salesData.length} days of data · {salesData[0]?.date} to {salesData[salesData.length-1]?.date}</span>
-                          <button onClick={()=>{ if(window.confirm("Clear all imported sales data?")) { setSalesData([]); if(bizId) dbDelete(`sales_data?business_id=eq.${bizId}`).catch(()=>{}); }; }}
-                            style={{background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                            Clear Data
-                          </button>
+                          <div style={{display:"flex",gap:8}}>
+                            <label style={{background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
+                              Import CSV
+                              <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
+                            </label>
+                            <button onClick={()=>{ if(window.confirm("Clear all imported sales data?")) { setSalesData([]); if(bizId) dbDelete(`sales_data?business_id=eq.${bizId}`).catch(()=>{}); }; }}
+                              style={{background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
+                              Clear Data
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -3575,7 +3708,7 @@ Rules:
                                 <div style={{width:18,height:18,background:theme.accent,borderRadius:4,fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>📅</div>
                                 <span style={{fontSize:11,fontWeight:800,color:theme.id==="commander"?theme.text:"white"}}>ShiftWise</span>
                                 <div style={{marginLeft:"auto",display:"flex",gap:3}}>
-                                  {["Schedule","Team","Payroll"].map(lbl=>(<div key={lbl} style={{background:lbl==="Schedule"?theme.accent:"transparent",color:"#888",borderRadius:3,padding:"2px 6px",fontSize:8,fontWeight:700}}>{lbl}</div>))}
+                                  {["Schedule","Team","Dashboard"].map(lbl=>(<div key={lbl} style={{background:lbl==="Schedule"?theme.accent:"transparent",color:"#888",borderRadius:3,padding:"2px 6px",fontSize:8,fontWeight:700}}>{lbl}</div>))}
                                 </div>
                               </div>
                               <div style={{background:theme.bg,padding:"8px 12px",display:"flex",alignItems:"center",gap:8}}>
