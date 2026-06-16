@@ -385,6 +385,8 @@ export default function App() {
   const [showAddWidget,  setShowAddWidget]  = useState(false);
   const [newWidget,      setNewWidget]      = useState({ data_source:"sales", time_range:"last7", display:"stat", color:null, show_axis:true, show_legend:true });
   const [widgetSaving,   setWidgetSaving]   = useState(false);
+  const [dragWidgetId,   setDragWidgetId]   = useState(null);
+  const [dragOverWidgetId, setDragOverWidgetId] = useState(null);
   const [punches,        setPunches]        = useState([]);
 const [tsWeekStart, setTsWeekStart] = useState(()=>getSunday(new Date().toISOString().split("T")[0]));
 const [tsOpenCell, setTsOpenCell] = useState(null);
@@ -1020,6 +1022,25 @@ Rules:
     }
   }
 
+  // Drag-to-reorder: drop dragWidgetId before/after dragOverWidgetId
+  async function handleWidgetDrop(targetId) {
+    if (!dragWidgetId || dragWidgetId === targetId) {
+      setDragWidgetId(null); setDragOverWidgetId(null); return;
+    }
+    const from = widgets.findIndex(w=>w.id===dragWidgetId);
+    const to   = widgets.findIndex(w=>w.id===targetId);
+    if (from===-1 || to===-1) return;
+    const reordered = [...widgets];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+    const updated = reordered.map((w,i) => ({...w, sort_order:i}));
+    setWidgets(updated);
+    setDragWidgetId(null); setDragOverWidgetId(null);
+    try {
+      await Promise.all(updated.map(w => dbPatch(`dashboard_widgets?id=eq.${w.id}`, { sort_order: w.sort_order })));
+    } catch(e) { console.warn("Reorder save failed:", e); }
+  }
+
   // Cycles a widget through size presets (Small → Wide → Tall → Large → Small...)
   async function resizeWidget(id) {
     const widget = widgets.find(w=>w.id===id);
@@ -1186,12 +1207,24 @@ Rules:
     }
 
     const sizeKey = Object.keys(WIDGET_SIZES).find(k => WIDGET_SIZES[k].w===(config.grid_w||1) && WIDGET_SIZES[k].h===(config.grid_h||1)) || "sm";
+    const isDragging = dragWidgetId === config.id;
+    const isDragOver = dragOverWidgetId === config.id;
 
     return (
-      <div key={config.id} style={{background:T.muted,borderRadius:10,padding:"12px 14px",position:"relative",gridColumn:`span ${config.grid_w||1}`,gridRow:`span ${config.grid_h||1}`}}>
+      <div key={config.id}
+        draggable
+        onDragStart={()=>setDragWidgetId(config.id)}
+        onDragOver={e=>{ e.preventDefault(); setDragOverWidgetId(config.id); }}
+        onDragLeave={()=>setDragOverWidgetId(null)}
+        onDrop={()=>handleWidgetDrop(config.id)}
+        onDragEnd={()=>{ setDragWidgetId(null); setDragOverWidgetId(null); }}
+        style={{background:T.muted,borderRadius:10,padding:"12px 14px",position:"relative",gridColumn:`span ${config.grid_w||1}`,gridRow:`span ${config.grid_h||1}`,opacity:isDragging?0.4:1,outline:isDragOver?`2px dashed ${T.accent}`:"none",transition:"opacity 0.15s, outline 0.1s",cursor:"default"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8}}>
-          <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>{title}</div>
-          <div style={{display:"flex",gap:8,flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"flex-start",gap:6,flex:1,minWidth:0}}>
+            <span title="Drag to reorder" style={{color:T.sub,fontSize:14,cursor:"grab",lineHeight:1.2,flexShrink:0,marginTop:1}}>⠿</span>
+            <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>{title}</div>
+          </div>
+          <div style={{display:"flex",gap:6,flexShrink:0}}>
             <button onClick={()=>resizeWidget(config.id)} aria-label={`Resize widget (currently ${WIDGET_SIZES[sizeKey].label})`} title={`Size: ${WIDGET_SIZES[sizeKey].label} — tap to cycle`}
               style={{background:"none",border:"none",color:T.sub,cursor:"pointer",fontSize:13,lineHeight:1,padding:0}}>
               ⤢
