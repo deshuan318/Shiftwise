@@ -422,6 +422,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const [insight,        setInsight]        = useState(null);
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightError,   setInsightError]   = useState(null);
+  const [pulsePrefs,     setPulsePrefs]     = useState({ freq:"login", day:"thursday" });
+  const [showPulsePrefs, setShowPulsePrefs] = useState(false);
 
   const printRef = useRef();
 
@@ -639,6 +641,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   function buildBusinessSnapshot() {
     const today = new Date();
     const todayStr = today.toISOString().split("T")[0];
+    const todayDayIdx = today.getDay(); // 0=Sun
 
     // Build per-week summaries
     const weekSummaries = weeks.map(wk => {
@@ -690,13 +693,22 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const totalRevenue = wkSales.reduce((s, d) => s + d.revenue, 0);
       const laborPct = totalRevenue > 0 ? (totalPay / totalRevenue) * 100 : null;
 
-      // Day-level staffing density
+      // Day-level staffing + revenue-per-labor-hour
       const dailyTotals = DAYS.map((day, di) => {
         const staffCount = employees.filter(e => schedule?.[wk.key]?.[e.id]?.[di]).length;
         const dayHours = employees.reduce((s, e) => s + shiftHrs(schedule?.[wk.key]?.[e.id]?.[di] || null), 0);
         const sale = wkSales.find(s => s.date === wkDates[di]);
-        return { day, date: wkDates[di], staffCount, totalHours: dayHours, revenue: sale?.revenue || null };
+        const dayRevenue = sale?.revenue || null;
+        const rplh = dayRevenue && dayHours > 0 ? parseFloat((dayRevenue / dayHours).toFixed(2)) : null;
+        const dayLaborPct = dayRevenue && dayHours > 0
+          ? parseFloat(((dayHours * (totalPay / (totalHours || 1)) / dayRevenue) * 100).toFixed(1))
+          : null;
+        return { day, date: wkDates[di], staffCount, totalHours: dayHours, revenue: dayRevenue, revenuePerLaborHour: rplh, laborPct: dayLaborPct };
       });
+
+      // Revenue per labor hour for the week
+      const revenuePerLaborHour = totalRevenue > 0 && totalHours > 0
+        ? parseFloat((totalRevenue / totalHours).toFixed(2)) : null;
 
       return {
         label: wk.label,
@@ -706,6 +718,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         totalEstimatedPay: parseFloat(totalPay.toFixed(2)),
         totalRevenue: totalRevenue > 0 ? parseFloat(totalRevenue.toFixed(2)) : null,
         laborCostPct: laborPct !== null ? parseFloat(laborPct.toFixed(1)) : null,
+        revenuePerLaborHour,
         staffScheduled: staffed,
         totalStaff: employees.length,
         budget: parseFloat(weeklyBudget) || null,
@@ -715,11 +728,103 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       };
     });
 
-    // Recent punch flags
-    const recentFlags = punches
-      .filter(p => p.flags && p.flags.length > 0)
-      .slice(-20)
-      .map(p => ({ employee: p.empName, type: p.type, flags: p.flags, time: p.time }));
+    // ── Mid-week budget burn projection ──────────────────────────────────────
+    const activeWkSummary = weekSummaries.find(w => w.startDate === activeWeek) || weekSummaries[0];
+    const budget = parseFloat(weeklyBudget) || null;
+    let budgetBurn = null;
+    if (budget && activeWkSummary) {
+      // Actual hours punched this week so far
+      const activeWkDates = weeks.find(w => w.key === activeWeek)?.dates.map(d => {
+        const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
+        return dt.toISOString().split("T")[0];
+      }) || [];
+      const datesThrough = activeWkDates.filter(d => d <= todayStr);
+      const daysComplete = datesThrough.length;
+      const daysLeft = 7 - daysComplete;
+      const spentEstimate = daysComplete > 0 && activeWkSummary.totalScheduledHours > 0
+        ? parseFloat(((daysComplete / 7) * activeWkSummary.totalEstimatedPay).toFixed(2))
+        : 0;
+      const projectedEnd = daysComplete > 0
+        ? parseFloat(((spentEstimate / daysComplete) * 7).toFixed(2))
+        : activeWkSummary.totalEstimatedPay;
+      budgetBurn = {
+        spent: spentEstimate,
+        total: budget,
+        dayOfWeek: today.toLocaleDateString("en-US", { weekday: "long" }),
+        daysComplete,
+        daysLeft,
+        projectedEnd,
+        projectedOver: projectedEnd > budget,
+        overBy: projectedEnd > budget ? parseFloat((projectedEnd - budget).toFixed(2)) : 0,
+        paceNote: projectedEnd > budget
+          ? `At current pace you'll land $${(projectedEnd - budget).toFixed(0)} over budget — one fewer overlap shift may close the gap.`
+          : `On pace to finish $${(budget - projectedEnd).toFixed(0)} under budget.`,
+      };
+    }
+
+    // ── Punch variance — scheduled vs actual per employee ────────────────────
+    const punchVariance = employees.map(emp => {
+      const empPunches = punches.filter(p => p.empId === emp.id);
+      // Pair IN/OUT to get actual hours
+      let actualHours = 0;
+      const ins = empPunches.filter(p => p.type === "IN");
+      ins.forEach(inP => {
+        const outP = empPunches.find(p => p.type === "OUT" && new Date(p.time) > new Date(inP.time));
+        if (outP) {
+          const hrs = (new Date(outP.time) - new Date(inP.time)) / 3600000;
+          actualHours += hrs;
+        }
+      });
+      const scheduledHours = activeWkSummary?.employeeBreakdown.find(e => e.name === emp.name)?.scheduledHours || 0;
+      const diff = parseFloat((actualHours - scheduledHours).toFixed(2));
+      return {
+        name: emp.name || "Unnamed",
+        initials: (emp.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0,2),
+        scheduledHours: parseFloat(scheduledHours.toFixed(2)),
+        actualHours: parseFloat(actualHours.toFixed(2)),
+        diff,
+      };
+    }).filter(e => e.scheduledHours > 0 || e.actualHours > 0);
+
+    // ── Attendance flags ─────────────────────────────────────────────────────
+    const thirtyDaysAgo = new Date(today); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const recentPunches = punches.filter(p => new Date(p.time) >= thirtyDaysAgo);
+
+    const lateArrivals = employees.map(emp => {
+      const late = recentPunches.filter(p => p.empId === emp.id && p.flags?.includes("LATE"));
+      if (!late.length) return null;
+      return {
+        name: emp.name || "Unnamed",
+        initials: (emp.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0,2),
+        count: late.length,
+      };
+    }).filter(Boolean);
+
+    const missedPunches = employees.map(emp => {
+      // Shifts today with no IN punch
+      const todayShift = schedule?.[activeWeek]?.[emp.id]?.[todayDayIdx];
+      if (!todayShift) return null;
+      const hasPunch = punches.some(p => p.empId === emp.id && p.type === "IN" && p.time.startsWith(todayStr));
+      if (hasPunch) return null;
+      const shiftStart = new Date(todayStr + "T00:00:00");
+      shiftStart.setHours(Math.floor(todayShift.start), Math.round((todayShift.start % 1) * 60));
+      if (today < shiftStart) return null; // shift hasn't started yet
+      return {
+        name: emp.name || "Unnamed",
+        initials: (emp.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0,2),
+        day: today.toLocaleDateString("en-US", { weekday: "long" }),
+        type: "No punch-in recorded",
+      };
+    }).filter(Boolean);
+
+    const reliabilityFlags = employees.map(emp => {
+      const flags = recentPunches.filter(p => p.empId === emp.id && p.flags?.length > 0).length;
+      return {
+        name: emp.name || "Unnamed",
+        initials: (emp.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0,2),
+        flags30Days: flags,
+      };
+    }).filter(e => e.flags30Days > 0).sort((a,b) => b.flags30Days - a.flags30Days);
 
     // Overtime employees
     const overtimeAlerts = employees
@@ -727,22 +832,24 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       .map(e => ({ name: e.name, hours: Math.max(...weeks.map(w => eWkH(w.key, e.id))) }));
 
     return {
-      // ── swap this section for Supabase queries ──
       businessName: biz,
       businessHours: Object.entries(businessHours).reduce((acc,[di,h])=>({...acc,[DAYS[parseInt(di)]]:h}),{}),
       today: todayStr,
       dayOfWeek: today.toLocaleDateString("en-US", { weekday: "long" }),
       totalEmployees: employees.length,
-      weeklyBudget: parseFloat(weeklyBudget) || null,
+      weeklyBudget: budget,
       hasSalesData: salesData.length > 0,
       salesDateRange: salesData.length > 0
         ? { from: salesData[0].date, to: salesData[salesData.length - 1].date }
         : null,
       weeks: weekSummaries,
+      budgetBurn,
+      punchVariance,
+      attendanceFlags: { lateArrivals, missedPunches, reliabilityFlags },
       overtimeAlerts,
-      recentPunchFlags: recentFlags,
+      recentPunchFlags: punches.filter(p => p.flags?.length > 0).slice(-20)
+        .map(p => ({ employee: p.empName, type: p.type, flags: p.flags, time: p.time })),
       publishedSchedulesCount: published.length,
-      // ─────────────────────────────────────────────
     };
   }
 
@@ -757,7 +864,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
     const snapshot = buildBusinessSnapshot();
 
-    const prompt = `You are a sharp, concise business operations advisor for a small business owner-operator named ${snapshot.businessName || "the owner"}. 
+    const prompt = `You are a sharp, concise business operations advisor for a small business owner-operator named ${snapshot.businessName || "the owner"}.
 They manage hourly staff (cafes, retail, service businesses) and handle everything themselves — scheduling, payroll, HR, operations.
 
 Today is ${snapshot.dayOfWeek}, ${snapshot.today}.
@@ -767,7 +874,8 @@ ${JSON.stringify(snapshot, null, 2)}
 
 Analyze this data and respond ONLY with a JSON object in exactly this structure (no markdown, no preamble):
 {
-  "headline": "One punchy sentence summarizing the most important thing they need to know right now (max 12 words)",
+  "pulse": "<3-4 sentence plain-English narrative briefing written directly to the owner. Lead with the most important number (labor cost, budget status, or revenue per labor hour). Call out the biggest risk and the best opportunity. Use real names and real numbers from the data. This is the first thing they read — make it count.>",
+  "headline": "<One punchy sentence: the single most important thing right now (max 12 words)>",
   "score": {
     "value": <number 1-100 representing overall scheduling health>,
     "label": "<one word: Healthy | Caution | Warning | Critical>",
@@ -777,7 +885,7 @@ Analyze this data and respond ONLY with a JSON object in exactly this structure 
     {
       "title": "<section title>",
       "icon": "<single emoji>",
-      "insight": "<2-3 sentences of plain-English analysis specific to their actual data>",
+      "insight": "<2-3 sentences of analysis referencing their actual data — real names, real numbers>",
       "urgency": "<low|medium|high>"
     }
   ],
@@ -785,38 +893,35 @@ Analyze this data and respond ONLY with a JSON object in exactly this structure 
     {
       "priority": <1-5, 1=most urgent>,
       "action": "<specific thing they should do, phrased as a direct instruction>",
-      "why": "<one sentence explaining the business impact>"
+      "why": "<one sentence: specific business impact with a number if possible>"
     }
   ],
-  "positives": ["<one thing going well>", "<another thing going well>"],
-  "nextWeekFocus": "<one forward-looking recommendation for next week's scheduling>"
+  "positives": ["<one thing going well — specific>", "<another thing going well — specific>"],
+  "nextWeekFocus": "<one forward-looking recommendation tied to their revenue or cost data>"
 }
 
 Rules:
+- pulse must read like a smart colleague gave them a 30-second briefing — specific, direct, no filler.
 - Every insight must reference their ACTUAL data (real names, real numbers, real dates). Never give generic advice.
-- If they have no employees or no schedule yet, your sections and actions should guide them on getting started.
-- If they have no sales data, note this as an opportunity but don't make it the main focus.
+- If budgetBurn data is present, reference mid-week pace and projection.
+- If punchVariance data is present, call out who ran over and by how much.
+- If revenuePerLaborHour is present, use it — it's the most actionable efficiency metric.
+- If attendanceFlags has lateArrivals or reliabilityFlags, surface the pattern (not just the incident).
 - Actions should be specific and immediately actionable, not vague.
-- Keep total response under 800 tokens.
-- Sections: include 2-4 most relevant from: Labor Cost, Staffing Coverage, Overtime Risk, Budget Tracking, Attendance Flags, Schedule Gaps, Team Availability.`;
+- Keep total response under 1000 tokens.
+- Sections: 2-4 most relevant from: Labor Cost, Revenue Efficiency, Overtime Risk, Budget Burn, Attendance Patterns, Schedule Gaps, Team Utilization.`;
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("/api/insight", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 1000,
-          messages: [{ role: "user", content: prompt }],
-        }),
+        body: JSON.stringify({ prompt }),
       });
 
       const data = await response.json();
-      const raw = data.content?.map(b => b.text || "").join("") || "";
-      const clean = raw.replace(/```json|```/g, "").trim();
-      const parsed = JSON.parse(clean);
+      if (!response.ok) throw new Error(data.error || "API error");
 
-      setInsight({ ...parsed, generatedAt: new Date().toISOString(), snapshot });
+      setInsight({ ...data.insight, generatedAt: new Date().toISOString(), snapshot });
     } catch (err) {
       setInsightError("Could not generate insights right now. Check your data and try again.");
       console.error("AI insight error:", err);
@@ -3761,35 +3866,110 @@ Rules:
             const urgencyColor = { low:"#4CAF7D", medium:"#E8A93A", high:"#C0392B" };
             const scoreColor = v => v >= 75 ? "#4CAF7D" : v >= 50 ? "#E8A93A" : "#C0392B";
             const scoreBg    = v => v >= 75 ? "#F0FFF4" : v >= 50 ? "#FEF3E2" : "#FDECEA";
+            const PULSE_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 
             return (
-              <div style={{maxWidth:720, display:"flex", flexDirection:"column", gap:16}}>
+              <div style={{maxWidth:720, display:"flex", flexDirection:"column", gap:14}}>
 
                 {/* Header */}
-                <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12}}>
+                <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:10}}>
                   <div>
                     <h2 style={{margin:"0 0 4px", fontSize:20, fontWeight:800, color:T.text}}>Business Insights</h2>
-                    <p style={{margin:0, fontSize:12, color:T.sub, lineHeight:1.5}}>
-                      AI analysis of your schedule, labor costs, and team — powered by Claude.
-                      {insight && <span style={{marginLeft:6, color:T.sub}}>Last updated {new Date(insight.generatedAt).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</span>}
+                    <p style={{margin:0, fontSize:12, color:T.sub}}>
+                      {insight
+                        ? <>Last updated {new Date(insight.generatedAt).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</>
+                        : "AI analysis of your schedule, labor and team"}
                     </p>
                   </div>
-                  <button onClick={generateInsight} disabled={insightLoading}
-                    style={{
-                      background: insightLoading ? T.muted : T.accent,
-                      color: insightLoading ? T.sub : "white",
-                      border:"none", borderRadius:10, padding:"10px 20px",
-                      fontWeight:700, fontSize:13, cursor: insightLoading ? "not-allowed" : "pointer",
-                      display:"flex", alignItems:"center", gap:8, flexShrink:0,
-                      transition:"all 0.15s"
-                    }}>
-                    {insightLoading ? (
-                      <><span style={{display:"inline-block", animation:"spin 1s linear infinite"}}>⟳</span> Analyzing...</>
-                    ) : (
-                      <><span>🧠</span> {insight ? "Refresh Analysis" : "Generate Insights"}</>
-                    )}
-                  </button>
+                  <div style={{display:"flex", gap:8}}>
+                    <button onClick={()=>setShowPulsePrefs(v=>!v)}
+                      style={{background: showPulsePrefs ? T.accent+"20" : T.surface, color: showPulsePrefs ? T.accent : T.sub,
+                        border:`1px solid ${showPulsePrefs ? T.accent : T.border}`, borderRadius:10, padding:"10px 14px",
+                        fontSize:13, fontWeight:700, cursor:"pointer"}}>🔔</button>
+                    <button onClick={generateInsight} disabled={insightLoading}
+                      style={{background: insightLoading ? T.muted : T.dark, color: insightLoading ? T.sub : "white",
+                        border:"none", borderRadius:10, padding:"10px 18px", fontWeight:700, fontSize:13,
+                        cursor: insightLoading ? "not-allowed" : "pointer", display:"flex", alignItems:"center", gap:8, flexShrink:0}}>
+                      <span style={{display:"inline-block", animation: insightLoading ? "spin 1s linear infinite" : "none", fontSize:15}}>
+                        {insightLoading ? "⟳" : "🧠"}
+                      </span>
+                      {insightLoading ? "Analyzing…" : insight ? "Refresh" : "Generate Pulse"}
+                    </button>
+                  </div>
                 </div>
+
+                {/* Pulse notification prefs panel */}
+                {showPulsePrefs && (
+                  <Card T={T} style={{padding:0}}>
+                    <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
+                      <span>🔔</span>
+                      <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Pulse notifications</span>
+                    </div>
+                    <div style={{padding:"14px 16px", display:"flex", flexDirection:"column", gap:12}}>
+                      <div style={{background:"#EFF6FF", borderRadius:9, padding:"10px 13px", display:"flex", gap:10, alignItems:"flex-start"}}>
+                        <span style={{fontSize:15, flexShrink:0}}>💡</span>
+                        <p style={{margin:0, fontSize:12, color:"#1E3A8A", lineHeight:1.6}}>
+                          Your Pulse appears as a badge on the Insights tab when it's ready. Just waiting for you when you open the app.
+                        </p>
+                      </div>
+                      <div>
+                        <div style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:8}}>When to generate</div>
+                        <div style={{display:"flex", flexDirection:"column", gap:6}}>
+                          {[
+                            {id:"login",  label:"On login",  sub:"Pulse is ready each time you open ShiftWise"},
+                            {id:"daily",  label:"Daily",     sub:"A new Pulse is generated every morning"},
+                            {id:"weekly", label:"Weekly",    sub:"One digest on the day you choose"},
+                            {id:"off",    label:"Off",       sub:"Generate manually from this tab"},
+                          ].map(f => (
+                            <div key={f.id} onClick={()=>setPulsePrefs(p=>({...p, freq:f.id}))}
+                              style={{display:"flex", alignItems:"center", gap:12, padding:"10px 13px",
+                                borderRadius:9, border:`1.5px solid ${pulsePrefs.freq===f.id ? T.accent : T.border}`,
+                                background: pulsePrefs.freq===f.id ? T.accent+"12" : T.surface, cursor:"pointer"}}>
+                              <div style={{width:18, height:18, borderRadius:"50%",
+                                border:`2px solid ${pulsePrefs.freq===f.id ? T.accent : T.border}`,
+                                background: pulsePrefs.freq===f.id ? T.accent : T.surface, flexShrink:0,
+                                display:"flex", alignItems:"center", justifyContent:"center"}}>
+                                {pulsePrefs.freq===f.id && <div style={{width:7, height:7, borderRadius:"50%", background:"white"}}/>}
+                              </div>
+                              <div style={{flex:1}}>
+                                <div style={{fontSize:13, fontWeight:700, color: pulsePrefs.freq===f.id ? T.accent : T.text}}>{f.label}</div>
+                                <div style={{fontSize:11, color:T.sub, marginTop:1}}>{f.sub}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      {pulsePrefs.freq==="weekly" && (
+                        <div>
+                          <div style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:8}}>Generate on</div>
+                          <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
+                            {PULSE_DAYS.map(d => (
+                              <button key={d} onClick={()=>setPulsePrefs(p=>({...p, day:d.toLowerCase()}))}
+                                style={{padding:"6px 11px", borderRadius:8, fontSize:12, fontWeight:600, cursor:"pointer",
+                                  border:`1.5px solid ${pulsePrefs.day===d.toLowerCase() ? T.accent : T.border}`,
+                                  background: pulsePrefs.day===d.toLowerCase() ? T.accent+"12" : T.surface,
+                                  color: pulsePrefs.day===d.toLowerCase() ? T.accent : T.text}}>
+                                {d.slice(0,3)}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      <button onClick={()=>setShowPulsePrefs(false)}
+                        style={{background:T.dark, color:"white", border:"none", borderRadius:9, padding:"11px",
+                          fontWeight:700, fontSize:13, cursor:"pointer"}}>
+                        Save preference
+                      </button>
+                      <div style={{borderTop:`1px solid ${T.border}`, paddingTop:10, display:"flex", alignItems:"center", gap:10}}>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:12, fontWeight:700, color:T.text}}>Want it in your inbox or via text?</div>
+                          <div style={{fontSize:11, color:T.sub, marginTop:2}}>Email and SMS delivery coming for subscribers.</div>
+                        </div>
+                        <div style={{background:T.muted, borderRadius:7, padding:"4px 10px", fontSize:11, fontWeight:700, color:T.sub}}>Soon</div>
+                      </div>
+                    </div>
+                  </Card>
+                )}
 
                 {/* Error */}
                 {insightError && (
@@ -3801,32 +3981,34 @@ Rules:
                 {/* Loading skeleton */}
                 {insightLoading && (
                   <div style={{display:"flex", flexDirection:"column", gap:12}}>
-                    {[180, 140, 160, 120].map((h, i) => (
-                      <div key={i} style={{background:T.surface, borderRadius:T.radius, height:h, boxShadow:T.shadow, overflow:"hidden", position:"relative"}}>
+                    {[100, 80, 90, 160, 140, 180].map((h, i) => (
+                      <div key={i} style={{background:T.surface, borderRadius:T.radius, height:h, overflow:"hidden", position:"relative", border:`1px solid ${T.border}`}}>
                         <div style={{position:"absolute", inset:0, background:`linear-gradient(90deg, transparent 0%, ${T.muted} 50%, transparent 100%)`, animation:"shimmer 1.4s infinite"}}/>
                       </div>
                     ))}
+                    <div style={{textAlign:"center", fontSize:12, color:T.sub, marginTop:4}}>Reading schedule, punches, and Square sales…</div>
                     <style>{`@keyframes spin{to{transform:rotate(360deg)}} @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}`}</style>
                   </div>
                 )}
 
-                {/* Empty state — no data yet */}
-                {!insightLoading && !insight && !insightError && (
-                  <Card T={T} style={{padding:"48px 32px", textAlign:"center", border:`2px dashed ${T.border}`}}>
-                    <div style={{fontSize:48, marginBottom:16}}>🧠</div>
-                    <div style={{fontWeight:800, fontSize:17, color:T.text, marginBottom:8}}>Your AI business advisor</div>
-                    <p style={{margin:"0 0 20px", fontSize:13, color:T.sub, lineHeight:1.7, maxWidth:400, marginLeft:"auto", marginRight:"auto"}}>
-                      ShiftWise analyzes your schedule, labor costs, team availability, and sales data to give you a plain-English briefing — the things you'd tell yourself if you had time to look at all the numbers.
+                {/* Empty state */}
+                {!insightLoading && !insight && !insightError && !showPulsePrefs && (
+                  <Card T={T} style={{padding:"48px 28px", textAlign:"center", border:`2px dashed ${T.border}`}}>
+                    <div style={{fontSize:44, marginBottom:14}}>🧠</div>
+                    <div style={{fontWeight:800, fontSize:17, color:T.text, marginBottom:8}}>Your weekly ops briefing</div>
+                    <p style={{margin:"0 0 20px", fontSize:13, color:T.sub, lineHeight:1.7, maxWidth:360, marginLeft:"auto", marginRight:"auto"}}>
+                      ShiftWise reads your schedule, punch data, and Square sales — then writes you a plain-English briefing with specific actions.
                     </p>
-                    <div style={{display:"flex", flexDirection:"column", gap:10, maxWidth:340, margin:"0 auto 24px", textAlign:"left"}}>
+                    <div style={{display:"flex", flexDirection:"column", gap:8, maxWidth:320, margin:"0 auto 24px", textAlign:"left"}}>
                       {[
-                        {icon:"💰", text:"Are you on track with your labor budget?"},
-                        {icon:"📅", text:"Which days are over or under-staffed?"},
-                        {icon:"⚠️", text:"Who's at risk of overtime this week?"},
-                        {icon:"📈", text:"How does your labor cost compare to revenue?"},
+                        {icon:"📡", text:"A narrative briefing written for your business"},
+                        {icon:"💵", text:"Revenue per labor hour, by day of week"},
+                        {icon:"📊", text:"Mid-week budget burn projection"},
+                        {icon:"⏱️", text:"Punch variance vs. scheduled hours"},
+                        {icon:"🚩", text:"Attendance reliability flags"},
                       ].map(item => (
-                        <div key={item.icon} style={{display:"flex", alignItems:"center", gap:10, background:T.muted, borderRadius:9, padding:"10px 14px"}}>
-                          <span style={{fontSize:18}}>{item.icon}</span>
+                        <div key={item.icon} style={{display:"flex", alignItems:"center", gap:10, background:T.muted, borderRadius:9, padding:"9px 13px"}}>
+                          <span style={{fontSize:16}}>{item.icon}</span>
                           <span style={{fontSize:13, color:T.text, fontWeight:500}}>{item.text}</span>
                         </div>
                       ))}
@@ -3837,37 +4019,48 @@ Rules:
                       </div>
                     )}
                     <button onClick={generateInsight} disabled={insightLoading}
-                      style={{background:T.accent, color:"white", border:"none", borderRadius:10, padding:"13px 28px", fontWeight:800, fontSize:14, cursor:"pointer"}}>
-                      🧠 Generate My First Insight
+                      style={{background:T.dark, color:"white", border:"none", borderRadius:10, padding:"13px 28px", fontWeight:800, fontSize:14, cursor:"pointer"}}>
+                      🧠 Generate My First Pulse
                     </button>
                   </Card>
                 )}
 
-                {/* INSIGHT RESULTS */}
+                {/* PULSE RESULTS */}
                 {!insightLoading && insight && (
-                  <div style={{display:"flex", flexDirection:"column", gap:14}}>
+                  <div style={{display:"flex", flexDirection:"column", gap:12}}>
 
-                    {/* Headline + Score */}
-                    <Card T={T} style={{padding:0, overflow:"hidden"}}>
-                      <div style={{background:T.dark, padding:"16px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:16, flexWrap:"wrap"}}>
-                        <div style={{flex:1, minWidth:200}}>
-                          <div style={{fontSize:10, fontWeight:700, color:"#666", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6}}>This Week's Headline</div>
-                          <div style={{fontSize:17, fontWeight:800, color:"white", lineHeight:1.4}}>{insight.headline}</div>
+                    {/* ── Weekly Pulse narrative ── */}
+                    {insight.pulse && (
+                      <Card T={T} style={{padding:0}}>
+                        <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
+                          <span style={{fontSize:15}}>📡</span>
+                          <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Weekly Pulse</span>
+                          <span style={{background:T.accent+"20", color:T.accent, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700}}>{biz}</span>
+                        </div>
+                        <div style={{padding:"14px 16px"}}>
+                          <p style={{margin:0, fontSize:14, color:T.text, lineHeight:1.8}}>{insight.pulse}</p>
+                        </div>
+                      </Card>
+                    )}
+
+                    {/* ── Health score ── */}
+                    <Card T={T} style={{padding:0}}>
+                      <div style={{padding:"14px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:14}}>
+                        <div style={{flex:1, minWidth:0}}>
+                          <div style={{fontSize:10, fontWeight:700, color:T.sub, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:5}}>Scheduling health</div>
+                          <div style={{fontSize:14, fontWeight:700, color:T.text, lineHeight:1.4}}>{insight.headline}</div>
                         </div>
                         {insight.score && (
-                          <div style={{background:scoreBg(insight.score.value), borderRadius:12, padding:"12px 18px", textAlign:"center", flexShrink:0}}>
-                            <div style={{fontSize:32, fontWeight:900, color:scoreColor(insight.score.value), lineHeight:1}}>{insight.score.value}</div>
-                            <div style={{fontSize:11, fontWeight:800, color:scoreColor(insight.score.value), marginTop:2}}>{insight.score.label}</div>
-                            <div style={{fontSize:9, color:"#888", marginTop:4, maxWidth:120, lineHeight:1.3}}>{insight.score.reason}</div>
+                          <div style={{background:scoreBg(insight.score.value), borderRadius:10, padding:"10px 16px", textAlign:"center", flexShrink:0}}>
+                            <div style={{fontSize:30, fontWeight:800, color:scoreColor(insight.score.value), lineHeight:1}}>{insight.score.value}</div>
+                            <div style={{fontSize:10, fontWeight:700, color:scoreColor(insight.score.value), marginTop:2, letterSpacing:"0.06em"}}>{insight.score.label}</div>
                           </div>
                         )}
                       </div>
-
-                      {/* Positives strip */}
                       {insight.positives?.length > 0 && (
-                        <div style={{background:"#F0FFF4", borderBottom:`1px solid #4CAF7D20`, padding:"10px 20px", display:"flex", gap:16, flexWrap:"wrap"}}>
+                        <div style={{background:"#F0FFF4", borderTop:`1px solid ${T.border}`, padding:"9px 16px", display:"flex", gap:16, flexWrap:"wrap"}}>
                           {insight.positives.map((p, i) => (
-                            <div key={i} style={{display:"flex", alignItems:"center", gap:6, fontSize:12, color:"#2D6A4F", fontWeight:600}}>
+                            <div key={i} style={{display:"flex", alignItems:"center", gap:5, fontSize:12, color:"#2D6A4F", fontWeight:600}}>
                               <span style={{color:"#4CAF7D"}}>✓</span> {p}
                             </div>
                           ))}
@@ -3875,28 +4068,215 @@ Rules:
                       )}
                     </Card>
 
-                    {/* Priority Actions */}
-                    {insight.actions?.length > 0 && (
-                      <Card T={T} style={{overflow:"hidden"}}>
-                        <div style={{padding:"11px 18px", background:T.dark, display:"flex", alignItems:"center", gap:8}}>
-                          <span style={{fontSize:16}}>⚡</span>
-                          <span style={{color:"white", fontWeight:800, fontSize:14}}>Action Items</span>
-                          <span style={{background:T.accent, color:"white", borderRadius:10, padding:"1px 8px", fontSize:10, fontWeight:700, marginLeft:4}}>{insight.actions.length}</span>
+                    {/* ── Mid-week budget burn ── */}
+                    {insight.snapshot?.budgetBurn && (()=>{
+                      const burn = insight.snapshot.budgetBurn;
+                      const pct = Math.min((burn.spent / burn.total) * 100, 100);
+                      const projPct = Math.min((burn.projectedEnd / burn.total) * 100, 100);
+                      return (
+                        <Card T={T} style={{padding:0}}>
+                          <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
+                            <span>📊</span>
+                            <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Budget burn · mid-week</span>
+                            <span style={{
+                              background: burn.projectedOver ? "#FEF3C7" : "#E8F4EE",
+                              color: burn.projectedOver ? "#B45309" : T.accent,
+                              borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700
+                            }}>{burn.projectedOver ? "Projected over" : "On track"}</span>
+                          </div>
+                          <div style={{padding:"14px 16px"}}>
+                            <div style={{display:"flex", justifyContent:"space-between", marginBottom:10}}>
+                              <div>
+                                <div style={{fontSize:11, color:T.sub, marginBottom:2}}>Spent through {burn.dayOfWeek}</div>
+                                <div style={{fontSize:22, fontWeight:800, color:T.text}}>${burn.spent.toLocaleString()}</div>
+                              </div>
+                              <div style={{textAlign:"right"}}>
+                                <div style={{fontSize:11, color:T.sub, marginBottom:2}}>Weekly budget</div>
+                                <div style={{fontSize:22, fontWeight:800, color:T.text}}>${burn.total.toLocaleString()}</div>
+                              </div>
+                            </div>
+                            <div style={{background:T.muted, borderRadius:6, height:10, position:"relative", marginBottom:6}}>
+                              <div style={{background: burn.projectedOver ? "#B45309" : T.accent, borderRadius:6, height:"100%", width:`${pct}%`}}/>
+                              <div style={{position:"absolute", top:-3, left:`${Math.min(projPct,98)}%`, width:2, height:16,
+                                background: burn.projectedOver ? "#991B1B" : T.accent, borderRadius:2, transform:"translateX(-50%)"}}/>
+                            </div>
+                            <div style={{display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:10}}>
+                              <span style={{color:T.sub}}>{Math.round(pct)}% used · {burn.daysLeft} days left</span>
+                              <span style={{color: burn.projectedOver ? "#991B1B" : T.accent, fontWeight:700}}>
+                                Proj: ${burn.projectedEnd} {burn.projectedOver ? `(+$${burn.overBy} over)` : "(on track)"}
+                              </span>
+                            </div>
+                            <div style={{background: burn.projectedOver ? "#FEF3C7" : T.accent+"12", borderRadius:8, padding:"9px 12px",
+                              fontSize:12, color: burn.projectedOver ? "#78350F" : T.accent, lineHeight:1.5, fontWeight:600}}>
+                              {burn.paceNote}
+                            </div>
+                          </div>
+                        </Card>
+                      );
+                    })()}
+
+                    {/* ── Revenue per labor hour ── */}
+                    {insight.snapshot?.weeks?.[0]?.revenuePerLaborHour && (()=>{
+                      const wk = insight.snapshot.weeks[0];
+                      const days = wk.dailyTotals.filter(d => d.revenuePerLaborHour !== null);
+                      const maxRplh = days.length ? Math.max(...days.map(d => d.revenuePerLaborHour)) : 1;
+                      const bestDay = days.reduce((best, d) => (!best || d.revenuePerLaborHour > best.revenuePerLaborHour) ? d : best, null);
+                      const worstDay = days.reduce((worst, d) => (!worst || d.revenuePerLaborHour < worst.revenuePerLaborHour) ? d : worst, null);
+                      return (
+                        <Card T={T} style={{padding:0}}>
+                          <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
+                            <span>💵</span>
+                            <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Revenue per labor hour</span>
+                            <span style={{background:T.accent+"20", color:T.accent, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700}}>${wk.revenuePerLaborHour}/hr avg</span>
+                          </div>
+                          <div style={{padding:"12px 16px 6px"}}>
+                            {days.length > 0 && (
+                              <>
+                                <div style={{display:"flex", alignItems:"flex-end", gap:5, height:72, marginBottom:8}}>
+                                  {wk.dailyTotals.map((d, i) => {
+                                    const rplh = d.revenuePerLaborHour;
+                                    const pct = rplh ? rplh / maxRplh : 0;
+                                    const isBest = bestDay && d.day === bestDay.day;
+                                    const isWorst = worstDay && d.day === worstDay.day;
+                                    const col = isBest ? T.accent : isWorst ? "#991B1B" : T.sub;
+                                    return (
+                                      <div key={i} style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3}}>
+                                        {(isBest || isWorst) && <div style={{fontSize:8, fontWeight:700, color:col}}>{isBest ? "best" : "⚠"}</div>}
+                                        {!isBest && !isWorst && <div style={{fontSize:8}}>&nbsp;</div>}
+                                        <div style={{width:"100%", background:col+"20", borderRadius:3, display:"flex", alignItems:"flex-end", height:52}}>
+                                          <div style={{width:"100%", background:col, borderRadius:3, height:`${Math.round(pct*100)}%`, minHeight: rplh ? 3 : 0}}/>
+                                        </div>
+                                        <div style={{fontSize:9, color:T.sub, fontWeight:600}}>{d.day}</div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                <div style={{display:"flex", borderTop:`1px solid ${T.border}`, paddingTop:8, gap:5}}>
+                                  {wk.dailyTotals.map((d,i) => (
+                                    <div key={i} style={{flex:1, textAlign:"center"}}>
+                                      <div style={{fontSize:10, fontWeight:700, color: d.day===bestDay?.day ? T.accent : d.day===worstDay?.day ? "#991B1B" : T.text}}>
+                                        {d.revenuePerLaborHour ? `$${d.revenuePerLaborHour}` : "—"}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                                <div style={{textAlign:"center", fontSize:10, color:T.sub, marginTop:4, paddingBottom:6}}>Revenue per labor hour by day</div>
+                              </>
+                            )}
+                          </div>
+                        </Card>
+                      );
+                    })()}
+
+                    {/* ── Punch variance ── */}
+                    {insight.snapshot?.punchVariance?.length > 0 && (
+                      <Card T={T} style={{padding:0}}>
+                        <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
+                          <span>⏱️</span>
+                          <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em"}}>Punch variance · this period</span>
                         </div>
-                        {[...insight.actions].sort((a,b) => a.priority - b.priority).map((action, i) => (
-                          <div key={i} style={{
-                            display:"flex", gap:14, padding:"13px 18px",
-                            borderBottom: i < insight.actions.length - 1 ? `1px solid ${T.border}` : "none",
-                            alignItems:"flex-start",
-                            background: i === 0 ? T.accent+"08" : T.surface,
-                          }}>
-                            <div style={{
-                              width:26, height:26, borderRadius:"50%", flexShrink:0,
-                              background: action.priority === 1 ? T.accent : T.muted,
-                              color: action.priority === 1 ? "white" : T.sub,
+                        {insight.snapshot.punchVariance.map((row, i) => {
+                          const over = row.diff > 0;
+                          return (
+                            <div key={i} style={{display:"flex", alignItems:"center", gap:10, padding:"10px 16px",
+                              borderBottom: i < insight.snapshot.punchVariance.length-1 ? `1px solid ${T.border}` : "none"}}>
+                              <div style={{width:30, height:30, borderRadius:"50%", flexShrink:0, background:T.muted,
+                                display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, color:T.sub}}>
+                                {row.initials}
+                              </div>
+                              <div style={{flex:1, fontSize:13, fontWeight:600, color:T.text}}>{row.name}</div>
+                              <div style={{fontSize:12, color:T.sub, marginRight:8}}>{row.scheduledHours}h sched</div>
+                              <div style={{fontSize:13, fontWeight:700,
+                                color: over ? "#991B1B" : T.accent,
+                                background: over ? "#FEE2E2" : "#E8F4EE",
+                                borderRadius:6, padding:"2px 8px"}}>
+                                {over?"+":""}{row.diff.toFixed(1)}h
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </Card>
+                    )}
+
+                    {/* ── Attendance flags ── */}
+                    {(()=>{
+                      const af = insight.snapshot?.attendanceFlags;
+                      const hasFlags = af && (af.lateArrivals?.length || af.missedPunches?.length || af.reliabilityFlags?.length);
+                      if (!hasFlags) return null;
+                      const totalFlags = (af.lateArrivals?.length||0) + (af.missedPunches?.length||0);
+                      return (
+                        <Card T={T} style={{padding:0}}>
+                          <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
+                            <span>🚩</span>
+                            <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Attendance flags</span>
+                            {totalFlags > 0 && <span style={{background:"#FEF3C7", color:"#B45309", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700}}>{totalFlags} this week</span>}
+                          </div>
+                          <div style={{padding:"12px 16px", display:"flex", flexDirection:"column", gap:8}}>
+                            {af.missedPunches?.map((m, i) => (
+                              <div key={i} style={{display:"flex", alignItems:"center", gap:10, background:"#FEE2E2", borderRadius:9, padding:"9px 12px"}}>
+                                <div style={{width:28, height:28, borderRadius:"50%", background:"#FCA5A520", display:"flex",
+                                  alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, color:"#991B1B", flexShrink:0}}>
+                                  {m.initials}
+                                </div>
+                                <div style={{flex:1}}>
+                                  <div style={{fontSize:13, fontWeight:700, color:"#7F1D1D"}}>{m.name}</div>
+                                  <div style={{fontSize:11, color:"#991B1B"}}>{m.type} · {m.day}</div>
+                                </div>
+                                <div style={{fontSize:10, fontWeight:700, color:"#991B1B", background:"#FCA5A530", borderRadius:5, padding:"2px 7px"}}>MISSED</div>
+                              </div>
+                            ))}
+                            {af.lateArrivals?.map((a, i) => (
+                              <div key={i} style={{display:"flex", alignItems:"center", gap:10, background:T.muted, borderRadius:9, padding:"9px 12px"}}>
+                                <div style={{width:28, height:28, borderRadius:"50%", background:"#FEF3C7", display:"flex",
+                                  alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, color:"#78350F", flexShrink:0}}>
+                                  {a.initials}
+                                </div>
+                                <div style={{flex:1}}>
+                                  <div style={{fontSize:13, fontWeight:700, color:T.text}}>{a.name}</div>
+                                  <div style={{fontSize:11, color:T.sub}}>Late {a.count}× this period</div>
+                                </div>
+                              </div>
+                            ))}
+                            {af.reliabilityFlags?.length > 0 && (
+                              <div style={{borderTop:`1px solid ${T.border}`, paddingTop:10, marginTop:2}}>
+                                <div style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:8}}>30-day reliability</div>
+                                {af.reliabilityFlags.map((e, i) => {
+                                  const barPct = Math.min((e.flags30Days / 12) * 100, 100);
+                                  const barCol = e.flags30Days >= 7 ? "#991B1B" : e.flags30Days >= 4 ? "#B45309" : T.accent;
+                                  return (
+                                    <div key={i} style={{display:"flex", alignItems:"center", gap:10, marginBottom: i < af.reliabilityFlags.length-1 ? 7 : 0}}>
+                                      <div style={{fontSize:12, color:T.text, fontWeight:600, width:80, flexShrink:0}}>{e.name.split(" ")[0]}</div>
+                                      <div style={{flex:1, background:T.muted, borderRadius:4, height:8, overflow:"hidden"}}>
+                                        <div style={{width:`${barPct}%`, height:"100%", background:barCol, borderRadius:4}}/>
+                                      </div>
+                                      <div style={{fontSize:11, color:barCol, fontWeight:700, width:24, textAlign:"right"}}>{e.flags30Days}</div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        </Card>
+                      );
+                    })()}
+
+                    {/* ── Action items ── */}
+                    {insight.actions?.length > 0 && (
+                      <Card T={T} style={{padding:0}}>
+                        <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
+                          <span>⚡</span>
+                          <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Action items</span>
+                          <span style={{background:"#FEE2E2", color:"#991B1B", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700}}>{insight.actions.length}</span>
+                        </div>
+                        {[...insight.actions].sort((a,b)=>a.priority-b.priority).map((action, i) => (
+                          <div key={i} style={{display:"flex", gap:12, padding:"12px 16px", alignItems:"flex-start",
+                            borderBottom: i < insight.actions.length-1 ? `1px solid ${T.border}` : "none",
+                            background: i===0 ? "#FFF5F5" : T.surface}}>
+                            <div style={{width:24, height:24, borderRadius:"50%", flexShrink:0,
+                              background: action.priority===1 ? "#991B1B" : T.muted,
+                              color: action.priority===1 ? "white" : T.sub,
                               display:"flex", alignItems:"center", justifyContent:"center",
-                              fontWeight:800, fontSize:12, marginTop:1,
-                            }}>{action.priority}</div>
+                              fontWeight:800, fontSize:11, marginTop:1}}>{action.priority}</div>
                             <div style={{flex:1, minWidth:0}}>
                               <div style={{fontWeight:700, fontSize:13, color:T.text, marginBottom:3}}>{action.action}</div>
                               <div style={{fontSize:11, color:T.sub, lineHeight:1.5}}>{action.why}</div>
@@ -3906,49 +4286,41 @@ Rules:
                       </Card>
                     )}
 
-                    {/* Analysis Sections */}
+                    {/* ── Detailed analysis ── */}
                     {insight.sections?.length > 0 && (
                       <div style={{display:"flex", flexDirection:"column", gap:10}}>
                         <div style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.08em", paddingLeft:2}}>Detailed Analysis</div>
                         {insight.sections.map((section, i) => (
-                          <Card key={i} T={T} style={{padding:0, overflow:"hidden"}}>
-                            <div style={{display:"flex", alignItems:"center", gap:10, padding:"11px 16px", borderBottom:`1px solid ${T.border}`, background:T.muted}}>
-                              <span style={{fontSize:18}}>{section.icon}</span>
+                          <Card key={i} T={T} style={{padding:0}}>
+                            <div style={{display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted}}>
+                              <span style={{fontSize:17}}>{section.icon}</span>
                               <span style={{fontWeight:700, fontSize:13, color:T.text, flex:1}}>{section.title}</span>
                               <span style={{
-                                background: urgencyColor[section.urgency] + "20",
-                                color: urgencyColor[section.urgency],
-                                border: `1px solid ${urgencyColor[section.urgency]}30`,
+                                background: urgencyColor[section.urgency]+"20", color:urgencyColor[section.urgency],
+                                border:`1px solid ${urgencyColor[section.urgency]}30`,
                                 borderRadius:6, padding:"2px 8px", fontSize:10, fontWeight:700,
                                 textTransform:"uppercase", letterSpacing:"0.05em"
                               }}>{section.urgency}</span>
                             </div>
-                            <div style={{padding:"13px 16px", fontSize:13, color:T.text, lineHeight:1.7}}>{section.insight}</div>
+                            <div style={{padding:"12px 14px", fontSize:13, color:T.text, lineHeight:1.75}}>{section.insight}</div>
                           </Card>
                         ))}
                       </div>
                     )}
 
-                    {/* Next Week Focus */}
+                    {/* ── Next week focus ── */}
                     {insight.nextWeekFocus && (
-                      <Card T={T} style={{padding:"16px 20px", background:T.accent+"10", border:`1.5px solid ${T.accent}28`}}>
-                        <div style={{display:"flex", gap:12, alignItems:"flex-start"}}>
+                      <Card T={T} style={{padding:0, background:T.accent+"10", border:`1.5px solid ${T.accent}28`}}>
+                        <div style={{padding:"14px 16px", display:"flex", gap:12, alignItems:"flex-start"}}>
                           <span style={{fontSize:22, flexShrink:0}}>🎯</span>
                           <div>
-                            <div style={{fontWeight:700, fontSize:10, color:T.accent, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.05em"}}>Next Week Focus</div>
-                            <div style={{fontSize:13, color:T.text, lineHeight:1.6, fontWeight:600}}>{insight.nextWeekFocus}</div>
+                            <div style={{fontWeight:700, fontSize:10, color:T.accent, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.06em"}}>Next Week Focus</div>
+                            <div style={{fontSize:13, color:T.text, lineHeight:1.65, fontWeight:600}}>{insight.nextWeekFocus}</div>
                           </div>
                         </div>
                       </Card>
                     )}
 
-                    {/* Supabase upgrade note */}
-                    <div style={{background:T.muted, borderRadius:T.radius, padding:"12px 16px", display:"flex", gap:10, alignItems:"flex-start"}}>
-                      <span style={{fontSize:16, flexShrink:0}}>🔗</span>
-                      <div style={{fontSize:11, color:T.sub, lineHeight:1.6}}>
-                        <strong style={{color:T.text}}>Analysis is based on this device's data.</strong> Once connected to Supabase, insights will include historical patterns, multi-device punch data, and real-time Square sales — making recommendations significantly more powerful.
-                      </div>
-                    </div>
                   </div>
                 )}
               </div>
