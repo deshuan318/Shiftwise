@@ -857,78 +857,361 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // AI INSIGHT GENERATOR — calls Claude with the business snapshot.
   // The prompt and API call are data-source agnostic.
   // ─────────────────────────────────────────────────────────────────────────
-  async function generateInsight() {
+  function generateInsight() {
     if (insightLoading) return;
     setInsightLoading(true);
     setInsightError(null);
 
-    const snapshot = buildBusinessSnapshot();
-
-    const prompt = `You are a sharp, concise business operations advisor for a small business owner-operator named ${snapshot.businessName || "the owner"}.
-They manage hourly staff (cafes, retail, service businesses) and handle everything themselves — scheduling, payroll, HR, operations.
-
-Today is ${snapshot.dayOfWeek}, ${snapshot.today}.
-
-Here is a complete snapshot of their current business data:
-${JSON.stringify(snapshot, null, 2)}
-
-Analyze this data and respond ONLY with a JSON object in exactly this structure (no markdown, no preamble):
-{
-  "pulse": "<3-4 sentence plain-English narrative briefing written directly to the owner. Lead with the most important number (labor cost, budget status, or revenue per labor hour). Call out the biggest risk and the best opportunity. Use real names and real numbers from the data. This is the first thing they read — make it count.>",
-  "headline": "<One punchy sentence: the single most important thing right now (max 12 words)>",
-  "score": {
-    "value": <number 1-100 representing overall scheduling health>,
-    "label": "<one word: Healthy | Caution | Warning | Critical>",
-    "reason": "<one sentence explaining the score>"
-  },
-  "sections": [
-    {
-      "title": "<section title>",
-      "icon": "<single emoji>",
-      "insight": "<2-3 sentences of analysis referencing their actual data — real names, real numbers>",
-      "urgency": "<low|medium|high>"
-    }
-  ],
-  "actions": [
-    {
-      "priority": <1-5, 1=most urgent>,
-      "action": "<specific thing they should do, phrased as a direct instruction>",
-      "why": "<one sentence: specific business impact with a number if possible>"
-    }
-  ],
-  "positives": ["<one thing going well — specific>", "<another thing going well — specific>"],
-  "nextWeekFocus": "<one forward-looking recommendation tied to their revenue or cost data>"
-}
-
-Rules:
-- pulse must read like a smart colleague gave them a 30-second briefing — specific, direct, no filler.
-- Every insight must reference their ACTUAL data (real names, real numbers, real dates). Never give generic advice.
-- If budgetBurn data is present, reference mid-week pace and projection.
-- If punchVariance data is present, call out who ran over and by how much.
-- If revenuePerLaborHour is present, use it — it's the most actionable efficiency metric.
-- If attendanceFlags has lateArrivals or reliabilityFlags, surface the pattern (not just the incident).
-- Actions should be specific and immediately actionable, not vague.
-- Keep total response under 1000 tokens.
-- Sections: 2-4 most relevant from: Labor Cost, Revenue Efficiency, Overtime Risk, Budget Burn, Attendance Patterns, Schedule Gaps, Team Utilization.`;
-
-    try {
-      const response = await fetch("/api/insight", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
-      });
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "API error");
-
-      setInsight({ ...data.insight, generatedAt: new Date().toISOString(), snapshot });
-    } catch (err) {
-      setInsightError("Could not generate insights right now. Check your data and try again.");
-      console.error("AI insight error:", err);
-    } finally {
-      setInsightLoading(false);
-    }
+    // Small delay so the loading skeleton renders before heavy computation
+    setTimeout(() => {
+      try {
+        const snapshot = buildBusinessSnapshot();
+        const result   = computePulse(snapshot);
+        setInsight({ ...result, generatedAt: new Date().toISOString(), snapshot });
+      } catch (err) {
+        setInsightError("Could not generate insights right now. Check your data and try again.");
+        console.error("Pulse engine error:", err);
+      } finally {
+        setInsightLoading(false);
+      }
+    }, 600);
   }
+
+  // ── Deterministic Pulse engine ─────────────────────────────────────────────
+  // Reads the snapshot produced by buildBusinessSnapshot() and returns the
+  // same JSON shape that the Claude API used to return — so the UI is unchanged.
+  function computePulse(snap) {
+    const wk      = snap.weeks?.[0] || {};
+    const burn    = snap.budgetBurn;
+    const pv      = snap.punchVariance || [];
+    const af      = snap.attendanceFlags || {};
+    const ot      = snap.overtimeAlerts || [];
+    const budget  = snap.weeklyBudget;
+    const hasSales = snap.hasSalesData && wk.totalRevenue > 0;
+    const rplh    = wk.revenuePerLaborHour;
+    const laborPct = wk.laborCostPct;
+    const totalPay = wk.totalEstimatedPay || 0;
+    const totalHrs = wk.totalScheduledHours || 0;
+    const staffed  = wk.staffScheduled || 0;
+    const empCount = snap.totalEmployees || 0;
+    const bizName  = snap.businessName || "your business";
+
+    // ── helper: $ formatter ──
+    const $$ = n => `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+
+    // ── Score calculation (0-100) ────────────────────────────────────────────
+    let score = 100;
+    const scorePenalties = [];
+
+    // Overtime
+    if (ot.length > 0) {
+      score -= 20;
+      scorePenalties.push(`${ot.length} employee${ot.length > 1 ? "s" : ""} over 40h`);
+    } else {
+      const nearOT = wk.employeeBreakdown?.filter(e => e.scheduledHours >= 36 && e.scheduledHours <= 40) || [];
+      if (nearOT.length) { score -= 8; scorePenalties.push("near overtime risk"); }
+    }
+
+    // Budget
+    if (budget) {
+      if (totalPay > budget) { score -= 15; scorePenalties.push("over budget"); }
+      else if (burn?.projectedOver) { score -= 10; scorePenalties.push("projected over budget"); }
+    }
+
+    // Punch variance — total absolute overage
+    const totalOverage = pv.reduce((s, e) => s + Math.max(0, e.diff), 0);
+    if (totalOverage > 8) { score -= 12; scorePenalties.push(`${totalOverage.toFixed(1)}h punch overage`); }
+    else if (totalOverage > 4) { score -= 6; }
+
+    // Missed punches
+    if (af.missedPunches?.length) { score -= 10; scorePenalties.push("missed punch-in today"); }
+
+    // Attendance flags
+    const topFlagCount = af.reliabilityFlags?.[0]?.flags30Days || 0;
+    if (topFlagCount >= 7) { score -= 8; scorePenalties.push("attendance reliability concern"); }
+    else if (topFlagCount >= 4) { score -= 4; }
+
+    // Coverage gaps — days with no staff but business is open
+    const openDays = Object.values(snap.businessHours || {}).filter(h => h?.isOpen !== false).length;
+    const coveredDays = wk.dailyTotals?.filter(d => d.staffCount > 0).length || 0;
+    const gapDays = Math.max(0, openDays - coveredDays);
+    if (gapDays > 0) { score -= gapDays * 5; scorePenalties.push(`${gapDays} uncovered day${gapDays > 1 ? "s" : ""}`); }
+
+    // No sales data — minor deduction (can't measure efficiency)
+    if (!hasSales) score -= 3;
+
+    score = Math.max(0, Math.min(100, Math.round(score)));
+    const scoreLabel  = score >= 75 ? "Healthy" : score >= 50 ? "Caution" : score >= 30 ? "Warning" : "Critical";
+    const scoreReason = scorePenalties.length
+      ? `Key concerns: ${scorePenalties.slice(0,2).join(" and ")}.`
+      : "Schedule looks solid with no major issues detected.";
+
+    // ── Headline ─────────────────────────────────────────────────────────────
+    let headline = "";
+    if (ot.length > 0) {
+      headline = `${ot[0].name} is headed for overtime — act before it posts`;
+    } else if (burn?.projectedOver) {
+      headline = `On pace to run ${$$( burn.overBy)} over budget this week`;
+    } else if (budget && totalPay > budget) {
+      headline = `Labor spend is ${$$(totalPay - budget)} over your weekly budget`;
+    } else if (af.missedPunches?.length) {
+      headline = `${af.missedPunches[0].name} has no punch-in recorded today`;
+    } else if (hasSales && rplh) {
+      headline = score >= 75
+        ? `Strong week — earning ${$$(rplh)} per labor hour`
+        : `Earning ${$$(rplh)}/labor hr — check your lowest-revenue days`;
+    } else if (gapDays > 0) {
+      headline = `${gapDays} open day${gapDays > 1 ? "s" : ""} with no staff scheduled`;
+    } else if (totalHrs === 0) {
+      headline = "No shifts scheduled yet — build your schedule to get insights";
+    } else {
+      headline = `${staffed} of ${empCount} employees scheduled — ${totalHrs}h total labor this week`;
+    }
+
+    // ── Pulse narrative (3-4 sentences) ──────────────────────────────────────
+    const sentences = [];
+
+    // Sentence 1 — labor cost / budget
+    if (budget) {
+      const runway = budget - totalPay;
+      if (totalPay > budget) {
+        sentences.push(`This week's scheduled labor is ${$$(totalPay)}, which is ${$$(Math.abs(runway))} over your ${$$(budget)} budget.`);
+      } else {
+        sentences.push(`This week's scheduled labor is ${$$(totalPay)} against a ${$$(budget)} budget, leaving ${$$(runway)} of runway.`);
+      }
+    } else if (totalHrs > 0) {
+      sentences.push(`You have ${totalHrs}h of scheduled labor this week across ${staffed} employee${staffed !== 1 ? "s" : ""}, estimated at ${$$(totalPay)}.`);
+    } else {
+      sentences.push(`No shifts are scheduled yet for ${bizName} this week.`);
+    }
+
+    // Sentence 2 — revenue efficiency or sales prompt
+    if (hasSales && rplh) {
+      const days = wk.dailyTotals?.filter(d => d.revenuePerLaborHour) || [];
+      const best  = days.reduce((b, d) => (!b || d.revenuePerLaborHour > b.revenuePerLaborHour) ? d : b, null);
+      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
+      if (best && worst && best.day !== worst.day) {
+        sentences.push(`You're earning ${$$(rplh)} per labor hour on average — ${best.day} leads at ${$$(best.revenuePerLaborHour)}/hr while ${worst.day} lags at ${$$(worst.revenuePerLaborHour)}/hr.`);
+      } else {
+        sentences.push(`With ${$$(wk.totalRevenue)} in sales, you're earning ${$$(rplh)} per labor hour${laborPct ? ` and running a ${laborPct}% labor cost` : ""}.`);
+      }
+    } else if (!hasSales) {
+      sentences.push(`No sales data is loaded yet — import your Square CSV to unlock revenue-per-labor-hour and labor cost % tracking.`);
+    }
+
+    // Sentence 3 — biggest risk
+    if (ot.length > 0) {
+      const topOT = ot[0];
+      sentences.push(`Watch overtime — ${topOT.name} is scheduled for ${topOT.hours}h and will trigger overtime pay if not adjusted before end of week.`);
+    } else if (totalOverage > 3) {
+      const topOver = [...pv].sort((a,b) => b.diff - a.diff)[0];
+      sentences.push(`Punch variance is running high — ${topOver.name} has clocked ${topOver.diff.toFixed(1)}h over their scheduled hours, which will push actual labor costs above estimates.`);
+    } else if (burn?.projectedOver) {
+      sentences.push(`Mid-week pace puts you on track to finish at ${$$(burn.projectedEnd)} — ${$$(burn.overBy)} over budget — unless you trim hours in the back half of the week.`);
+    } else if (af.missedPunches?.length) {
+      sentences.push(`${af.missedPunches.map(m => m.name).join(" and ")} ${af.missedPunches.length === 1 ? "has" : "have"} a shift today with no punch-in recorded — verify attendance.`);
+    } else if (gapDays > 0) {
+      sentences.push(`You have ${gapDays} day${gapDays > 1 ? "s" : ""} without any staff scheduled during posted business hours — review coverage before the week runs out.`);
+    }
+
+    // Sentence 4 — forward look or positive
+    if (score >= 75) {
+      sentences.push(`Overall the schedule looks healthy — focus next week on maintaining coverage on your highest-revenue days.`);
+    } else if (hasSales) {
+      const days = wk.dailyTotals?.filter(d => d.revenuePerLaborHour) || [];
+      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
+      if (worst) {
+        sentences.push(`Your biggest efficiency opportunity is ${worst.day} — consider pulling back staffing there and redirecting hours to higher-revenue days.`);
+      }
+    }
+
+    const pulse = sentences.join(" ");
+
+    // ── Actions (priority-ordered) ────────────────────────────────────────────
+    const actions = [];
+    let priority = 1;
+
+    // 1. Overtime — most urgent
+    ot.forEach(e => {
+      if (priority <= 5) {
+        actions.push({
+          priority: priority++,
+          action: `Reduce ${e.name}'s hours to stay under 40 this week`,
+          why: `At ${e.hours}h scheduled, any additional time will trigger overtime pay — typically 1.5× their hourly rate for every hour over 40.`,
+        });
+      }
+    });
+
+    // 2. Missed punch-in today
+    (af.missedPunches || []).forEach(m => {
+      if (priority <= 5) {
+        actions.push({
+          priority: priority++,
+          action: `Confirm ${m.name} came in and add a manual punch for today`,
+          why: `No clock-in recorded for their ${m.day} shift — payroll and punch variance will be inaccurate without it.`,
+        });
+      }
+    });
+
+    // 3. Budget overrun
+    if (priority <= 5 && budget && (totalPay > budget || burn?.projectedOver)) {
+      const overBy = totalPay > budget ? totalPay - budget : burn?.overBy || 0;
+      actions.push({
+        priority: priority++,
+        action: `Find ${$$(Math.ceil(overBy / 15))}h to cut from the back half of the week`,
+        why: `You're ${$$(overBy)} over budget${burn?.projectedOver ? " on current pace" : ""} — trimming overlap shifts is the fastest fix.`,
+      });
+    }
+
+    // 4. Worst RPLH day — rebalance staffing
+    if (priority <= 5 && hasSales) {
+      const days = (wk.dailyTotals || []).filter(d => d.revenuePerLaborHour && d.totalHours > 0);
+      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
+      const best  = days.reduce((b, d) => (!b || d.revenuePerLaborHour > b.revenuePerLaborHour) ? d : b, null);
+      if (worst && best && worst.day !== best.day && worst.revenuePerLaborHour < rplh * 0.7) {
+        actions.push({
+          priority: priority++,
+          action: `Pull one shift from ${worst.day} and add it to ${best.day}`,
+          why: `${worst.day} earns ${$$(worst.revenuePerLaborHour)}/labor hr vs ${best.day}'s ${$$(best.revenuePerLaborHour)}/hr — a simple swap improves your margin without cutting total hours.`,
+        });
+      }
+    }
+
+    // 5. Coverage gaps
+    if (priority <= 5 && gapDays > 0) {
+      const uncovered = (wk.dailyTotals || []).filter(d => d.staffCount === 0);
+      const dayNames = uncovered.map(d => d.day).join(", ");
+      actions.push({
+        priority: priority++,
+        action: `Schedule at least one person for ${dayNames}`,
+        why: `Business hours show you're open on ${dayNames} but no staff are assigned — you're either losing revenue or working alone.`,
+      });
+    }
+
+    // 6. High punch variance
+    if (priority <= 5 && totalOverage > 4) {
+      const top = [...pv].sort((a,b) => b.diff - a.diff)[0];
+      if (top?.diff > 2) {
+        actions.push({
+          priority: priority++,
+          action: `Talk to ${top.name} about clocking out on time`,
+          why: `They've run ${top.diff.toFixed(1)}h over scheduled hours — at their rate that's roughly ${$$(top.diff * ((wk.employeeBreakdown?.find(e=>e.name===top.name)?.hourlyRate)||0))} in unplanned labor cost.`,
+        });
+      }
+    }
+
+    // 7. No schedule at all
+    if (priority === 1 && totalHrs === 0) {
+      actions.push({
+        priority: 1,
+        action: "Build your schedule for this week to start tracking labor costs",
+        why: "Without shifts, ShiftWise can't calculate budget burn, overtime risk, or revenue efficiency.",
+      });
+    }
+
+    // ── Sections (2-4 most relevant) ─────────────────────────────────────────
+    const sections = [];
+
+    // Labor cost — always
+    sections.push({
+      title: "Labor Cost",
+      icon: "💰",
+      urgency: budget && totalPay > budget ? "high" : burn?.projectedOver ? "medium" : "low",
+      insight: budget
+        ? `Scheduled labor is ${$$(totalPay)} against a ${$$(budget)} budget — ${totalPay > budget ? `${$$(totalPay - budget)} over` : `${$$(budget - totalPay)} of runway remaining`}. ${hasSales && laborPct ? `Labor cost is running at ${laborPct}% of revenue.` : ""} ${burn ? `Mid-week pace projects you to finish at ${$$(burn.projectedEnd)}.` : ""}`
+        : `Estimated labor spend is ${$$(totalPay)} for ${totalHrs} scheduled hours this week across ${staffed} employee${staffed !== 1 ? "s" : ""}. Set a weekly budget in Settings to track variance automatically.`,
+    });
+
+    // Revenue efficiency — if sales data
+    if (hasSales && rplh) {
+      const days = (wk.dailyTotals || []).filter(d => d.revenuePerLaborHour);
+      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
+      sections.push({
+        title: "Revenue Efficiency",
+        icon: "💵",
+        urgency: rplh < 15 ? "high" : rplh < 25 ? "medium" : "low",
+        insight: `You're generating ${$$(rplh)} in revenue per labor hour this week. ${worst ? `${worst.day} is your weakest day at ${$$(worst.revenuePerLaborHour)}/hr` : ""} — ${laborPct ? `your overall labor cost is ${laborPct}% of revenue` : "load Square sales data to track labor cost %"}.`,
+      });
+    }
+
+    // Overtime risk — if anyone >= 36h
+    const nearOTEmps = wk.employeeBreakdown?.filter(e => e.scheduledHours >= 36) || [];
+    if (nearOTEmps.length > 0) {
+      const topEmp = nearOTEmps.sort((a,b) => b.scheduledHours - a.scheduledHours)[0];
+      sections.push({
+        title: "Overtime Risk",
+        icon: "⏱️",
+        urgency: topEmp.scheduledHours > 40 ? "high" : "medium",
+        insight: `${topEmp.name} is scheduled for ${topEmp.scheduledHours}h this week${topEmp.scheduledHours > 40 ? " — already over the 40h threshold" : " — close to the overtime threshold"}. ${ot.length > 0 ? `Reducing their hours by ${(topEmp.scheduledHours - 38).toFixed(1)}h eliminates the risk entirely.` : "Keep an eye on punch-in times to avoid unplanned overtime."}`,
+      });
+    }
+
+    // Attendance patterns — if flags exist
+    const hasAttendance = (af.lateArrivals?.length || 0) + (af.missedPunches?.length || 0) + (af.reliabilityFlags?.length || 0) > 0;
+    if (hasAttendance) {
+      const topFlag = af.reliabilityFlags?.[0];
+      sections.push({
+        title: "Attendance Patterns",
+        icon: "🚩",
+        urgency: af.missedPunches?.length ? "high" : topFlag?.flags30Days >= 7 ? "medium" : "low",
+        insight: `${af.missedPunches?.length ? `${af.missedPunches.map(m=>m.name).join(", ")} missed a punch-in today. ` : ""}${af.lateArrivals?.length ? `${af.lateArrivals.map(a=>`${a.name} (${a.count}×)`).join(", ")} arrived late this period. ` : ""}${topFlag ? `${topFlag.name} has ${topFlag.flags30Days} attendance flags in the last 30 days — worth a quick check-in.` : ""}`,
+      });
+    }
+
+    // Schedule gaps
+    if (gapDays > 0) {
+      const uncovered = (wk.dailyTotals || []).filter(d => d.staffCount === 0).map(d => d.day);
+      sections.push({
+        title: "Schedule Gaps",
+        icon: "📅",
+        urgency: gapDays >= 2 ? "high" : "medium",
+        insight: `${uncovered.join(", ")} ${uncovered.length === 1 ? "has" : "have"} no staff scheduled this week while your posted business hours show you're open. Leaving days uncovered either loses revenue or means you're working solo.`,
+      });
+    }
+
+    // ── Positives ─────────────────────────────────────────────────────────────
+    const positives = [];
+    if (budget && totalPay <= budget && !burn?.projectedOver) {
+      positives.push(`Labor budget on track — ${$$(budget - totalPay)} of runway remaining`);
+    }
+    if (ot.length === 0 && nearOTEmps.length === 0) {
+      positives.push("No overtime risk detected this week");
+    }
+    if (hasSales && rplh >= 25) {
+      positives.push(`Strong revenue efficiency at ${$$(rplh)}/labor hour`);
+    }
+    if (coveredDays >= openDays && openDays > 0) {
+      positives.push(`All ${openDays} open days have staff scheduled`);
+    }
+    if (staffed === empCount && empCount > 0) {
+      positives.push(`Full team scheduled — all ${empCount} employees have shifts this week`);
+    }
+    if (positives.length === 0) {
+      positives.push(`${staffed} employee${staffed !== 1 ? "s" : ""} scheduled and tracked`);
+    }
+
+    // ── Next week focus ───────────────────────────────────────────────────────
+    let nextWeekFocus = "";
+    if (hasSales) {
+      const days = (wk.dailyTotals || []).filter(d => d.revenue && d.totalHours > 0).sort((a,b) => b.revenue - a.revenue);
+      const topDay = days[0];
+      if (topDay) {
+        nextWeekFocus = `Build next week's schedule around ${topDay.day} first — it's your highest-revenue day at ${$$(topDay.revenue)} in sales. Staff decisions there have the biggest margin impact.`;
+      }
+    }
+    if (!nextWeekFocus && ot.length > 0) {
+      nextWeekFocus = `Resolve this week's overtime before building next week's schedule. Redistributing ${ot[0].name}'s hours now will make next week's labor math cleaner.`;
+    }
+    if (!nextWeekFocus && budget) {
+      nextWeekFocus = `Use this week's labor actuals as your baseline for next week's budget. If punch variance ran high, tighten scheduled hours by the same amount to land under budget.`;
+    }
+    if (!nextWeekFocus) {
+      nextWeekFocus = `Add your Square sales data to unlock revenue-per-labor-hour tracking — it's the single most useful number for deciding where to add or cut shifts.`;
+    }
+
+    return { pulse, headline, score: { value: score, label: scoreLabel, reason: scoreReason }, sections: sections.slice(0, 4), actions: actions.slice(0, 5), positives: positives.slice(0, 3), nextWeekFocus };
+  }
+  // ── end computePulse ───────────────────────────────────────────────────────
 
   function importSquareCSV(file) {
     if (!file) return;
