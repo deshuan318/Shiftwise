@@ -322,356 +322,7 @@ const Divider = ({ T }) => (
   <div className="controls-divider" style={{ width:1, background:T.border, alignSelf:"stretch" }} />
 );
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// KIOSK VIEW — standalone clock-in screen at /kiosk
-// Reads employees, schedule, recognition from Supabase anonymously.
-// No auth required — uses anon key with RLS policies for read access.
-// ─────────────────────────────────────────────────────────────────────────────
-function KioskApp() {
-  const [employees,   setEmployees]   = useState([]);
-  const [schedule,    setSchedule]    = useState({});
-  const [weeks,       setWeeks]       = useState([]);
-  const [recognition, setRecognition] = useState([]);
-  const [bizName,     setBizName]     = useState("ShiftWise");
-  const [bizId,       setBizId]       = useState(null);
-  const [loading,     setLoading]     = useState(true);
-
-  // Kiosk state machine
-  const [screen,    setScreen]    = useState("home");   // home | pin | result
-  const [selectedEmp, setSelectedEmp] = useState(null);
-  const [pin,       setPin]       = useState("");
-  const [pinError,  setPinError]  = useState("");
-  const [result,    setResult]    = useState(null);     // { ok, message, action }
-  const [now,       setNow]       = useState(new Date());
-
-  // Clock
-  useEffect(() => {
-    const t = setInterval(() => setNow(new Date()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  // Load data from Supabase
-  useEffect(() => {
-    async function load() {
-      try {
-        const bizRows = await dbGet("businesses?select=*&limit=1");
-        const biz = bizRows?.[0];
-        if (!biz) return;
-        setBizName(biz.name || "ShiftWise");
-        setBizId(biz.id);
-
-        const [empRows, weekRows, recRows] = await Promise.all([
-          dbGet(`employees?select=*&business_id=eq.${biz.id}&order=sort_order.asc`),
-          dbGet(`schedule_weeks?select=*&business_id=eq.${biz.id}&order=week_start.desc&limit=4`),
-          dbGet(`recognition?select=*&business_id=eq.${biz.id}&order=created_at.desc&limit=20`),
-        ]);
-
-        const wks = weekRows || [];
-        const wkIds = wks.map(w => w.id);
-        const shiftRows = wkIds.length
-          ? await dbGet(`shifts?select=*&week_id=in.(${wkIds.join(",")})`)
-          : [];
-
-        const sched = {};
-        for (const row of (shiftRows || [])) {
-          const wk = wks.find(w => w.id === row.week_id);
-          if (!wk) continue;
-          if (!sched[wk.week_start]) sched[wk.week_start] = {};
-          if (!sched[wk.week_start][row.employee_id]) sched[wk.week_start][row.employee_id] = {};
-          sched[wk.week_start][row.employee_id][row.day_index] = {
-            start: parseFloat(row.start_dec),
-            end:   parseFloat(row.end_dec),
-            type:  row.shift_types || ["regular"],
-          };
-        }
-
-        setEmployees((empRows || []).map(e => ({
-          id: e.id, name: e.name, role: e.role,
-          color: e.color, pin: e.pin,
-        })));
-        setSchedule(sched);
-        setWeeks(wks.map(w => w.week_start));
-        setRecognition((recRows || []).map(r => ({
-          id: r.id, fromName: r.from_name, toName: r.to_name,
-          message: r.message, emoji: r.emoji || "⭐",
-        })));
-      } catch(e) {
-        console.error("Kiosk load error:", e);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
-  }, []);
-
-  function getTodayShift(empId) {
-    const todayStr = now.toISOString().split("T")[0];
-    const todayIdx = now.getDay();
-    for (const wkStart of weeks) {
-      const sun = new Date(wkStart + "T00:00:00");
-      const dates = Array.from({length:7}, (_,i) => {
-        const d = new Date(sun); d.setDate(sun.getDate()+i);
-        return d.toISOString().split("T")[0];
-      });
-      if (!dates.includes(todayStr)) continue;
-      const shift = schedule?.[wkStart]?.[empId]?.[todayIdx];
-      if (shift) return { shift, dayIdx: todayIdx };
-    }
-    return null;
-  }
-
-  function getLastPunch(empId) {
-    // We don't keep punches in kiosk memory — just track action via punch type logic
-    return null;
-  }
-
-  async function submitPunch(emp, action) {
-    const nowDec = now.getHours() + now.getMinutes() / 60;
-    const todayData = getTodayShift(emp.id);
-    const flags = [];
-    let message = "";
-
-    if (action === "in") {
-      if (!todayData) {
-        flags.push("NO_SHIFT");
-        message = "No shift scheduled today. Punch recorded.";
-      } else {
-        const { shift } = todayData;
-        const minsEarly = (shift.start - nowDec) * 60;
-        if (minsEarly > 10) {
-          const mins = Math.round(minsEarly);
-          setResult({ ok: false, blocked: true, message: `Too early! Your shift starts at ${fmt(shift.start)}. Try again in ${mins} minute${mins!==1?"s":""}.`, action });
-          return;
-        }
-        if (nowDec > shift.start + 0.25) flags.push("LATE");
-        message = flags.includes("LATE")
-          ? `Clocked in late. Shift started at ${fmt(shift.start)}.`
-          : `Clocked in! Shift: ${fmt(shift.start)} – ${fmt(shift.end)}.`;
-      }
-    } else if (action === "out") {
-      if (todayData) {
-        const { shift } = todayData;
-        if (nowDec < shift.end - 0.25) flags.push("EARLY_OUT");
-      }
-      message = "Clocked out. Have a great day!";
-    } else if (action === "break_out") {
-      message = "Break started. Enjoy!";
-    } else if (action === "break_in") {
-      message = "Welcome back!";
-    }
-
-    try {
-      await dbPost("punches", {
-        business_id:      bizId,
-        employee_id:      emp.id,
-        employee_name:    emp.name,
-        punch_type:       action,
-        punched_at:       now.toISOString(),
-        scheduled_start:  todayData?.shift?.start || null,
-        scheduled_end:    todayData?.shift?.end   || null,
-        flags,
-      });
-    } catch(e) {
-      console.warn("Punch write failed:", e);
-    }
-
-    setResult({ ok: true, message, action, emp, flags });
-    setTimeout(() => {
-      setScreen("home");
-      setSelectedEmp(null);
-      setPin("");
-      setResult(null);
-    }, 3000);
-  }
-
-  function handlePinDigit(d) {
-    const next = pin + d;
-    setPin(next);
-    setPinError("");
-    if (next.length >= 4) checkPin(next);
-  }
-
-  function handlePinDelete() {
-    setPin(p => p.slice(0, -1));
-    setPinError("");
-  }
-
-  function checkPin(p) {
-    if (p === selectedEmp?.pin) {
-      setScreen("action");
-    } else {
-      setPinError("Incorrect PIN");
-      setPin("");
-    }
-  }
-
-  const timeStr = now.toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit", second:"2-digit" });
-  const dateStr = now.toLocaleDateString("en-US", { weekday:"long", month:"long", day:"numeric" });
-
-  if (loading) return (
-    <div style={{minHeight:"100vh",background:"#0A0F0A",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
-      <div style={{width:40,height:40,border:"3px solid #2D6A4F44",borderTopColor:"#2D6A4F",borderRadius:"50%",animation:"spin 0.9s linear infinite"}}/>
-      <div style={{color:"#666",fontSize:14}}>Loading kiosk…</div>
-      <style>{"@keyframes spin{to{transform:rotate(360deg)}}"}</style>
-    </div>
-  );
-
-  // ── RESULT SCREEN ──────────────────────────────────────────────────────────
-  if (result) {
-    const bg = result.blocked ? "#1a0a0a" : result.ok ? "#0a1a0f" : "#1a0a0a";
-    const color = result.blocked ? "#E8A93A" : result.ok ? "#4CAF7D" : "#C0392B";
-    const icon = result.blocked ? "⏰" : result.ok ? (result.action==="in"?"✅":result.action==="out"?"👋":result.action==="break_out"?"☕":"👋") : "❌";
-    return (
-      <div style={{minHeight:"100vh",background:bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:24,padding:40}}>
-        <div style={{fontSize:80}}>{icon}</div>
-        <div style={{fontSize:28,fontWeight:900,color,textAlign:"center",lineHeight:1.3}}>{result.emp?.name}</div>
-        <div style={{fontSize:18,color:"#ccc",textAlign:"center",maxWidth:400,lineHeight:1.6}}>{result.message}</div>
-        {result.flags?.includes("LATE") && <div style={{background:"#E8A93A22",border:"1px solid #E8A93A44",borderRadius:10,padding:"10px 20px",color:"#E8A93A",fontSize:14,fontWeight:700}}>⚠ Late arrival flagged for review</div>}
-        {result.flags?.includes("NO_SHIFT") && <div style={{background:"#C0392B22",border:"1px solid #C0392B44",borderRadius:10,padding:"10px 20px",color:"#C0392B",fontSize:14,fontWeight:700}}>⚠ No shift scheduled — flagged for review</div>}
-        <div style={{color:"#444",fontSize:13,marginTop:8}}>Returning to home screen…</div>
-      </div>
-    );
-  }
-
-  // ── ACTION SCREEN ──────────────────────────────────────────────────────────
-  if (screen === "action" && selectedEmp) {
-    const todayData = getTodayShift(selectedEmp.id);
-    return (
-      <div style={{minHeight:"100vh",background:"#0D1A12",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:24,padding:40}}>
-        <div style={{width:80,height:80,borderRadius:"50%",background:selectedEmp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:36}}>
-          {selectedEmp.name?.[0]?.toUpperCase()}
-        </div>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontSize:28,fontWeight:900,color:"white"}}>{selectedEmp.name}</div>
-          {todayData && <div style={{fontSize:16,color:"#4CAF7D",marginTop:4}}>Shift: {fmt(todayData.shift.start)} – {fmt(todayData.shift.end)}</div>}
-          {!todayData && <div style={{fontSize:14,color:"#666",marginTop:4}}>No shift scheduled today</div>}
-        </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,width:"100%",maxWidth:480}}>
-          {[
-            { label:"Clock In",    action:"in",        bg:"#2D6A4F", icon:"✅" },
-            { label:"Clock Out",   action:"out",       bg:"#C0392B", icon:"👋" },
-            { label:"Start Break", action:"break_out", bg:"#E8A93A", icon:"☕" },
-            { label:"End Break",   action:"break_in",  bg:"#3A9BE8", icon:"▶️" },
-          ].map(btn => (
-            <button key={btn.action} onClick={() => submitPunch(selectedEmp, btn.action)}
-              style={{background:btn.bg,color:"white",border:"none",borderRadius:16,padding:"28px 0",fontSize:18,fontWeight:800,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:8,transition:"opacity 0.15s"}}>
-              <span style={{fontSize:32}}>{btn.icon}</span>
-              {btn.label}
-            </button>
-          ))}
-        </div>
-        <button onClick={() => { setScreen("home"); setSelectedEmp(null); setPin(""); }}
-          style={{background:"transparent",color:"#666",border:"1px solid #333",borderRadius:10,padding:"10px 24px",fontSize:14,cursor:"pointer",marginTop:8}}>
-          ← Back
-        </button>
-      </div>
-    );
-  }
-
-  // ── PIN SCREEN ─────────────────────────────────────────────────────────────
-  if (screen === "pin" && selectedEmp) {
-    return (
-      <div style={{minHeight:"100vh",background:"#0D1A12",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:24,padding:40}}>
-        <div style={{width:64,height:64,borderRadius:"50%",background:selectedEmp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:28}}>
-          {selectedEmp.name?.[0]?.toUpperCase()}
-        </div>
-        <div style={{textAlign:"center"}}>
-          <div style={{fontSize:22,fontWeight:800,color:"white"}}>{selectedEmp.name}</div>
-          <div style={{fontSize:14,color:"#666",marginTop:4}}>Enter your PIN</div>
-        </div>
-        <div style={{display:"flex",gap:12,margin:"8px 0"}}>
-          {[0,1,2,3].map(i => (
-            <div key={i} style={{width:16,height:16,borderRadius:"50%",background:i < pin.length ? "#2D6A4F" : "#2A2A2A",border:"2px solid",borderColor:i < pin.length ? "#2D6A4F" : "#3A3A3A",transition:"all 0.15s"}}/>
-          ))}
-        </div>
-        {pinError && <div style={{color:"#C0392B",fontSize:14,fontWeight:700}}>{pinError}</div>}
-        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,width:"100%",maxWidth:320}}>
-          {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((d,i) => (
-            <button key={i} onClick={() => d === "⌫" ? handlePinDelete() : d !== "" ? handlePinDigit(String(d)) : null}
-              style={{background:d==="⌫"?"#2A2A2A":"#1A2A20",color:d==="⌫"?"#E8A93A":"white",border:"1px solid #2A3A2A",borderRadius:14,padding:"22px 0",fontSize:24,fontWeight:700,cursor:d===""?"default":"pointer",opacity:d===""?0:1,transition:"background 0.1s"}}>
-              {d}
-            </button>
-          ))}
-        </div>
-        <button onClick={() => { setScreen("home"); setSelectedEmp(null); setPin(""); setPinError(""); }}
-          style={{background:"transparent",color:"#666",border:"1px solid #333",borderRadius:10,padding:"10px 24px",fontSize:14,cursor:"pointer"}}>
-          ← Back
-        </button>
-      </div>
-    );
-  }
-
-  // ── HOME SCREEN ────────────────────────────────────────────────────────────
-  return (
-    <div style={{minHeight:"100vh",background:"#0A0F0A",display:"flex",flexDirection:"column"}}>
-      {/* Header */}
-      <div style={{padding:"28px 40px 20px",textAlign:"center",borderBottom:"1px solid #1A1A1A"}}>
-        <div style={{fontSize:13,color:"#2D6A4F",fontWeight:700,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:8}}>📅 {bizName}</div>
-        <div style={{fontSize:52,fontWeight:900,color:"white",fontVariantNumeric:"tabular-nums",letterSpacing:"-0.02em"}}>{timeStr}</div>
-        <div style={{fontSize:16,color:"#666",marginTop:6}}>{dateStr}</div>
-      </div>
-
-      {/* Recognition ticker */}
-      {recognition.length > 0 && (
-        <div style={{background:"#0D1A0D",borderBottom:"1px solid #1A2A1A",padding:"10px 0",overflow:"hidden"}}>
-          <div className="ticker-wrap">
-            <div className="ticker-track">
-              {[...recognition,...recognition].map((r,i) => (
-                <span key={i} style={{marginRight:60,color:"#4CAF7D",fontSize:13,fontWeight:600}}>
-                  {r.emoji} {r.fromName}{r.toName ? ` → ${r.toName}` : ""}: {r.message}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Employee grid */}
-      <div style={{flex:1,padding:"32px 40px",overflowY:"auto"}}>
-        <div style={{fontSize:13,color:"#666",fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:20,textAlign:"center"}}>
-          Tap your name to clock in or out
-        </div>
-        {employees.length === 0 ? (
-          <div style={{textAlign:"center",color:"#444",fontSize:16,marginTop:40}}>No employees found. Add employees in ShiftWise first.</div>
-        ) : (
-          <div style={{display:"flex",flexWrap:"wrap",gap:16,justifyContent:"center",maxWidth:960,margin:"0 auto"}}>
-            {employees.map(emp => {
-              const todayData = getTodayShift(emp.id);
-              return (
-                <button key={emp.id} onClick={() => { setSelectedEmp(emp); setPin(""); setPinError(""); setScreen("pin"); }}
-                  style={{background:"#111",border:`2px solid ${emp.color}44`,borderRadius:20,padding:"28px 20px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:10,transition:"all 0.15s",width:150,flexShrink:0}}>
-                  <div style={{width:64,height:64,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:28}}>
-                    {emp.name?.[0]?.toUpperCase() || "?"}
-                  </div>
-                  <div style={{color:"white",fontWeight:700,fontSize:15,textAlign:"center"}}>{emp.name}</div>
-                  {todayData && (
-                    <div style={{background:"#2D6A4F22",border:"1px solid #2D6A4F44",borderRadius:8,padding:"4px 10px",fontSize:11,color:"#4CAF7D",fontWeight:700}}>
-                      {fmt(todayData.shift.start)}–{fmt(todayData.shift.end)}
-                    </div>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <style>{`
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .ticker-wrap { overflow: hidden; width: 100%; }
-        .ticker-track { display: inline-block; white-space: nowrap; animation: ticker 30s linear infinite; }
-        .ticker-track:hover { animation-play-state: paused; }
-        @keyframes ticker { 0% { transform: translateX(100vw); } 100% { transform: translateX(-100%); } }
-      `}</style>
-    </div>
-  );
-}
-
 export default function App() {
-  // ── Kiosk route check ────────────────────────────────────────────────────
-  if (window.location.pathname === "/kiosk") return <KioskApp />;
-
   const defaultSun = useMemo(() => getSunday(new Date().toISOString().split("T")[0]), []);
 
   // ── Auth state ────────────────────────────────────────────────────────────
@@ -771,8 +422,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const [insight,        setInsight]        = useState(null);
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightError,   setInsightError]   = useState(null);
-  const [pulsePrefs,     setPulsePrefs]     = useState({ freq:"login", day:"thursday" });
-  const [showPulsePrefs, setShowPulsePrefs] = useState(false);
 
   const printRef = useRef();
 
@@ -888,14 +537,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       wks.forEach(w => { newWeekMap[w.week_start] = w.id; });
       setWeekMap(newWeekMap);
 
-      // 5. Set week dates - restore last viewed week, fall back to current week
+      // 5. Set week dates - always default to current week, single-week mode
       {
         const todaySun = getSunday(new Date().toISOString().split("T")[0]);
-        const savedWeek = (() => { try { return localStorage.getItem("sw_active_week") || null; } catch { return null; } })();
-        const startWeek = savedWeek || todaySun;
-        setWk1Start(startWeek);
-        setActiveWeek(startWeek);
-        setPrintWeek(startWeek);
+        setWk1Start(todaySun);
+        setActiveWeek(todaySun);
+        setPrintWeek(todaySun);
         setWeekMode("1");
       }
 
@@ -992,7 +639,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   function buildBusinessSnapshot() {
     const today = new Date();
     const todayStr = today.toISOString().split("T")[0];
-    const todayDayIdx = today.getDay(); // 0=Sun
 
     // Build per-week summaries
     const weekSummaries = weeks.map(wk => {
@@ -1044,22 +690,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const totalRevenue = wkSales.reduce((s, d) => s + d.revenue, 0);
       const laborPct = totalRevenue > 0 ? (totalPay / totalRevenue) * 100 : null;
 
-      // Day-level staffing + revenue-per-labor-hour
+      // Day-level staffing density
       const dailyTotals = DAYS.map((day, di) => {
         const staffCount = employees.filter(e => schedule?.[wk.key]?.[e.id]?.[di]).length;
         const dayHours = employees.reduce((s, e) => s + shiftHrs(schedule?.[wk.key]?.[e.id]?.[di] || null), 0);
         const sale = wkSales.find(s => s.date === wkDates[di]);
-        const dayRevenue = sale?.revenue || null;
-        const rplh = dayRevenue && dayHours > 0 ? parseFloat((dayRevenue / dayHours).toFixed(2)) : null;
-        const dayLaborPct = dayRevenue && dayHours > 0
-          ? parseFloat(((dayHours * (totalPay / (totalHours || 1)) / dayRevenue) * 100).toFixed(1))
-          : null;
-        return { day, date: wkDates[di], staffCount, totalHours: dayHours, revenue: dayRevenue, revenuePerLaborHour: rplh, laborPct: dayLaborPct };
+        return { day, date: wkDates[di], staffCount, totalHours: dayHours, revenue: sale?.revenue || null };
       });
-
-      // Revenue per labor hour for the week
-      const revenuePerLaborHour = totalRevenue > 0 && totalHours > 0
-        ? parseFloat((totalRevenue / totalHours).toFixed(2)) : null;
 
       return {
         label: wk.label,
@@ -1069,7 +706,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         totalEstimatedPay: parseFloat(totalPay.toFixed(2)),
         totalRevenue: totalRevenue > 0 ? parseFloat(totalRevenue.toFixed(2)) : null,
         laborCostPct: laborPct !== null ? parseFloat(laborPct.toFixed(1)) : null,
-        revenuePerLaborHour,
         staffScheduled: staffed,
         totalStaff: employees.length,
         budget: parseFloat(weeklyBudget) || null,
@@ -1079,103 +715,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       };
     });
 
-    // ── Mid-week budget burn projection ──────────────────────────────────────
-    const activeWkSummary = weekSummaries.find(w => w.startDate === activeWeek) || weekSummaries[0];
-    const budget = parseFloat(weeklyBudget) || null;
-    let budgetBurn = null;
-    if (budget && activeWkSummary) {
-      // Actual hours punched this week so far
-      const activeWkDates = weeks.find(w => w.key === activeWeek)?.dates.map(d => {
-        const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
-        return dt.toISOString().split("T")[0];
-      }) || [];
-      const datesThrough = activeWkDates.filter(d => d <= todayStr);
-      const daysComplete = datesThrough.length;
-      const daysLeft = 7 - daysComplete;
-      const spentEstimate = daysComplete > 0 && activeWkSummary.totalScheduledHours > 0
-        ? parseFloat(((daysComplete / 7) * activeWkSummary.totalEstimatedPay).toFixed(2))
-        : 0;
-      const projectedEnd = daysComplete > 0
-        ? parseFloat(((spentEstimate / daysComplete) * 7).toFixed(2))
-        : activeWkSummary.totalEstimatedPay;
-      budgetBurn = {
-        spent: spentEstimate,
-        total: budget,
-        dayOfWeek: today.toLocaleDateString("en-US", { weekday: "long" }),
-        daysComplete,
-        daysLeft,
-        projectedEnd,
-        projectedOver: projectedEnd > budget,
-        overBy: projectedEnd > budget ? parseFloat((projectedEnd - budget).toFixed(2)) : 0,
-        paceNote: projectedEnd > budget
-          ? `At current pace you'll land $${(projectedEnd - budget).toFixed(0)} over budget — one fewer overlap shift may close the gap.`
-          : `On pace to finish $${(budget - projectedEnd).toFixed(0)} under budget.`,
-      };
-    }
-
-    // ── Punch variance — scheduled vs actual per employee ────────────────────
-    const punchVariance = employees.map(emp => {
-      const empPunches = punches.filter(p => p.empId === emp.id);
-      // Pair IN/OUT to get actual hours
-      let actualHours = 0;
-      const ins = empPunches.filter(p => p.type === "IN");
-      ins.forEach(inP => {
-        const outP = empPunches.find(p => p.type === "OUT" && new Date(p.time) > new Date(inP.time));
-        if (outP) {
-          const hrs = (new Date(outP.time) - new Date(inP.time)) / 3600000;
-          actualHours += hrs;
-        }
-      });
-      const scheduledHours = activeWkSummary?.employeeBreakdown.find(e => e.name === emp.name)?.scheduledHours || 0;
-      const diff = parseFloat((actualHours - scheduledHours).toFixed(2));
-      return {
-        name: emp.name || "Unnamed",
-        initials: (emp.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0,2),
-        scheduledHours: parseFloat(scheduledHours.toFixed(2)),
-        actualHours: parseFloat(actualHours.toFixed(2)),
-        diff,
-      };
-    }).filter(e => e.scheduledHours > 0 || e.actualHours > 0);
-
-    // ── Attendance flags ─────────────────────────────────────────────────────
-    const thirtyDaysAgo = new Date(today); thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const recentPunches = punches.filter(p => new Date(p.time) >= thirtyDaysAgo);
-
-    const lateArrivals = employees.map(emp => {
-      const late = recentPunches.filter(p => p.empId === emp.id && p.flags?.includes("LATE"));
-      if (!late.length) return null;
-      return {
-        name: emp.name || "Unnamed",
-        initials: (emp.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0,2),
-        count: late.length,
-      };
-    }).filter(Boolean);
-
-    const missedPunches = employees.map(emp => {
-      // Shifts today with no IN punch
-      const todayShift = schedule?.[activeWeek]?.[emp.id]?.[todayDayIdx];
-      if (!todayShift) return null;
-      const hasPunch = punches.some(p => p.empId === emp.id && p.type === "IN" && p.time.startsWith(todayStr));
-      if (hasPunch) return null;
-      const shiftStart = new Date(todayStr + "T00:00:00");
-      shiftStart.setHours(Math.floor(todayShift.start), Math.round((todayShift.start % 1) * 60));
-      if (today < shiftStart) return null; // shift hasn't started yet
-      return {
-        name: emp.name || "Unnamed",
-        initials: (emp.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0,2),
-        day: today.toLocaleDateString("en-US", { weekday: "long" }),
-        type: "No punch-in recorded",
-      };
-    }).filter(Boolean);
-
-    const reliabilityFlags = employees.map(emp => {
-      const flags = recentPunches.filter(p => p.empId === emp.id && p.flags?.length > 0).length;
-      return {
-        name: emp.name || "Unnamed",
-        initials: (emp.name || "?").split(" ").map(w => w[0]).join("").toUpperCase().slice(0,2),
-        flags30Days: flags,
-      };
-    }).filter(e => e.flags30Days > 0).sort((a,b) => b.flags30Days - a.flags30Days);
+    // Recent punch flags
+    const recentFlags = punches
+      .filter(p => p.flags && p.flags.length > 0)
+      .slice(-20)
+      .map(p => ({ employee: p.empName, type: p.type, flags: p.flags, time: p.time }));
 
     // Overtime employees
     const overtimeAlerts = employees
@@ -1183,24 +727,22 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       .map(e => ({ name: e.name, hours: Math.max(...weeks.map(w => eWkH(w.key, e.id))) }));
 
     return {
+      // ── swap this section for Supabase queries ──
       businessName: biz,
       businessHours: Object.entries(businessHours).reduce((acc,[di,h])=>({...acc,[DAYS[parseInt(di)]]:h}),{}),
       today: todayStr,
       dayOfWeek: today.toLocaleDateString("en-US", { weekday: "long" }),
       totalEmployees: employees.length,
-      weeklyBudget: budget,
+      weeklyBudget: parseFloat(weeklyBudget) || null,
       hasSalesData: salesData.length > 0,
       salesDateRange: salesData.length > 0
         ? { from: salesData[0].date, to: salesData[salesData.length - 1].date }
         : null,
       weeks: weekSummaries,
-      budgetBurn,
-      punchVariance,
-      attendanceFlags: { lateArrivals, missedPunches, reliabilityFlags },
       overtimeAlerts,
-      recentPunchFlags: punches.filter(p => p.flags?.length > 0).slice(-20)
-        .map(p => ({ employee: p.empName, type: p.type, flags: p.flags, time: p.time })),
+      recentPunchFlags: recentFlags,
       publishedSchedulesCount: published.length,
+      // ─────────────────────────────────────────────
     };
   }
 
@@ -1208,361 +750,80 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // AI INSIGHT GENERATOR — calls Claude with the business snapshot.
   // The prompt and API call are data-source agnostic.
   // ─────────────────────────────────────────────────────────────────────────
-  function generateInsight() {
+  async function generateInsight() {
     if (insightLoading) return;
     setInsightLoading(true);
     setInsightError(null);
 
-    // Small delay so the loading skeleton renders before heavy computation
-    setTimeout(() => {
-      try {
-        const snapshot = buildBusinessSnapshot();
-        const result   = computePulse(snapshot);
-        setInsight({ ...result, generatedAt: new Date().toISOString(), snapshot });
-      } catch (err) {
-        setInsightError("Could not generate insights right now. Check your data and try again.");
-        console.error("Pulse engine error:", err);
-      } finally {
-        setInsightLoading(false);
-      }
-    }, 600);
+    const snapshot = buildBusinessSnapshot();
+
+    const prompt = `You are a sharp, concise business operations advisor for a small business owner-operator named ${snapshot.businessName || "the owner"}. 
+They manage hourly staff (cafes, retail, service businesses) and handle everything themselves — scheduling, payroll, HR, operations.
+
+Today is ${snapshot.dayOfWeek}, ${snapshot.today}.
+
+Here is a complete snapshot of their current business data:
+${JSON.stringify(snapshot, null, 2)}
+
+Analyze this data and respond ONLY with a JSON object in exactly this structure (no markdown, no preamble):
+{
+  "headline": "One punchy sentence summarizing the most important thing they need to know right now (max 12 words)",
+  "score": {
+    "value": <number 1-100 representing overall scheduling health>,
+    "label": "<one word: Healthy | Caution | Warning | Critical>",
+    "reason": "<one sentence explaining the score>"
+  },
+  "sections": [
+    {
+      "title": "<section title>",
+      "icon": "<single emoji>",
+      "insight": "<2-3 sentences of plain-English analysis specific to their actual data>",
+      "urgency": "<low|medium|high>"
+    }
+  ],
+  "actions": [
+    {
+      "priority": <1-5, 1=most urgent>,
+      "action": "<specific thing they should do, phrased as a direct instruction>",
+      "why": "<one sentence explaining the business impact>"
+    }
+  ],
+  "positives": ["<one thing going well>", "<another thing going well>"],
+  "nextWeekFocus": "<one forward-looking recommendation for next week's scheduling>"
+}
+
+Rules:
+- Every insight must reference their ACTUAL data (real names, real numbers, real dates). Never give generic advice.
+- If they have no employees or no schedule yet, your sections and actions should guide them on getting started.
+- If they have no sales data, note this as an opportunity but don't make it the main focus.
+- Actions should be specific and immediately actionable, not vague.
+- Keep total response under 800 tokens.
+- Sections: include 2-4 most relevant from: Labor Cost, Staffing Coverage, Overtime Risk, Budget Tracking, Attendance Flags, Schedule Gaps, Team Availability.`;
+
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+
+      const data = await response.json();
+      const raw = data.content?.map(b => b.text || "").join("") || "";
+      const clean = raw.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(clean);
+
+      setInsight({ ...parsed, generatedAt: new Date().toISOString(), snapshot });
+    } catch (err) {
+      setInsightError("Could not generate insights right now. Check your data and try again.");
+      console.error("AI insight error:", err);
+    } finally {
+      setInsightLoading(false);
+    }
   }
-
-  // ── Deterministic Pulse engine ─────────────────────────────────────────────
-  // Reads the snapshot produced by buildBusinessSnapshot() and returns the
-  // same JSON shape that the Claude API used to return — so the UI is unchanged.
-  function computePulse(snap) {
-    const wk      = snap.weeks?.[0] || {};
-    const burn    = snap.budgetBurn;
-    const pv      = snap.punchVariance || [];
-    const af      = snap.attendanceFlags || {};
-    const ot      = snap.overtimeAlerts || [];
-    const budget  = snap.weeklyBudget;
-    const hasSales = snap.hasSalesData && wk.totalRevenue > 0;
-    const rplh    = wk.revenuePerLaborHour;
-    const laborPct = wk.laborCostPct;
-    const totalPay = wk.totalEstimatedPay || 0;
-    const totalHrs = wk.totalScheduledHours || 0;
-    const staffed  = wk.staffScheduled || 0;
-    const empCount = snap.totalEmployees || 0;
-    const bizName  = snap.businessName || "your business";
-
-    // ── helper: $ formatter ──
-    const $$ = n => `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-
-    // ── Score calculation (0-100) ────────────────────────────────────────────
-    let score = 100;
-    const scorePenalties = [];
-
-    // Overtime
-    if (ot.length > 0) {
-      score -= 20;
-      scorePenalties.push(`${ot.length} employee${ot.length > 1 ? "s" : ""} over 40h`);
-    } else {
-      const nearOT = wk.employeeBreakdown?.filter(e => e.scheduledHours >= 36 && e.scheduledHours <= 40) || [];
-      if (nearOT.length) { score -= 8; scorePenalties.push("near overtime risk"); }
-    }
-
-    // Budget
-    if (budget) {
-      if (totalPay > budget) { score -= 15; scorePenalties.push("over budget"); }
-      else if (burn?.projectedOver) { score -= 10; scorePenalties.push("projected over budget"); }
-    }
-
-    // Punch variance — total absolute overage
-    const totalOverage = pv.reduce((s, e) => s + Math.max(0, e.diff), 0);
-    if (totalOverage > 8) { score -= 12; scorePenalties.push(`${totalOverage.toFixed(1)}h punch overage`); }
-    else if (totalOverage > 4) { score -= 6; }
-
-    // Missed punches
-    if (af.missedPunches?.length) { score -= 10; scorePenalties.push("missed punch-in today"); }
-
-    // Attendance flags
-    const topFlagCount = af.reliabilityFlags?.[0]?.flags30Days || 0;
-    if (topFlagCount >= 7) { score -= 8; scorePenalties.push("attendance reliability concern"); }
-    else if (topFlagCount >= 4) { score -= 4; }
-
-    // Coverage gaps — days with no staff but business is open
-    const openDays = Object.values(snap.businessHours || {}).filter(h => h?.isOpen !== false).length;
-    const coveredDays = wk.dailyTotals?.filter(d => d.staffCount > 0).length || 0;
-    const gapDays = Math.max(0, openDays - coveredDays);
-    if (gapDays > 0) { score -= gapDays * 5; scorePenalties.push(`${gapDays} uncovered day${gapDays > 1 ? "s" : ""}`); }
-
-    // No sales data — minor deduction (can't measure efficiency)
-    if (!hasSales) score -= 3;
-
-    score = Math.max(0, Math.min(100, Math.round(score)));
-    const scoreLabel  = score >= 75 ? "Healthy" : score >= 50 ? "Caution" : score >= 30 ? "Warning" : "Critical";
-    const scoreReason = scorePenalties.length
-      ? `Key concerns: ${scorePenalties.slice(0,2).join(" and ")}.`
-      : "Schedule looks solid with no major issues detected.";
-
-    // ── Headline ─────────────────────────────────────────────────────────────
-    let headline = "";
-    if (ot.length > 0) {
-      headline = `${ot[0].name} is headed for overtime — act before it posts`;
-    } else if (burn?.projectedOver) {
-      headline = `On pace to run ${$$( burn.overBy)} over budget this week`;
-    } else if (budget && totalPay > budget) {
-      headline = `Labor spend is ${$$(totalPay - budget)} over your weekly budget`;
-    } else if (af.missedPunches?.length) {
-      headline = `${af.missedPunches[0].name} has no punch-in recorded today`;
-    } else if (hasSales && rplh) {
-      headline = score >= 75
-        ? `Strong week — earning ${$$(rplh)} per labor hour`
-        : `Earning ${$$(rplh)}/labor hr — check your lowest-revenue days`;
-    } else if (gapDays > 0) {
-      headline = `${gapDays} open day${gapDays > 1 ? "s" : ""} with no staff scheduled`;
-    } else if (totalHrs === 0) {
-      headline = "No shifts scheduled yet — build your schedule to get insights";
-    } else {
-      headline = `${staffed} of ${empCount} employees scheduled — ${totalHrs}h total labor this week`;
-    }
-
-    // ── Pulse narrative (3-4 sentences) ──────────────────────────────────────
-    const sentences = [];
-
-    // Sentence 1 — labor cost / budget
-    if (budget) {
-      const runway = budget - totalPay;
-      if (totalPay > budget) {
-        sentences.push(`This week's scheduled labor is ${$$(totalPay)}, which is ${$$(Math.abs(runway))} over your ${$$(budget)} budget.`);
-      } else {
-        sentences.push(`This week's scheduled labor is ${$$(totalPay)} against a ${$$(budget)} budget, leaving ${$$(runway)} of runway.`);
-      }
-    } else if (totalHrs > 0) {
-      sentences.push(`You have ${totalHrs}h of scheduled labor this week across ${staffed} employee${staffed !== 1 ? "s" : ""}, estimated at ${$$(totalPay)}.`);
-    } else {
-      sentences.push(`No shifts are scheduled yet for ${bizName} this week.`);
-    }
-
-    // Sentence 2 — revenue efficiency or sales prompt
-    if (hasSales && rplh) {
-      const days = wk.dailyTotals?.filter(d => d.revenuePerLaborHour) || [];
-      const best  = days.reduce((b, d) => (!b || d.revenuePerLaborHour > b.revenuePerLaborHour) ? d : b, null);
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
-      if (best && worst && best.day !== worst.day) {
-        sentences.push(`You're earning ${$$(rplh)} per labor hour on average — ${best.day} leads at ${$$(best.revenuePerLaborHour)}/hr while ${worst.day} lags at ${$$(worst.revenuePerLaborHour)}/hr.`);
-      } else {
-        sentences.push(`With ${$$(wk.totalRevenue)} in sales, you're earning ${$$(rplh)} per labor hour${laborPct ? ` and running a ${laborPct}% labor cost` : ""}.`);
-      }
-    } else if (!hasSales) {
-      sentences.push(`No sales data is loaded yet — import your Square CSV to unlock revenue-per-labor-hour and labor cost % tracking.`);
-    }
-
-    // Sentence 3 — biggest risk
-    if (ot.length > 0) {
-      const topOT = ot[0];
-      sentences.push(`Watch overtime — ${topOT.name} is scheduled for ${topOT.hours}h and will trigger overtime pay if not adjusted before end of week.`);
-    } else if (totalOverage > 3) {
-      const topOver = [...pv].sort((a,b) => b.diff - a.diff)[0];
-      sentences.push(`Punch variance is running high — ${topOver.name} has clocked ${topOver.diff.toFixed(1)}h over their scheduled hours, which will push actual labor costs above estimates.`);
-    } else if (burn?.projectedOver) {
-      sentences.push(`Mid-week pace puts you on track to finish at ${$$(burn.projectedEnd)} — ${$$(burn.overBy)} over budget — unless you trim hours in the back half of the week.`);
-    } else if (af.missedPunches?.length) {
-      sentences.push(`${af.missedPunches.map(m => m.name).join(" and ")} ${af.missedPunches.length === 1 ? "has" : "have"} a shift today with no punch-in recorded — verify attendance.`);
-    } else if (gapDays > 0) {
-      sentences.push(`You have ${gapDays} day${gapDays > 1 ? "s" : ""} without any staff scheduled during posted business hours — review coverage before the week runs out.`);
-    }
-
-    // Sentence 4 — forward look or positive
-    if (score >= 75) {
-      sentences.push(`Overall the schedule looks healthy — focus next week on maintaining coverage on your highest-revenue days.`);
-    } else if (hasSales) {
-      const days = wk.dailyTotals?.filter(d => d.revenuePerLaborHour) || [];
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
-      if (worst) {
-        sentences.push(`Your biggest efficiency opportunity is ${worst.day} — consider pulling back staffing there and redirecting hours to higher-revenue days.`);
-      }
-    }
-
-    const pulse = sentences.join(" ");
-
-    // ── Actions (priority-ordered) ────────────────────────────────────────────
-    const actions = [];
-    let priority = 1;
-
-    // 1. Overtime — most urgent
-    ot.forEach(e => {
-      if (priority <= 5) {
-        actions.push({
-          priority: priority++,
-          action: `Reduce ${e.name}'s hours to stay under 40 this week`,
-          why: `At ${e.hours}h scheduled, any additional time will trigger overtime pay — typically 1.5× their hourly rate for every hour over 40.`,
-        });
-      }
-    });
-
-    // 2. Missed punch-in today
-    (af.missedPunches || []).forEach(m => {
-      if (priority <= 5) {
-        actions.push({
-          priority: priority++,
-          action: `Confirm ${m.name} came in and add a manual punch for today`,
-          why: `No clock-in recorded for their ${m.day} shift — payroll and punch variance will be inaccurate without it.`,
-        });
-      }
-    });
-
-    // 3. Budget overrun
-    if (priority <= 5 && budget && (totalPay > budget || burn?.projectedOver)) {
-      const overBy = totalPay > budget ? totalPay - budget : burn?.overBy || 0;
-      actions.push({
-        priority: priority++,
-        action: `Find ${$$(Math.ceil(overBy / 15))}h to cut from the back half of the week`,
-        why: `You're ${$$(overBy)} over budget${burn?.projectedOver ? " on current pace" : ""} — trimming overlap shifts is the fastest fix.`,
-      });
-    }
-
-    // 4. Worst RPLH day — rebalance staffing
-    if (priority <= 5 && hasSales) {
-      const days = (wk.dailyTotals || []).filter(d => d.revenuePerLaborHour && d.totalHours > 0);
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
-      const best  = days.reduce((b, d) => (!b || d.revenuePerLaborHour > b.revenuePerLaborHour) ? d : b, null);
-      if (worst && best && worst.day !== best.day && worst.revenuePerLaborHour < rplh * 0.7) {
-        actions.push({
-          priority: priority++,
-          action: `Pull one shift from ${worst.day} and add it to ${best.day}`,
-          why: `${worst.day} earns ${$$(worst.revenuePerLaborHour)}/labor hr vs ${best.day}'s ${$$(best.revenuePerLaborHour)}/hr — a simple swap improves your margin without cutting total hours.`,
-        });
-      }
-    }
-
-    // 5. Coverage gaps
-    if (priority <= 5 && gapDays > 0) {
-      const uncovered = (wk.dailyTotals || []).filter(d => d.staffCount === 0);
-      const dayNames = uncovered.map(d => d.day).join(", ");
-      actions.push({
-        priority: priority++,
-        action: `Schedule at least one person for ${dayNames}`,
-        why: `Business hours show you're open on ${dayNames} but no staff are assigned — you're either losing revenue or working alone.`,
-      });
-    }
-
-    // 6. High punch variance
-    if (priority <= 5 && totalOverage > 4) {
-      const top = [...pv].sort((a,b) => b.diff - a.diff)[0];
-      if (top?.diff > 2) {
-        actions.push({
-          priority: priority++,
-          action: `Talk to ${top.name} about clocking out on time`,
-          why: `They've run ${top.diff.toFixed(1)}h over scheduled hours — at their rate that's roughly ${$$(top.diff * ((wk.employeeBreakdown?.find(e=>e.name===top.name)?.hourlyRate)||0))} in unplanned labor cost.`,
-        });
-      }
-    }
-
-    // 7. No schedule at all
-    if (priority === 1 && totalHrs === 0) {
-      actions.push({
-        priority: 1,
-        action: "Build your schedule for this week to start tracking labor costs",
-        why: "Without shifts, ShiftWise can't calculate budget burn, overtime risk, or revenue efficiency.",
-      });
-    }
-
-    // ── Sections (2-4 most relevant) ─────────────────────────────────────────
-    const sections = [];
-
-    // Labor cost — always
-    sections.push({
-      title: "Labor Cost",
-      icon: "💰",
-      urgency: budget && totalPay > budget ? "high" : burn?.projectedOver ? "medium" : "low",
-      insight: budget
-        ? `Scheduled labor is ${$$(totalPay)} against a ${$$(budget)} budget — ${totalPay > budget ? `${$$(totalPay - budget)} over` : `${$$(budget - totalPay)} of runway remaining`}. ${hasSales && laborPct ? `Labor cost is running at ${laborPct}% of revenue.` : ""} ${burn ? `Mid-week pace projects you to finish at ${$$(burn.projectedEnd)}.` : ""}`
-        : `Estimated labor spend is ${$$(totalPay)} for ${totalHrs} scheduled hours this week across ${staffed} employee${staffed !== 1 ? "s" : ""}. Set a weekly budget in Settings to track variance automatically.`,
-    });
-
-    // Revenue efficiency — if sales data
-    if (hasSales && rplh) {
-      const days = (wk.dailyTotals || []).filter(d => d.revenuePerLaborHour);
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
-      sections.push({
-        title: "Revenue Efficiency",
-        icon: "💵",
-        urgency: rplh < 15 ? "high" : rplh < 25 ? "medium" : "low",
-        insight: `You're generating ${$$(rplh)} in revenue per labor hour this week. ${worst ? `${worst.day} is your weakest day at ${$$(worst.revenuePerLaborHour)}/hr` : ""} — ${laborPct ? `your overall labor cost is ${laborPct}% of revenue` : "load Square sales data to track labor cost %"}.`,
-      });
-    }
-
-    // Overtime risk — if anyone >= 36h
-    const nearOTEmps = wk.employeeBreakdown?.filter(e => e.scheduledHours >= 36) || [];
-    if (nearOTEmps.length > 0) {
-      const topEmp = nearOTEmps.sort((a,b) => b.scheduledHours - a.scheduledHours)[0];
-      sections.push({
-        title: "Overtime Risk",
-        icon: "⏱️",
-        urgency: topEmp.scheduledHours > 40 ? "high" : "medium",
-        insight: `${topEmp.name} is scheduled for ${topEmp.scheduledHours}h this week${topEmp.scheduledHours > 40 ? " — already over the 40h threshold" : " — close to the overtime threshold"}. ${ot.length > 0 ? `Reducing their hours by ${(topEmp.scheduledHours - 38).toFixed(1)}h eliminates the risk entirely.` : "Keep an eye on punch-in times to avoid unplanned overtime."}`,
-      });
-    }
-
-    // Attendance patterns — if flags exist
-    const hasAttendance = (af.lateArrivals?.length || 0) + (af.missedPunches?.length || 0) + (af.reliabilityFlags?.length || 0) > 0;
-    if (hasAttendance) {
-      const topFlag = af.reliabilityFlags?.[0];
-      sections.push({
-        title: "Attendance Patterns",
-        icon: "🚩",
-        urgency: af.missedPunches?.length ? "high" : topFlag?.flags30Days >= 7 ? "medium" : "low",
-        insight: `${af.missedPunches?.length ? `${af.missedPunches.map(m=>m.name).join(", ")} missed a punch-in today. ` : ""}${af.lateArrivals?.length ? `${af.lateArrivals.map(a=>`${a.name} (${a.count}×)`).join(", ")} arrived late this period. ` : ""}${topFlag ? `${topFlag.name} has ${topFlag.flags30Days} attendance flags in the last 30 days — worth a quick check-in.` : ""}`,
-      });
-    }
-
-    // Schedule gaps
-    if (gapDays > 0) {
-      const uncovered = (wk.dailyTotals || []).filter(d => d.staffCount === 0).map(d => d.day);
-      sections.push({
-        title: "Schedule Gaps",
-        icon: "📅",
-        urgency: gapDays >= 2 ? "high" : "medium",
-        insight: `${uncovered.join(", ")} ${uncovered.length === 1 ? "has" : "have"} no staff scheduled this week while your posted business hours show you're open. Leaving days uncovered either loses revenue or means you're working solo.`,
-      });
-    }
-
-    // ── Positives ─────────────────────────────────────────────────────────────
-    const positives = [];
-    if (budget && totalPay <= budget && !burn?.projectedOver) {
-      positives.push(`Labor budget on track — ${$$(budget - totalPay)} of runway remaining`);
-    }
-    if (ot.length === 0 && nearOTEmps.length === 0) {
-      positives.push("No overtime risk detected this week");
-    }
-    if (hasSales && rplh >= 25) {
-      positives.push(`Strong revenue efficiency at ${$$(rplh)}/labor hour`);
-    }
-    if (coveredDays >= openDays && openDays > 0) {
-      positives.push(`All ${openDays} open days have staff scheduled`);
-    }
-    if (staffed === empCount && empCount > 0) {
-      positives.push(`Full team scheduled — all ${empCount} employees have shifts this week`);
-    }
-    if (positives.length === 0) {
-      positives.push(`${staffed} employee${staffed !== 1 ? "s" : ""} scheduled and tracked`);
-    }
-
-    // ── Next week focus ───────────────────────────────────────────────────────
-    let nextWeekFocus = "";
-    if (hasSales) {
-      const days = (wk.dailyTotals || []).filter(d => d.revenue && d.totalHours > 0).sort((a,b) => b.revenue - a.revenue);
-      const topDay = days[0];
-      if (topDay) {
-        nextWeekFocus = `Build next week's schedule around ${topDay.day} first — it's your highest-revenue day at ${$$(topDay.revenue)} in sales. Staff decisions there have the biggest margin impact.`;
-      }
-    }
-    if (!nextWeekFocus && ot.length > 0) {
-      nextWeekFocus = `Resolve this week's overtime before building next week's schedule. Redistributing ${ot[0].name}'s hours now will make next week's labor math cleaner.`;
-    }
-    if (!nextWeekFocus && budget) {
-      nextWeekFocus = `Use this week's labor actuals as your baseline for next week's budget. If punch variance ran high, tighten scheduled hours by the same amount to land under budget.`;
-    }
-    if (!nextWeekFocus) {
-      nextWeekFocus = `Add your Square sales data to unlock revenue-per-labor-hour tracking — it's the single most useful number for deciding where to add or cut shifts.`;
-    }
-
-    return { pulse, headline, score: { value: score, label: scoreLabel, reason: scoreReason }, sections: sections.slice(0, 4), actions: actions.slice(0, 5), positives: positives.slice(0, 3), nextWeekFocus };
-  }
-  // ── end computePulse ───────────────────────────────────────────────────────
 
   function importSquareCSV(file) {
     if (!file) return;
@@ -2000,13 +1261,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     try { localStorage.setItem("sw_theme", themeId); } catch {}
   }, [themeId]);
 
-  // Persist last-viewed week so navigating away and back restores position
-  useEffect(() => {
-    if (activeWeek) {
-      try { localStorage.setItem("sw_active_week", activeWeek); } catch {}
-    }
-  }, [activeWeek]);
-
   function exportData() {
     const data = { _v:2, _at:new Date().toISOString(), biz,weekMode,wk1Start,wk2Start,weeklyBudget,employees,schedule,published,themeId,activeWeek,punches,auditLog,recognition,shiftTypes,salesData };
     const a = document.createElement("a");
@@ -2125,16 +1379,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   function doCopyWeek(from,to) {
     const fromLabel = weeks.find(w=>w.key===from)?.label || from;
     const toLabel = weeks.find(w=>w.key===to)?.label || to;
-    // Copy local state immediately for optimistic UI
     setSchedule(p => { const n=JSON.parse(JSON.stringify(p)); n[to]=JSON.parse(JSON.stringify(p[from]||{})); return n; });
-    // Persist every copied shift to Supabase
-    const fromSched = schedule[from] || {};
-    employees.forEach(emp => {
-      DAYS.forEach((_,di) => {
-        const shift = fromSched[emp.id]?.[di];
-        if (shift) setShift(to, emp.id, di, {...shift}, emp.name);
-      });
-    });
     addAudit("Week Copied", `${fromLabel} → ${toLabel}`);
   }
 
@@ -2404,10 +1649,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const shiftData = {start:sd, end:ed, type:draft.type.length?draft.type:["regular"], notes:draft.notes||""};
       // Save to primary day
       setShift(weekKey, empId, dayIdx, shiftData);
-      // Copy to additional selected days — each goes through setShift so Supabase is updated
+      // Copy to additional selected days
       if ((draft.applyToDays||[]).length > 0) {
-        (draft.applyToDays||[]).forEach(di => {
-          setShift(weekKey, empId, di, {...shiftData}, emp.name);
+        setSchedule(prev => {
+          const n = JSON.parse(JSON.stringify(prev));
+          if (!n[weekKey]) n[weekKey] = {};
+          if (!n[weekKey][empId]) n[weekKey][empId] = {};
+          (draft.applyToDays||[]).forEach(di => { n[weekKey][empId][di] = {...shiftData}; });
+          return n;
         });
         addAudit("Shift Copied to Days",
           `${emp.name} — same shift applied to ${(draft.applyToDays||[]).map(d=>DAY_FULL[d]).join(", ")}`,
@@ -3775,13 +3024,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         <td style={{padding:"13px 16px",color:"#777",fontWeight:700,fontSize:11,letterSpacing:"0.06em"}}>TOTALS</td>
                         {DAYS.map((_,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
-                          const dp=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i)*(parseFloat(e.hourlyRate)||0),0);
                           return (
                             <td key={i} style={{padding:"12px 6px",textAlign:"center",fontWeight:700}}>
-                              {dh>0?(<>
-                                <div style={{color:T.accent,fontSize:13}}>{dh}h</div>
-                                <div style={{color:"#4CAF7D",fontSize:11,fontWeight:700,marginTop:2}}>${dp.toFixed(0)}</div>
-                              </>):<span style={{color:"#3A3A3A"}}>—</span>}
+                              {dh>0?<><div style={{color:T.accent,fontSize:13}}>{dh}h</div></>:<span style={{color:"#3A3A3A"}}>—</span>}
                             </td>
                           );
                         })}
@@ -4258,7 +3503,17 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 const totalRevenue = salesThisWeek.total;
                 const payWeekLabor = laborThisWeek.total;
                 const laborCostPct = totalRevenue > 0 ? (payWeekLabor / totalRevenue) * 100 : 0;
-                const suggestedBudget = totalRevenue > 0 ? Math.round(totalRevenue * 0.3) : 0;
+
+                // Suggested daily labor: average of historical day-of-week revenue × 30%
+                // Then multiply by 7 days to get a full-week budget suggestion.
+                // Uses forecast engine so it's based on history, not just this week's partial data.
+                const forecastThisWeek = getForecast("thisWeek", salesData, payWeek);
+                const suggestedDailyRevenue = forecastThisWeek.hasEnoughData
+                  ? forecastThisWeek.total / 7
+                  : totalRevenue > 0 ? totalRevenue / Math.max(1, wkSales.length) : 0;
+                const suggestedDailyLabor = Math.round(suggestedDailyRevenue * 0.3);
+                const suggestedWeeklyBudget = suggestedDailyLabor * 7;
+
                 const forecastNext7 = getForecast("next7", salesData);
                 const dayData = salesThisWeek.days.map((d, i) => {
                   const labor = laborThisWeek.days[i].labor;
@@ -4360,12 +3615,21 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                             <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:11,color:T.sub}}><span>$0</span><span>${bgt.toFixed(0)}</span></div>
                           </>
                         )}
-                        {suggestedBudget > 0 && (
-                          <div style={{display:"flex",alignItems:"center",gap:10,marginTop:bgt>0?12:8,paddingTop:bgt>0?12:0,borderTop:bgt>0?`1px solid ${T.border}`:"none"}}>
-                            <div style={{flex:1,fontSize:11,color:T.sub}}>Suggested: <strong style={{color:T.text}}>${suggestedBudget}</strong> (30% of this week's revenue so far)</div>
-                            <button onClick={()=>{ setWeeklyBudget(String(suggestedBudget)); showToast("Budget updated to $"+suggestedBudget+" ✓"); }}
-                              style={{background:T.accent,color:"white",border:"none",borderRadius:8,padding:"7px 14px",fontWeight:700,fontSize:12,cursor:"pointer",flexShrink:0}}>
-                              Apply
+                        {suggestedDailyLabor > 0 && (
+                          <div style={{display:"flex",alignItems:"center",gap:10,marginTop:bgt>0?12:8,paddingTop:bgt>0?12:0,borderTop:bgt>0?`1px solid ${T.border}`:"none",flexWrap:"wrap"}}>
+                            <div style={{flex:1,minWidth:200}}>
+                              <div style={{fontSize:12,fontWeight:700,color:T.text,marginBottom:2}}>Suggested labor budget</div>
+                              <div style={{fontSize:11,color:T.sub,lineHeight:1.5}}>
+                                Based on your historical daily revenue, you should target <strong style={{color:T.text}}>${suggestedDailyLabor}/day</strong> in labor (30% of avg daily revenue). Across 7 days that's <strong style={{color:T.accent}}>${suggestedWeeklyBudget}/week</strong>.
+                              </div>
+                            </div>
+                            <button onClick={()=>{
+                              setWeeklyBudget(String(suggestedWeeklyBudget));
+                              saveBizSettings({weekly_budget: suggestedWeeklyBudget}).catch(()=>{});
+                              showToast(`Weekly budget set to $${suggestedWeeklyBudget} ($${suggestedDailyLabor}/day × 7) ✓`);
+                            }}
+                              style={{background:T.accent,color:"white",border:"none",borderRadius:8,padding:"8px 16px",fontWeight:700,fontSize:12,cursor:"pointer",flexShrink:0}}>
+                              Apply ${suggestedWeeklyBudget}
                             </button>
                           </div>
                         )}
@@ -4516,110 +3780,35 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             const urgencyColor = { low:"#4CAF7D", medium:"#E8A93A", high:"#C0392B" };
             const scoreColor = v => v >= 75 ? "#4CAF7D" : v >= 50 ? "#E8A93A" : "#C0392B";
             const scoreBg    = v => v >= 75 ? "#F0FFF4" : v >= 50 ? "#FEF3E2" : "#FDECEA";
-            const PULSE_DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];
 
             return (
-              <div style={{maxWidth:720, display:"flex", flexDirection:"column", gap:14}}>
+              <div style={{maxWidth:720, display:"flex", flexDirection:"column", gap:16}}>
 
                 {/* Header */}
-                <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:10}}>
+                <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12}}>
                   <div>
                     <h2 style={{margin:"0 0 4px", fontSize:20, fontWeight:800, color:T.text}}>Business Insights</h2>
-                    <p style={{margin:0, fontSize:12, color:T.sub}}>
-                      {insight
-                        ? <>Last updated {new Date(insight.generatedAt).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</>
-                        : "AI analysis of your schedule, labor and team"}
+                    <p style={{margin:0, fontSize:12, color:T.sub, lineHeight:1.5}}>
+                      AI analysis of your schedule, labor costs, and team — powered by Claude.
+                      {insight && <span style={{marginLeft:6, color:T.sub}}>Last updated {new Date(insight.generatedAt).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</span>}
                     </p>
                   </div>
-                  <div style={{display:"flex", gap:8}}>
-                    <button onClick={()=>setShowPulsePrefs(v=>!v)}
-                      style={{background: showPulsePrefs ? T.accent+"20" : T.surface, color: showPulsePrefs ? T.accent : T.sub,
-                        border:`1px solid ${showPulsePrefs ? T.accent : T.border}`, borderRadius:10, padding:"10px 14px",
-                        fontSize:13, fontWeight:700, cursor:"pointer"}}>🔔</button>
-                    <button onClick={generateInsight} disabled={insightLoading}
-                      style={{background: insightLoading ? T.muted : T.dark, color: insightLoading ? T.sub : "white",
-                        border:"none", borderRadius:10, padding:"10px 18px", fontWeight:700, fontSize:13,
-                        cursor: insightLoading ? "not-allowed" : "pointer", display:"flex", alignItems:"center", gap:8, flexShrink:0}}>
-                      <span style={{display:"inline-block", animation: insightLoading ? "spin 1s linear infinite" : "none", fontSize:15}}>
-                        {insightLoading ? "⟳" : "🧠"}
-                      </span>
-                      {insightLoading ? "Analyzing…" : insight ? "Refresh" : "Generate Pulse"}
-                    </button>
-                  </div>
+                  <button onClick={generateInsight} disabled={insightLoading}
+                    style={{
+                      background: insightLoading ? T.muted : T.accent,
+                      color: insightLoading ? T.sub : "white",
+                      border:"none", borderRadius:10, padding:"10px 20px",
+                      fontWeight:700, fontSize:13, cursor: insightLoading ? "not-allowed" : "pointer",
+                      display:"flex", alignItems:"center", gap:8, flexShrink:0,
+                      transition:"all 0.15s"
+                    }}>
+                    {insightLoading ? (
+                      <><span style={{display:"inline-block", animation:"spin 1s linear infinite"}}>⟳</span> Analyzing...</>
+                    ) : (
+                      <><span>🧠</span> {insight ? "Refresh Analysis" : "Generate Insights"}</>
+                    )}
+                  </button>
                 </div>
-
-                {/* Pulse notification prefs panel */}
-                {showPulsePrefs && (
-                  <Card T={T} style={{padding:0}}>
-                    <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
-                      <span>🔔</span>
-                      <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Pulse notifications</span>
-                    </div>
-                    <div style={{padding:"14px 16px", display:"flex", flexDirection:"column", gap:12}}>
-                      <div style={{background:"#EFF6FF", borderRadius:9, padding:"10px 13px", display:"flex", gap:10, alignItems:"flex-start"}}>
-                        <span style={{fontSize:15, flexShrink:0}}>💡</span>
-                        <p style={{margin:0, fontSize:12, color:"#1E3A8A", lineHeight:1.6}}>
-                          Your Pulse appears as a badge on the Insights tab when it's ready. Just waiting for you when you open the app.
-                        </p>
-                      </div>
-                      <div>
-                        <div style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:8}}>When to generate</div>
-                        <div style={{display:"flex", flexDirection:"column", gap:6}}>
-                          {[
-                            {id:"login",  label:"On login",  sub:"Pulse is ready each time you open ShiftWise"},
-                            {id:"daily",  label:"Daily",     sub:"A new Pulse is generated every morning"},
-                            {id:"weekly", label:"Weekly",    sub:"One digest on the day you choose"},
-                            {id:"off",    label:"Off",       sub:"Generate manually from this tab"},
-                          ].map(f => (
-                            <div key={f.id} onClick={()=>setPulsePrefs(p=>({...p, freq:f.id}))}
-                              style={{display:"flex", alignItems:"center", gap:12, padding:"10px 13px",
-                                borderRadius:9, border:`1.5px solid ${pulsePrefs.freq===f.id ? T.accent : T.border}`,
-                                background: pulsePrefs.freq===f.id ? T.accent+"12" : T.surface, cursor:"pointer"}}>
-                              <div style={{width:18, height:18, borderRadius:"50%",
-                                border:`2px solid ${pulsePrefs.freq===f.id ? T.accent : T.border}`,
-                                background: pulsePrefs.freq===f.id ? T.accent : T.surface, flexShrink:0,
-                                display:"flex", alignItems:"center", justifyContent:"center"}}>
-                                {pulsePrefs.freq===f.id && <div style={{width:7, height:7, borderRadius:"50%", background:"white"}}/>}
-                              </div>
-                              <div style={{flex:1}}>
-                                <div style={{fontSize:13, fontWeight:700, color: pulsePrefs.freq===f.id ? T.accent : T.text}}>{f.label}</div>
-                                <div style={{fontSize:11, color:T.sub, marginTop:1}}>{f.sub}</div>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      {pulsePrefs.freq==="weekly" && (
-                        <div>
-                          <div style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:8}}>Generate on</div>
-                          <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
-                            {PULSE_DAYS.map(d => (
-                              <button key={d} onClick={()=>setPulsePrefs(p=>({...p, day:d.toLowerCase()}))}
-                                style={{padding:"6px 11px", borderRadius:8, fontSize:12, fontWeight:600, cursor:"pointer",
-                                  border:`1.5px solid ${pulsePrefs.day===d.toLowerCase() ? T.accent : T.border}`,
-                                  background: pulsePrefs.day===d.toLowerCase() ? T.accent+"12" : T.surface,
-                                  color: pulsePrefs.day===d.toLowerCase() ? T.accent : T.text}}>
-                                {d.slice(0,3)}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      <button onClick={()=>setShowPulsePrefs(false)}
-                        style={{background:T.dark, color:"white", border:"none", borderRadius:9, padding:"11px",
-                          fontWeight:700, fontSize:13, cursor:"pointer"}}>
-                        Save preference
-                      </button>
-                      <div style={{borderTop:`1px solid ${T.border}`, paddingTop:10, display:"flex", alignItems:"center", gap:10}}>
-                        <div style={{flex:1}}>
-                          <div style={{fontSize:12, fontWeight:700, color:T.text}}>Want it in your inbox or via text?</div>
-                          <div style={{fontSize:11, color:T.sub, marginTop:2}}>Email and SMS delivery coming for subscribers.</div>
-                        </div>
-                        <div style={{background:T.muted, borderRadius:7, padding:"4px 10px", fontSize:11, fontWeight:700, color:T.sub}}>Soon</div>
-                      </div>
-                    </div>
-                  </Card>
-                )}
 
                 {/* Error */}
                 {insightError && (
@@ -4631,34 +3820,32 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 {/* Loading skeleton */}
                 {insightLoading && (
                   <div style={{display:"flex", flexDirection:"column", gap:12}}>
-                    {[100, 80, 90, 160, 140, 180].map((h, i) => (
-                      <div key={i} style={{background:T.surface, borderRadius:T.radius, height:h, overflow:"hidden", position:"relative", border:`1px solid ${T.border}`}}>
+                    {[180, 140, 160, 120].map((h, i) => (
+                      <div key={i} style={{background:T.surface, borderRadius:T.radius, height:h, boxShadow:T.shadow, overflow:"hidden", position:"relative"}}>
                         <div style={{position:"absolute", inset:0, background:`linear-gradient(90deg, transparent 0%, ${T.muted} 50%, transparent 100%)`, animation:"shimmer 1.4s infinite"}}/>
                       </div>
                     ))}
-                    <div style={{textAlign:"center", fontSize:12, color:T.sub, marginTop:4}}>Reading schedule, punches, and Square sales…</div>
                     <style>{`@keyframes spin{to{transform:rotate(360deg)}} @keyframes shimmer{0%{transform:translateX(-100%)}100%{transform:translateX(100%)}}`}</style>
                   </div>
                 )}
 
-                {/* Empty state */}
-                {!insightLoading && !insight && !insightError && !showPulsePrefs && (
-                  <Card T={T} style={{padding:"48px 28px", textAlign:"center", border:`2px dashed ${T.border}`}}>
-                    <div style={{fontSize:44, marginBottom:14}}>🧠</div>
-                    <div style={{fontWeight:800, fontSize:17, color:T.text, marginBottom:8}}>Your weekly ops briefing</div>
-                    <p style={{margin:"0 0 20px", fontSize:13, color:T.sub, lineHeight:1.7, maxWidth:360, marginLeft:"auto", marginRight:"auto"}}>
-                      ShiftWise reads your schedule, punch data, and Square sales — then writes you a plain-English briefing with specific actions.
+                {/* Empty state — no data yet */}
+                {!insightLoading && !insight && !insightError && (
+                  <Card T={T} style={{padding:"48px 32px", textAlign:"center", border:`2px dashed ${T.border}`}}>
+                    <div style={{fontSize:48, marginBottom:16}}>🧠</div>
+                    <div style={{fontWeight:800, fontSize:17, color:T.text, marginBottom:8}}>Your AI business advisor</div>
+                    <p style={{margin:"0 0 20px", fontSize:13, color:T.sub, lineHeight:1.7, maxWidth:400, marginLeft:"auto", marginRight:"auto"}}>
+                      ShiftWise analyzes your schedule, labor costs, team availability, and sales data to give you a plain-English briefing — the things you'd tell yourself if you had time to look at all the numbers.
                     </p>
-                    <div style={{display:"flex", flexDirection:"column", gap:8, maxWidth:320, margin:"0 auto 24px", textAlign:"left"}}>
+                    <div style={{display:"flex", flexDirection:"column", gap:10, maxWidth:340, margin:"0 auto 24px", textAlign:"left"}}>
                       {[
-                        {icon:"📡", text:"A narrative briefing written for your business"},
-                        {icon:"💵", text:"Revenue per labor hour, by day of week"},
-                        {icon:"📊", text:"Mid-week budget burn projection"},
-                        {icon:"⏱️", text:"Punch variance vs. scheduled hours"},
-                        {icon:"🚩", text:"Attendance reliability flags"},
+                        {icon:"💰", text:"Are you on track with your labor budget?"},
+                        {icon:"📅", text:"Which days are over or under-staffed?"},
+                        {icon:"⚠️", text:"Who's at risk of overtime this week?"},
+                        {icon:"📈", text:"How does your labor cost compare to revenue?"},
                       ].map(item => (
-                        <div key={item.icon} style={{display:"flex", alignItems:"center", gap:10, background:T.muted, borderRadius:9, padding:"9px 13px"}}>
-                          <span style={{fontSize:16}}>{item.icon}</span>
+                        <div key={item.icon} style={{display:"flex", alignItems:"center", gap:10, background:T.muted, borderRadius:9, padding:"10px 14px"}}>
+                          <span style={{fontSize:18}}>{item.icon}</span>
                           <span style={{fontSize:13, color:T.text, fontWeight:500}}>{item.text}</span>
                         </div>
                       ))}
@@ -4669,48 +3856,37 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       </div>
                     )}
                     <button onClick={generateInsight} disabled={insightLoading}
-                      style={{background:T.dark, color:"white", border:"none", borderRadius:10, padding:"13px 28px", fontWeight:800, fontSize:14, cursor:"pointer"}}>
-                      🧠 Generate My First Pulse
+                      style={{background:T.accent, color:"white", border:"none", borderRadius:10, padding:"13px 28px", fontWeight:800, fontSize:14, cursor:"pointer"}}>
+                      🧠 Generate My First Insight
                     </button>
                   </Card>
                 )}
 
-                {/* PULSE RESULTS */}
+                {/* INSIGHT RESULTS */}
                 {!insightLoading && insight && (
-                  <div style={{display:"flex", flexDirection:"column", gap:12}}>
+                  <div style={{display:"flex", flexDirection:"column", gap:14}}>
 
-                    {/* ── Weekly Pulse narrative ── */}
-                    {insight.pulse && (
-                      <Card T={T} style={{padding:0}}>
-                        <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
-                          <span style={{fontSize:15}}>📡</span>
-                          <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Weekly Pulse</span>
-                          <span style={{background:T.accent+"20", color:T.accent, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700}}>{biz}</span>
-                        </div>
-                        <div style={{padding:"14px 16px"}}>
-                          <p style={{margin:0, fontSize:14, color:T.text, lineHeight:1.8}}>{insight.pulse}</p>
-                        </div>
-                      </Card>
-                    )}
-
-                    {/* ── Health score ── */}
-                    <Card T={T} style={{padding:0}}>
-                      <div style={{padding:"14px 16px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:14}}>
-                        <div style={{flex:1, minWidth:0}}>
-                          <div style={{fontSize:10, fontWeight:700, color:T.sub, letterSpacing:"0.08em", textTransform:"uppercase", marginBottom:5}}>Scheduling health</div>
-                          <div style={{fontSize:14, fontWeight:700, color:T.text, lineHeight:1.4}}>{insight.headline}</div>
+                    {/* Headline + Score */}
+                    <Card T={T} style={{padding:0, overflow:"hidden"}}>
+                      <div style={{background:T.dark, padding:"16px 20px", display:"flex", alignItems:"center", justifyContent:"space-between", gap:16, flexWrap:"wrap"}}>
+                        <div style={{flex:1, minWidth:200}}>
+                          <div style={{fontSize:10, fontWeight:700, color:"#666", letterSpacing:"0.1em", textTransform:"uppercase", marginBottom:6}}>This Week's Headline</div>
+                          <div style={{fontSize:17, fontWeight:800, color:"white", lineHeight:1.4}}>{insight.headline}</div>
                         </div>
                         {insight.score && (
-                          <div style={{background:scoreBg(insight.score.value), borderRadius:10, padding:"10px 16px", textAlign:"center", flexShrink:0}}>
-                            <div style={{fontSize:30, fontWeight:800, color:scoreColor(insight.score.value), lineHeight:1}}>{insight.score.value}</div>
-                            <div style={{fontSize:10, fontWeight:700, color:scoreColor(insight.score.value), marginTop:2, letterSpacing:"0.06em"}}>{insight.score.label}</div>
+                          <div style={{background:scoreBg(insight.score.value), borderRadius:12, padding:"12px 18px", textAlign:"center", flexShrink:0}}>
+                            <div style={{fontSize:32, fontWeight:900, color:scoreColor(insight.score.value), lineHeight:1}}>{insight.score.value}</div>
+                            <div style={{fontSize:11, fontWeight:800, color:scoreColor(insight.score.value), marginTop:2}}>{insight.score.label}</div>
+                            <div style={{fontSize:9, color:"#888", marginTop:4, maxWidth:120, lineHeight:1.3}}>{insight.score.reason}</div>
                           </div>
                         )}
                       </div>
+
+                      {/* Positives strip */}
                       {insight.positives?.length > 0 && (
-                        <div style={{background:"#F0FFF4", borderTop:`1px solid ${T.border}`, padding:"9px 16px", display:"flex", gap:16, flexWrap:"wrap"}}>
+                        <div style={{background:"#F0FFF4", borderBottom:`1px solid #4CAF7D20`, padding:"10px 20px", display:"flex", gap:16, flexWrap:"wrap"}}>
                           {insight.positives.map((p, i) => (
-                            <div key={i} style={{display:"flex", alignItems:"center", gap:5, fontSize:12, color:"#2D6A4F", fontWeight:600}}>
+                            <div key={i} style={{display:"flex", alignItems:"center", gap:6, fontSize:12, color:"#2D6A4F", fontWeight:600}}>
                               <span style={{color:"#4CAF7D"}}>✓</span> {p}
                             </div>
                           ))}
@@ -4718,215 +3894,28 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       )}
                     </Card>
 
-                    {/* ── Mid-week budget burn ── */}
-                    {insight.snapshot?.budgetBurn && (()=>{
-                      const burn = insight.snapshot.budgetBurn;
-                      const pct = Math.min((burn.spent / burn.total) * 100, 100);
-                      const projPct = Math.min((burn.projectedEnd / burn.total) * 100, 100);
-                      return (
-                        <Card T={T} style={{padding:0}}>
-                          <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
-                            <span>📊</span>
-                            <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Budget burn · mid-week</span>
-                            <span style={{
-                              background: burn.projectedOver ? "#FEF3C7" : "#E8F4EE",
-                              color: burn.projectedOver ? "#B45309" : T.accent,
-                              borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700
-                            }}>{burn.projectedOver ? "Projected over" : "On track"}</span>
-                          </div>
-                          <div style={{padding:"14px 16px"}}>
-                            <div style={{display:"flex", justifyContent:"space-between", marginBottom:10}}>
-                              <div>
-                                <div style={{fontSize:11, color:T.sub, marginBottom:2}}>Spent through {burn.dayOfWeek}</div>
-                                <div style={{fontSize:22, fontWeight:800, color:T.text}}>${burn.spent.toLocaleString()}</div>
-                              </div>
-                              <div style={{textAlign:"right"}}>
-                                <div style={{fontSize:11, color:T.sub, marginBottom:2}}>Weekly budget</div>
-                                <div style={{fontSize:22, fontWeight:800, color:T.text}}>${burn.total.toLocaleString()}</div>
-                              </div>
-                            </div>
-                            <div style={{background:T.muted, borderRadius:6, height:10, position:"relative", marginBottom:6}}>
-                              <div style={{background: burn.projectedOver ? "#B45309" : T.accent, borderRadius:6, height:"100%", width:`${pct}%`}}/>
-                              <div style={{position:"absolute", top:-3, left:`${Math.min(projPct,98)}%`, width:2, height:16,
-                                background: burn.projectedOver ? "#991B1B" : T.accent, borderRadius:2, transform:"translateX(-50%)"}}/>
-                            </div>
-                            <div style={{display:"flex", justifyContent:"space-between", fontSize:11, marginBottom:10}}>
-                              <span style={{color:T.sub}}>{Math.round(pct)}% used · {burn.daysLeft} days left</span>
-                              <span style={{color: burn.projectedOver ? "#991B1B" : T.accent, fontWeight:700}}>
-                                Proj: ${burn.projectedEnd} {burn.projectedOver ? `(+$${burn.overBy} over)` : "(on track)"}
-                              </span>
-                            </div>
-                            <div style={{background: burn.projectedOver ? "#FEF3C7" : T.accent+"12", borderRadius:8, padding:"9px 12px",
-                              fontSize:12, color: burn.projectedOver ? "#78350F" : T.accent, lineHeight:1.5, fontWeight:600}}>
-                              {burn.paceNote}
-                            </div>
-                          </div>
-                        </Card>
-                      );
-                    })()}
-
-                    {/* ── Revenue per labor hour ── */}
-                    {insight.snapshot?.weeks?.[0]?.revenuePerLaborHour && (()=>{
-                      const wk = insight.snapshot.weeks[0];
-                      const days = wk.dailyTotals.filter(d => d.revenuePerLaborHour !== null);
-                      const maxRplh = days.length ? Math.max(...days.map(d => d.revenuePerLaborHour)) : 1;
-                      const bestDay = days.reduce((best, d) => (!best || d.revenuePerLaborHour > best.revenuePerLaborHour) ? d : best, null);
-                      const worstDay = days.reduce((worst, d) => (!worst || d.revenuePerLaborHour < worst.revenuePerLaborHour) ? d : worst, null);
-                      return (
-                        <Card T={T} style={{padding:0}}>
-                          <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
-                            <span>💵</span>
-                            <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Revenue per labor hour</span>
-                            <span style={{background:T.accent+"20", color:T.accent, borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700}}>${wk.revenuePerLaborHour}/hr avg</span>
-                          </div>
-                          <div style={{padding:"12px 16px 6px"}}>
-                            {days.length > 0 && (
-                              <>
-                                <div style={{display:"flex", alignItems:"flex-end", gap:5, height:72, marginBottom:8}}>
-                                  {wk.dailyTotals.map((d, i) => {
-                                    const rplh = d.revenuePerLaborHour;
-                                    const pct = rplh ? rplh / maxRplh : 0;
-                                    const isBest = bestDay && d.day === bestDay.day;
-                                    const isWorst = worstDay && d.day === worstDay.day;
-                                    const col = isBest ? T.accent : isWorst ? "#991B1B" : T.sub;
-                                    return (
-                                      <div key={i} style={{flex:1, display:"flex", flexDirection:"column", alignItems:"center", gap:3}}>
-                                        {(isBest || isWorst) && <div style={{fontSize:8, fontWeight:700, color:col}}>{isBest ? "best" : "⚠"}</div>}
-                                        {!isBest && !isWorst && <div style={{fontSize:8}}>&nbsp;</div>}
-                                        <div style={{width:"100%", background:col+"20", borderRadius:3, display:"flex", alignItems:"flex-end", height:52}}>
-                                          <div style={{width:"100%", background:col, borderRadius:3, height:`${Math.round(pct*100)}%`, minHeight: rplh ? 3 : 0}}/>
-                                        </div>
-                                        <div style={{fontSize:9, color:T.sub, fontWeight:600}}>{d.day}</div>
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                                <div style={{display:"flex", borderTop:`1px solid ${T.border}`, paddingTop:8, gap:5}}>
-                                  {wk.dailyTotals.map((d,i) => (
-                                    <div key={i} style={{flex:1, textAlign:"center"}}>
-                                      <div style={{fontSize:10, fontWeight:700, color: d.day===bestDay?.day ? T.accent : d.day===worstDay?.day ? "#991B1B" : T.text}}>
-                                        {d.revenuePerLaborHour ? `$${d.revenuePerLaborHour}` : "—"}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                                <div style={{textAlign:"center", fontSize:10, color:T.sub, marginTop:4, paddingBottom:6}}>Revenue per labor hour by day</div>
-                              </>
-                            )}
-                          </div>
-                        </Card>
-                      );
-                    })()}
-
-                    {/* ── Punch variance ── */}
-                    {insight.snapshot?.punchVariance?.length > 0 && (
-                      <Card T={T} style={{padding:0}}>
-                        <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
-                          <span>⏱️</span>
-                          <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em"}}>Punch variance · this period</span>
-                        </div>
-                        {insight.snapshot.punchVariance.map((row, i) => {
-                          const over = row.diff > 0;
-                          return (
-                            <div key={i} style={{display:"flex", alignItems:"center", gap:10, padding:"10px 16px",
-                              borderBottom: i < insight.snapshot.punchVariance.length-1 ? `1px solid ${T.border}` : "none"}}>
-                              <div style={{width:30, height:30, borderRadius:"50%", flexShrink:0, background:T.muted,
-                                display:"flex", alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, color:T.sub}}>
-                                {row.initials}
-                              </div>
-                              <div style={{flex:1, fontSize:13, fontWeight:600, color:T.text}}>{row.name}</div>
-                              <div style={{fontSize:12, color:T.sub, marginRight:8}}>{row.scheduledHours}h sched</div>
-                              <div style={{fontSize:13, fontWeight:700,
-                                color: over ? "#991B1B" : T.accent,
-                                background: over ? "#FEE2E2" : "#E8F4EE",
-                                borderRadius:6, padding:"2px 8px"}}>
-                                {over?"+":""}{row.diff.toFixed(1)}h
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </Card>
-                    )}
-
-                    {/* ── Attendance flags ── */}
-                    {(()=>{
-                      const af = insight.snapshot?.attendanceFlags;
-                      const hasFlags = af && (af.lateArrivals?.length || af.missedPunches?.length || af.reliabilityFlags?.length);
-                      if (!hasFlags) return null;
-                      const totalFlags = (af.lateArrivals?.length||0) + (af.missedPunches?.length||0);
-                      return (
-                        <Card T={T} style={{padding:0}}>
-                          <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
-                            <span>🚩</span>
-                            <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Attendance flags</span>
-                            {totalFlags > 0 && <span style={{background:"#FEF3C7", color:"#B45309", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700}}>{totalFlags} this week</span>}
-                          </div>
-                          <div style={{padding:"12px 16px", display:"flex", flexDirection:"column", gap:8}}>
-                            {af.missedPunches?.map((m, i) => (
-                              <div key={i} style={{display:"flex", alignItems:"center", gap:10, background:"#FEE2E2", borderRadius:9, padding:"9px 12px"}}>
-                                <div style={{width:28, height:28, borderRadius:"50%", background:"#FCA5A520", display:"flex",
-                                  alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, color:"#991B1B", flexShrink:0}}>
-                                  {m.initials}
-                                </div>
-                                <div style={{flex:1}}>
-                                  <div style={{fontSize:13, fontWeight:700, color:"#7F1D1D"}}>{m.name}</div>
-                                  <div style={{fontSize:11, color:"#991B1B"}}>{m.type} · {m.day}</div>
-                                </div>
-                                <div style={{fontSize:10, fontWeight:700, color:"#991B1B", background:"#FCA5A530", borderRadius:5, padding:"2px 7px"}}>MISSED</div>
-                              </div>
-                            ))}
-                            {af.lateArrivals?.map((a, i) => (
-                              <div key={i} style={{display:"flex", alignItems:"center", gap:10, background:T.muted, borderRadius:9, padding:"9px 12px"}}>
-                                <div style={{width:28, height:28, borderRadius:"50%", background:"#FEF3C7", display:"flex",
-                                  alignItems:"center", justifyContent:"center", fontSize:11, fontWeight:700, color:"#78350F", flexShrink:0}}>
-                                  {a.initials}
-                                </div>
-                                <div style={{flex:1}}>
-                                  <div style={{fontSize:13, fontWeight:700, color:T.text}}>{a.name}</div>
-                                  <div style={{fontSize:11, color:T.sub}}>Late {a.count}× this period</div>
-                                </div>
-                              </div>
-                            ))}
-                            {af.reliabilityFlags?.length > 0 && (
-                              <div style={{borderTop:`1px solid ${T.border}`, paddingTop:10, marginTop:2}}>
-                                <div style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", marginBottom:8}}>30-day reliability</div>
-                                {af.reliabilityFlags.map((e, i) => {
-                                  const barPct = Math.min((e.flags30Days / 12) * 100, 100);
-                                  const barCol = e.flags30Days >= 7 ? "#991B1B" : e.flags30Days >= 4 ? "#B45309" : T.accent;
-                                  return (
-                                    <div key={i} style={{display:"flex", alignItems:"center", gap:10, marginBottom: i < af.reliabilityFlags.length-1 ? 7 : 0}}>
-                                      <div style={{fontSize:12, color:T.text, fontWeight:600, width:80, flexShrink:0}}>{e.name.split(" ")[0]}</div>
-                                      <div style={{flex:1, background:T.muted, borderRadius:4, height:8, overflow:"hidden"}}>
-                                        <div style={{width:`${barPct}%`, height:"100%", background:barCol, borderRadius:4}}/>
-                                      </div>
-                                      <div style={{fontSize:11, color:barCol, fontWeight:700, width:24, textAlign:"right"}}>{e.flags30Days}</div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        </Card>
-                      );
-                    })()}
-
-                    {/* ── Action items ── */}
+                    {/* Priority Actions */}
                     {insight.actions?.length > 0 && (
-                      <Card T={T} style={{padding:0}}>
-                        <div style={{padding:"9px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted, display:"flex", alignItems:"center", gap:8}}>
-                          <span>⚡</span>
-                          <span style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.07em", flex:1}}>Action items</span>
-                          <span style={{background:"#FEE2E2", color:"#991B1B", borderRadius:6, padding:"2px 8px", fontSize:11, fontWeight:700}}>{insight.actions.length}</span>
+                      <Card T={T} style={{overflow:"hidden"}}>
+                        <div style={{padding:"11px 18px", background:T.dark, display:"flex", alignItems:"center", gap:8}}>
+                          <span style={{fontSize:16}}>⚡</span>
+                          <span style={{color:"white", fontWeight:800, fontSize:14}}>Action Items</span>
+                          <span style={{background:T.accent, color:"white", borderRadius:10, padding:"1px 8px", fontSize:10, fontWeight:700, marginLeft:4}}>{insight.actions.length}</span>
                         </div>
-                        {[...insight.actions].sort((a,b)=>a.priority-b.priority).map((action, i) => (
-                          <div key={i} style={{display:"flex", gap:12, padding:"12px 16px", alignItems:"flex-start",
-                            borderBottom: i < insight.actions.length-1 ? `1px solid ${T.border}` : "none",
-                            background: i===0 ? "#FFF5F5" : T.surface}}>
-                            <div style={{width:24, height:24, borderRadius:"50%", flexShrink:0,
-                              background: action.priority===1 ? "#991B1B" : T.muted,
-                              color: action.priority===1 ? "white" : T.sub,
+                        {[...insight.actions].sort((a,b) => a.priority - b.priority).map((action, i) => (
+                          <div key={i} style={{
+                            display:"flex", gap:14, padding:"13px 18px",
+                            borderBottom: i < insight.actions.length - 1 ? `1px solid ${T.border}` : "none",
+                            alignItems:"flex-start",
+                            background: i === 0 ? T.accent+"08" : T.surface,
+                          }}>
+                            <div style={{
+                              width:26, height:26, borderRadius:"50%", flexShrink:0,
+                              background: action.priority === 1 ? T.accent : T.muted,
+                              color: action.priority === 1 ? "white" : T.sub,
                               display:"flex", alignItems:"center", justifyContent:"center",
-                              fontWeight:800, fontSize:11, marginTop:1}}>{action.priority}</div>
+                              fontWeight:800, fontSize:12, marginTop:1,
+                            }}>{action.priority}</div>
                             <div style={{flex:1, minWidth:0}}>
                               <div style={{fontWeight:700, fontSize:13, color:T.text, marginBottom:3}}>{action.action}</div>
                               <div style={{fontSize:11, color:T.sub, lineHeight:1.5}}>{action.why}</div>
@@ -4936,41 +3925,49 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       </Card>
                     )}
 
-                    {/* ── Detailed analysis ── */}
+                    {/* Analysis Sections */}
                     {insight.sections?.length > 0 && (
                       <div style={{display:"flex", flexDirection:"column", gap:10}}>
                         <div style={{fontSize:11, fontWeight:700, color:T.sub, textTransform:"uppercase", letterSpacing:"0.08em", paddingLeft:2}}>Detailed Analysis</div>
                         {insight.sections.map((section, i) => (
-                          <Card key={i} T={T} style={{padding:0}}>
-                            <div style={{display:"flex", alignItems:"center", gap:10, padding:"10px 14px", borderBottom:`1px solid ${T.border}`, background:T.muted}}>
-                              <span style={{fontSize:17}}>{section.icon}</span>
+                          <Card key={i} T={T} style={{padding:0, overflow:"hidden"}}>
+                            <div style={{display:"flex", alignItems:"center", gap:10, padding:"11px 16px", borderBottom:`1px solid ${T.border}`, background:T.muted}}>
+                              <span style={{fontSize:18}}>{section.icon}</span>
                               <span style={{fontWeight:700, fontSize:13, color:T.text, flex:1}}>{section.title}</span>
                               <span style={{
-                                background: urgencyColor[section.urgency]+"20", color:urgencyColor[section.urgency],
-                                border:`1px solid ${urgencyColor[section.urgency]}30`,
+                                background: urgencyColor[section.urgency] + "20",
+                                color: urgencyColor[section.urgency],
+                                border: `1px solid ${urgencyColor[section.urgency]}30`,
                                 borderRadius:6, padding:"2px 8px", fontSize:10, fontWeight:700,
                                 textTransform:"uppercase", letterSpacing:"0.05em"
                               }}>{section.urgency}</span>
                             </div>
-                            <div style={{padding:"12px 14px", fontSize:13, color:T.text, lineHeight:1.75}}>{section.insight}</div>
+                            <div style={{padding:"13px 16px", fontSize:13, color:T.text, lineHeight:1.7}}>{section.insight}</div>
                           </Card>
                         ))}
                       </div>
                     )}
 
-                    {/* ── Next week focus ── */}
+                    {/* Next Week Focus */}
                     {insight.nextWeekFocus && (
-                      <Card T={T} style={{padding:0, background:T.accent+"10", border:`1.5px solid ${T.accent}28`}}>
-                        <div style={{padding:"14px 16px", display:"flex", gap:12, alignItems:"flex-start"}}>
+                      <Card T={T} style={{padding:"16px 20px", background:T.accent+"10", border:`1.5px solid ${T.accent}28`}}>
+                        <div style={{display:"flex", gap:12, alignItems:"flex-start"}}>
                           <span style={{fontSize:22, flexShrink:0}}>🎯</span>
                           <div>
-                            <div style={{fontWeight:700, fontSize:10, color:T.accent, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.06em"}}>Next Week Focus</div>
-                            <div style={{fontSize:13, color:T.text, lineHeight:1.65, fontWeight:600}}>{insight.nextWeekFocus}</div>
+                            <div style={{fontWeight:700, fontSize:10, color:T.accent, marginBottom:4, textTransform:"uppercase", letterSpacing:"0.05em"}}>Next Week Focus</div>
+                            <div style={{fontSize:13, color:T.text, lineHeight:1.6, fontWeight:600}}>{insight.nextWeekFocus}</div>
                           </div>
                         </div>
                       </Card>
                     )}
 
+                    {/* Supabase upgrade note */}
+                    <div style={{background:T.muted, borderRadius:T.radius, padding:"12px 16px", display:"flex", gap:10, alignItems:"flex-start"}}>
+                      <span style={{fontSize:16, flexShrink:0}}>🔗</span>
+                      <div style={{fontSize:11, color:T.sub, lineHeight:1.6}}>
+                        <strong style={{color:T.text}}>Analysis is based on this device's data.</strong> Once connected to Supabase, insights will include historical patterns, multi-device punch data, and real-time Square sales — making recommendations significantly more powerful.
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -5492,9 +4489,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                                 </div>
                                 <div style={{marginBottom:14,padding:"12px 14px",background:T.accent+"10",borderRadius:10,border:`1px solid ${T.accent}25`}}>
                                   <label style={{fontSize:10,color:T.accent,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Clock-In PIN</label>
-                                  <input type="password" inputMode="numeric" maxLength={4} value={emp.pin||""} onChange={e=>updEmp(emp.id,{pin:e.target.value.replace(/[^0-9]/g,"").slice(0,4)})} placeholder="Set a 4-digit PIN"
+                                  <input type="password" inputMode="numeric" maxLength={6} value={emp.pin||""} onChange={e=>updEmp(emp.id,{pin:e.target.value.replace(/[^0-9]/g,"")})} placeholder="Set a 4–6 digit PIN"
                                     style={{width:"100%",border:`2px solid ${emp.pin?T.accent:T.border}`,borderRadius:8,padding:"9px 11px",fontSize:16,outline:"none",background:T.surface,letterSpacing:"0.2em",transition:"border 0.15s"}}/>
-                                  <div style={{fontSize:10,color:T.sub,marginTop:6}}>Set a 4-digit PIN. Employee uses this to clock in on the kiosk.</div>
+                                  <div style={{fontSize:10,color:T.sub,marginTop:6}}>Employee enters this on the kiosk screen to clock in and out.</div>
                                 </div>
                                 <div style={{marginBottom:14}}>
                                   <label style={{fontSize:10,color:T.sub,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Notes</label>
