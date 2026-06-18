@@ -888,12 +888,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       wks.forEach(w => { newWeekMap[w.week_start] = w.id; });
       setWeekMap(newWeekMap);
 
-      // 5. Set week dates - always default to current week, single-week mode
+      // 5. Set week dates - restore last viewed week, fall back to current week
       {
         const todaySun = getSunday(new Date().toISOString().split("T")[0]);
-        setWk1Start(todaySun);
-        setActiveWeek(todaySun);
-        setPrintWeek(todaySun);
+        const savedWeek = (() => { try { return localStorage.getItem("sw_active_week") || null; } catch { return null; } })();
+        const startWeek = savedWeek || todaySun;
+        setWk1Start(startWeek);
+        setActiveWeek(startWeek);
+        setPrintWeek(startWeek);
         setWeekMode("1");
       }
 
@@ -1998,6 +2000,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     try { localStorage.setItem("sw_theme", themeId); } catch {}
   }, [themeId]);
 
+  // Persist last-viewed week so navigating away and back restores position
+  useEffect(() => {
+    if (activeWeek) {
+      try { localStorage.setItem("sw_active_week", activeWeek); } catch {}
+    }
+  }, [activeWeek]);
+
   function exportData() {
     const data = { _v:2, _at:new Date().toISOString(), biz,weekMode,wk1Start,wk2Start,weeklyBudget,employees,schedule,published,themeId,activeWeek,punches,auditLog,recognition,shiftTypes,salesData };
     const a = document.createElement("a");
@@ -2116,7 +2125,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   function doCopyWeek(from,to) {
     const fromLabel = weeks.find(w=>w.key===from)?.label || from;
     const toLabel = weeks.find(w=>w.key===to)?.label || to;
+    // Copy local state immediately for optimistic UI
     setSchedule(p => { const n=JSON.parse(JSON.stringify(p)); n[to]=JSON.parse(JSON.stringify(p[from]||{})); return n; });
+    // Persist every copied shift to Supabase
+    const fromSched = schedule[from] || {};
+    employees.forEach(emp => {
+      DAYS.forEach((_,di) => {
+        const shift = fromSched[emp.id]?.[di];
+        if (shift) setShift(to, emp.id, di, {...shift}, emp.name);
+      });
+    });
     addAudit("Week Copied", `${fromLabel} → ${toLabel}`);
   }
 
@@ -2386,14 +2404,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const shiftData = {start:sd, end:ed, type:draft.type.length?draft.type:["regular"], notes:draft.notes||""};
       // Save to primary day
       setShift(weekKey, empId, dayIdx, shiftData);
-      // Copy to additional selected days
+      // Copy to additional selected days — each goes through setShift so Supabase is updated
       if ((draft.applyToDays||[]).length > 0) {
-        setSchedule(prev => {
-          const n = JSON.parse(JSON.stringify(prev));
-          if (!n[weekKey]) n[weekKey] = {};
-          if (!n[weekKey][empId]) n[weekKey][empId] = {};
-          (draft.applyToDays||[]).forEach(di => { n[weekKey][empId][di] = {...shiftData}; });
-          return n;
+        (draft.applyToDays||[]).forEach(di => {
+          setShift(weekKey, empId, di, {...shiftData}, emp.name);
         });
         addAudit("Shift Copied to Days",
           `${emp.name} — same shift applied to ${(draft.applyToDays||[]).map(d=>DAY_FULL[d]).join(", ")}`,
