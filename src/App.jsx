@@ -322,7 +322,356 @@ const Divider = ({ T }) => (
   <div className="controls-divider" style={{ width:1, background:T.border, alignSelf:"stretch" }} />
 );
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// KIOSK VIEW — standalone clock-in screen at /kiosk
+// Reads employees, schedule, recognition from Supabase anonymously.
+// No auth required — uses anon key with RLS policies for read access.
+// ─────────────────────────────────────────────────────────────────────────────
+function KioskApp() {
+  const [employees,   setEmployees]   = useState([]);
+  const [schedule,    setSchedule]    = useState({});
+  const [weeks,       setWeeks]       = useState([]);
+  const [recognition, setRecognition] = useState([]);
+  const [bizName,     setBizName]     = useState("ShiftWise");
+  const [bizId,       setBizId]       = useState(null);
+  const [loading,     setLoading]     = useState(true);
+
+  // Kiosk state machine
+  const [screen,    setScreen]    = useState("home");   // home | pin | result
+  const [selectedEmp, setSelectedEmp] = useState(null);
+  const [pin,       setPin]       = useState("");
+  const [pinError,  setPinError]  = useState("");
+  const [result,    setResult]    = useState(null);     // { ok, message, action }
+  const [now,       setNow]       = useState(new Date());
+
+  // Clock
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Load data from Supabase
+  useEffect(() => {
+    async function load() {
+      try {
+        const bizRows = await dbGet("businesses?select=*&limit=1");
+        const biz = bizRows?.[0];
+        if (!biz) return;
+        setBizName(biz.name || "ShiftWise");
+        setBizId(biz.id);
+
+        const [empRows, weekRows, recRows] = await Promise.all([
+          dbGet(`employees?select=*&business_id=eq.${biz.id}&order=sort_order.asc`),
+          dbGet(`schedule_weeks?select=*&business_id=eq.${biz.id}&order=week_start.desc&limit=4`),
+          dbGet(`recognition?select=*&business_id=eq.${biz.id}&order=created_at.desc&limit=20`),
+        ]);
+
+        const wks = weekRows || [];
+        const wkIds = wks.map(w => w.id);
+        const shiftRows = wkIds.length
+          ? await dbGet(`shifts?select=*&week_id=in.(${wkIds.join(",")})`)
+          : [];
+
+        const sched = {};
+        for (const row of (shiftRows || [])) {
+          const wk = wks.find(w => w.id === row.week_id);
+          if (!wk) continue;
+          if (!sched[wk.week_start]) sched[wk.week_start] = {};
+          if (!sched[wk.week_start][row.employee_id]) sched[wk.week_start][row.employee_id] = {};
+          sched[wk.week_start][row.employee_id][row.day_index] = {
+            start: parseFloat(row.start_dec),
+            end:   parseFloat(row.end_dec),
+            type:  row.shift_types || ["regular"],
+          };
+        }
+
+        setEmployees((empRows || []).map(e => ({
+          id: e.id, name: e.name, role: e.role,
+          color: e.color, pin: e.pin,
+        })));
+        setSchedule(sched);
+        setWeeks(wks.map(w => w.week_start));
+        setRecognition((recRows || []).map(r => ({
+          id: r.id, fromName: r.from_name, toName: r.to_name,
+          message: r.message, emoji: r.emoji || "⭐",
+        })));
+      } catch(e) {
+        console.error("Kiosk load error:", e);
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
+  }, []);
+
+  function getTodayShift(empId) {
+    const todayStr = now.toISOString().split("T")[0];
+    const todayIdx = now.getDay();
+    for (const wkStart of weeks) {
+      const sun = new Date(wkStart + "T00:00:00");
+      const dates = Array.from({length:7}, (_,i) => {
+        const d = new Date(sun); d.setDate(sun.getDate()+i);
+        return d.toISOString().split("T")[0];
+      });
+      if (!dates.includes(todayStr)) continue;
+      const shift = schedule?.[wkStart]?.[empId]?.[todayIdx];
+      if (shift) return { shift, dayIdx: todayIdx };
+    }
+    return null;
+  }
+
+  function getLastPunch(empId) {
+    // We don't keep punches in kiosk memory — just track action via punch type logic
+    return null;
+  }
+
+  async function submitPunch(emp, action) {
+    const nowDec = now.getHours() + now.getMinutes() / 60;
+    const todayData = getTodayShift(emp.id);
+    const flags = [];
+    let message = "";
+
+    if (action === "in") {
+      if (!todayData) {
+        flags.push("NO_SHIFT");
+        message = "No shift scheduled today. Punch recorded.";
+      } else {
+        const { shift } = todayData;
+        const minsEarly = (shift.start - nowDec) * 60;
+        if (minsEarly > 10) {
+          const mins = Math.round(minsEarly);
+          setResult({ ok: false, blocked: true, message: `Too early! Your shift starts at ${fmt(shift.start)}. Try again in ${mins} minute${mins!==1?"s":""}.`, action });
+          return;
+        }
+        if (nowDec > shift.start + 0.25) flags.push("LATE");
+        message = flags.includes("LATE")
+          ? `Clocked in late. Shift started at ${fmt(shift.start)}.`
+          : `Clocked in! Shift: ${fmt(shift.start)} – ${fmt(shift.end)}.`;
+      }
+    } else if (action === "out") {
+      if (todayData) {
+        const { shift } = todayData;
+        if (nowDec < shift.end - 0.25) flags.push("EARLY_OUT");
+      }
+      message = "Clocked out. Have a great day!";
+    } else if (action === "break_out") {
+      message = "Break started. Enjoy!";
+    } else if (action === "break_in") {
+      message = "Welcome back!";
+    }
+
+    try {
+      await dbPost("punches", {
+        business_id:      bizId,
+        employee_id:      emp.id,
+        employee_name:    emp.name,
+        punch_type:       action,
+        punched_at:       now.toISOString(),
+        scheduled_start:  todayData?.shift?.start || null,
+        scheduled_end:    todayData?.shift?.end   || null,
+        flags,
+      });
+    } catch(e) {
+      console.warn("Punch write failed:", e);
+    }
+
+    setResult({ ok: true, message, action, emp, flags });
+    setTimeout(() => {
+      setScreen("home");
+      setSelectedEmp(null);
+      setPin("");
+      setResult(null);
+    }, 3000);
+  }
+
+  function handlePinDigit(d) {
+    const next = pin + d;
+    setPin(next);
+    setPinError("");
+    if (next.length >= 4) checkPin(next);
+  }
+
+  function handlePinDelete() {
+    setPin(p => p.slice(0, -1));
+    setPinError("");
+  }
+
+  function checkPin(p) {
+    if (p === selectedEmp?.pin) {
+      setScreen("action");
+    } else {
+      setPinError("Incorrect PIN");
+      setPin("");
+    }
+  }
+
+  const timeStr = now.toLocaleTimeString("en-US", { hour:"numeric", minute:"2-digit", second:"2-digit" });
+  const dateStr = now.toLocaleDateString("en-US", { weekday:"long", month:"long", day:"numeric" });
+
+  if (loading) return (
+    <div style={{minHeight:"100vh",background:"#0A0F0A",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:16}}>
+      <div style={{width:40,height:40,border:"3px solid #2D6A4F44",borderTopColor:"#2D6A4F",borderRadius:"50%",animation:"spin 0.9s linear infinite"}}/>
+      <div style={{color:"#666",fontSize:14}}>Loading kiosk…</div>
+      <style>{"@keyframes spin{to{transform:rotate(360deg)}}"}</style>
+    </div>
+  );
+
+  // ── RESULT SCREEN ──────────────────────────────────────────────────────────
+  if (result) {
+    const bg = result.blocked ? "#1a0a0a" : result.ok ? "#0a1a0f" : "#1a0a0a";
+    const color = result.blocked ? "#E8A93A" : result.ok ? "#4CAF7D" : "#C0392B";
+    const icon = result.blocked ? "⏰" : result.ok ? (result.action==="in"?"✅":result.action==="out"?"👋":result.action==="break_out"?"☕":"👋") : "❌";
+    return (
+      <div style={{minHeight:"100vh",background:bg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:24,padding:40}}>
+        <div style={{fontSize:80}}>{icon}</div>
+        <div style={{fontSize:28,fontWeight:900,color,textAlign:"center",lineHeight:1.3}}>{result.emp?.name}</div>
+        <div style={{fontSize:18,color:"#ccc",textAlign:"center",maxWidth:400,lineHeight:1.6}}>{result.message}</div>
+        {result.flags?.includes("LATE") && <div style={{background:"#E8A93A22",border:"1px solid #E8A93A44",borderRadius:10,padding:"10px 20px",color:"#E8A93A",fontSize:14,fontWeight:700}}>⚠ Late arrival flagged for review</div>}
+        {result.flags?.includes("NO_SHIFT") && <div style={{background:"#C0392B22",border:"1px solid #C0392B44",borderRadius:10,padding:"10px 20px",color:"#C0392B",fontSize:14,fontWeight:700}}>⚠ No shift scheduled — flagged for review</div>}
+        <div style={{color:"#444",fontSize:13,marginTop:8}}>Returning to home screen…</div>
+      </div>
+    );
+  }
+
+  // ── ACTION SCREEN ──────────────────────────────────────────────────────────
+  if (screen === "action" && selectedEmp) {
+    const todayData = getTodayShift(selectedEmp.id);
+    return (
+      <div style={{minHeight:"100vh",background:"#0D1A12",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:24,padding:40}}>
+        <div style={{width:80,height:80,borderRadius:"50%",background:selectedEmp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:36}}>
+          {selectedEmp.name?.[0]?.toUpperCase()}
+        </div>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:28,fontWeight:900,color:"white"}}>{selectedEmp.name}</div>
+          {todayData && <div style={{fontSize:16,color:"#4CAF7D",marginTop:4}}>Shift: {fmt(todayData.shift.start)} – {fmt(todayData.shift.end)}</div>}
+          {!todayData && <div style={{fontSize:14,color:"#666",marginTop:4}}>No shift scheduled today</div>}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,width:"100%",maxWidth:480}}>
+          {[
+            { label:"Clock In",    action:"in",        bg:"#2D6A4F", icon:"✅" },
+            { label:"Clock Out",   action:"out",       bg:"#C0392B", icon:"👋" },
+            { label:"Start Break", action:"break_out", bg:"#E8A93A", icon:"☕" },
+            { label:"End Break",   action:"break_in",  bg:"#3A9BE8", icon:"▶️" },
+          ].map(btn => (
+            <button key={btn.action} onClick={() => submitPunch(selectedEmp, btn.action)}
+              style={{background:btn.bg,color:"white",border:"none",borderRadius:16,padding:"28px 0",fontSize:18,fontWeight:800,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:8,transition:"opacity 0.15s"}}>
+              <span style={{fontSize:32}}>{btn.icon}</span>
+              {btn.label}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => { setScreen("home"); setSelectedEmp(null); setPin(""); }}
+          style={{background:"transparent",color:"#666",border:"1px solid #333",borderRadius:10,padding:"10px 24px",fontSize:14,cursor:"pointer",marginTop:8}}>
+          ← Back
+        </button>
+      </div>
+    );
+  }
+
+  // ── PIN SCREEN ─────────────────────────────────────────────────────────────
+  if (screen === "pin" && selectedEmp) {
+    return (
+      <div style={{minHeight:"100vh",background:"#0D1A12",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:24,padding:40}}>
+        <div style={{width:64,height:64,borderRadius:"50%",background:selectedEmp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:28}}>
+          {selectedEmp.name?.[0]?.toUpperCase()}
+        </div>
+        <div style={{textAlign:"center"}}>
+          <div style={{fontSize:22,fontWeight:800,color:"white"}}>{selectedEmp.name}</div>
+          <div style={{fontSize:14,color:"#666",marginTop:4}}>Enter your PIN</div>
+        </div>
+        <div style={{display:"flex",gap:12,margin:"8px 0"}}>
+          {[0,1,2,3].map(i => (
+            <div key={i} style={{width:16,height:16,borderRadius:"50%",background:i < pin.length ? "#2D6A4F" : "#2A2A2A",border:"2px solid",borderColor:i < pin.length ? "#2D6A4F" : "#3A3A3A",transition:"all 0.15s"}}/>
+          ))}
+        </div>
+        {pinError && <div style={{color:"#C0392B",fontSize:14,fontWeight:700}}>{pinError}</div>}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,width:"100%",maxWidth:320}}>
+          {[1,2,3,4,5,6,7,8,9,"",0,"⌫"].map((d,i) => (
+            <button key={i} onClick={() => d === "⌫" ? handlePinDelete() : d !== "" ? handlePinDigit(String(d)) : null}
+              style={{background:d==="⌫"?"#2A2A2A":"#1A2A20",color:d==="⌫"?"#E8A93A":"white",border:"1px solid #2A3A2A",borderRadius:14,padding:"22px 0",fontSize:24,fontWeight:700,cursor:d===""?"default":"pointer",opacity:d===""?0:1,transition:"background 0.1s"}}>
+              {d}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => { setScreen("home"); setSelectedEmp(null); setPin(""); setPinError(""); }}
+          style={{background:"transparent",color:"#666",border:"1px solid #333",borderRadius:10,padding:"10px 24px",fontSize:14,cursor:"pointer"}}>
+          ← Back
+        </button>
+      </div>
+    );
+  }
+
+  // ── HOME SCREEN ────────────────────────────────────────────────────────────
+  return (
+    <div style={{minHeight:"100vh",background:"#0A0F0A",display:"flex",flexDirection:"column"}}>
+      {/* Header */}
+      <div style={{padding:"28px 40px 20px",textAlign:"center",borderBottom:"1px solid #1A1A1A"}}>
+        <div style={{fontSize:13,color:"#2D6A4F",fontWeight:700,letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:8}}>📅 {bizName}</div>
+        <div style={{fontSize:52,fontWeight:900,color:"white",fontVariantNumeric:"tabular-nums",letterSpacing:"-0.02em"}}>{timeStr}</div>
+        <div style={{fontSize:16,color:"#666",marginTop:6}}>{dateStr}</div>
+      </div>
+
+      {/* Recognition ticker */}
+      {recognition.length > 0 && (
+        <div style={{background:"#0D1A0D",borderBottom:"1px solid #1A2A1A",padding:"10px 0",overflow:"hidden"}}>
+          <div className="ticker-wrap">
+            <div className="ticker-track">
+              {[...recognition,...recognition].map((r,i) => (
+                <span key={i} style={{marginRight:60,color:"#4CAF7D",fontSize:13,fontWeight:600}}>
+                  {r.emoji} {r.fromName}{r.toName ? ` → ${r.toName}` : ""}: {r.message}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Employee grid */}
+      <div style={{flex:1,padding:"32px 40px",overflowY:"auto"}}>
+        <div style={{fontSize:13,color:"#666",fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:20,textAlign:"center"}}>
+          Tap your name to clock in or out
+        </div>
+        {employees.length === 0 ? (
+          <div style={{textAlign:"center",color:"#444",fontSize:16,marginTop:40}}>No employees found. Add employees in ShiftWise first.</div>
+        ) : (
+          <div style={{display:"flex",flexWrap:"wrap",gap:16,justifyContent:"center",maxWidth:960,margin:"0 auto"}}>
+            {employees.map(emp => {
+              const todayData = getTodayShift(emp.id);
+              return (
+                <button key={emp.id} onClick={() => { setSelectedEmp(emp); setPin(""); setPinError(""); setScreen("pin"); }}
+                  style={{background:"#111",border:`2px solid ${emp.color}44`,borderRadius:20,padding:"28px 20px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:10,transition:"all 0.15s",width:150,flexShrink:0}}>
+                  <div style={{width:64,height:64,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:28}}>
+                    {emp.name?.[0]?.toUpperCase() || "?"}
+                  </div>
+                  <div style={{color:"white",fontWeight:700,fontSize:15,textAlign:"center"}}>{emp.name}</div>
+                  {todayData && (
+                    <div style={{background:"#2D6A4F22",border:"1px solid #2D6A4F44",borderRadius:8,padding:"4px 10px",fontSize:11,color:"#4CAF7D",fontWeight:700}}>
+                      {fmt(todayData.shift.start)}–{fmt(todayData.shift.end)}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .ticker-wrap { overflow: hidden; width: 100%; }
+        .ticker-track { display: inline-block; white-space: nowrap; animation: ticker 30s linear infinite; }
+        .ticker-track:hover { animation-play-state: paused; }
+        @keyframes ticker { 0% { transform: translateX(100vw); } 100% { transform: translateX(-100%); } }
+      `}</style>
+    </div>
+  );
+}
+
 export default function App() {
+  // ── Kiosk route check ────────────────────────────────────────────────────
+  if (window.location.pathname === "/kiosk") return <KioskApp />;
+
   const defaultSun = useMemo(() => getSunday(new Date().toISOString().split("T")[0]), []);
 
   // ── Auth state ────────────────────────────────────────────────────────────
@@ -3412,9 +3761,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         <td style={{padding:"13px 16px",color:"#777",fontWeight:700,fontSize:11,letterSpacing:"0.06em"}}>TOTALS</td>
                         {DAYS.map((_,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
+                          const dp=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i)*(parseFloat(e.hourlyRate)||0),0);
                           return (
                             <td key={i} style={{padding:"12px 6px",textAlign:"center",fontWeight:700}}>
-                              {dh>0?<><div style={{color:T.accent,fontSize:13}}>{dh}h</div></>:<span style={{color:"#3A3A3A"}}>—</span>}
+                              {dh>0?(<>
+                                <div style={{color:T.accent,fontSize:13}}>{dh}h</div>
+                                <div style={{color:"#4CAF7D",fontSize:11,fontWeight:700,marginTop:2}}>${dp.toFixed(0)}</div>
+                              </>):<span style={{color:"#3A3A3A"}}>—</span>}
                             </td>
                           );
                         })}
@@ -5125,9 +5478,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                                 </div>
                                 <div style={{marginBottom:14,padding:"12px 14px",background:T.accent+"10",borderRadius:10,border:`1px solid ${T.accent}25`}}>
                                   <label style={{fontSize:10,color:T.accent,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Clock-In PIN</label>
-                                  <input type="password" inputMode="numeric" maxLength={6} value={emp.pin||""} onChange={e=>updEmp(emp.id,{pin:e.target.value.replace(/[^0-9]/g,"")})} placeholder="Set a 4–6 digit PIN"
+                                  <input type="password" inputMode="numeric" maxLength={4} value={emp.pin||""} onChange={e=>updEmp(emp.id,{pin:e.target.value.replace(/[^0-9]/g,"").slice(0,4)})} placeholder="Set a 4-digit PIN"
                                     style={{width:"100%",border:`2px solid ${emp.pin?T.accent:T.border}`,borderRadius:8,padding:"9px 11px",fontSize:16,outline:"none",background:T.surface,letterSpacing:"0.2em",transition:"border 0.15s"}}/>
-                                  <div style={{fontSize:10,color:T.sub,marginTop:6}}>Employee enters this on the kiosk screen to clock in and out.</div>
+                                  <div style={{fontSize:10,color:T.sub,marginTop:6}}>Set a 4-digit PIN. Employee uses this to clock in on the kiosk.</div>
                                 </div>
                                 <div style={{marginBottom:14}}>
                                   <label style={{fontSize:10,color:T.sub,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Notes</label>
