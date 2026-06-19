@@ -88,7 +88,7 @@ function getAvailableActions(punches) {
   if (!punches.length) return ["in"];
   const last = punches[punches.length-1].type;
   if (last === "in" || last === "break_in") return ["out","break_out"];
-  if (last === "break_out") return ["break_in"];
+  if (last === "break_out") return ["break_in","out"];   // can end shift directly from break, no forced return
   if (last === "out") return [];
   return ["in"];
 }
@@ -173,6 +173,7 @@ export default function ShiftWiseKiosk() {
   const [resultMsg,       setResultMsg]    = useState(null);
   const [submitting,      setSubmitting]   = useState(false);
   const [selectedAction,  setSelectedAction] = useState(null);
+  const [selectedEmp,     setSelectedEmp]   = useState(null);
   const pinRef = useRef();
 
   const loadData = useCallback(async () => {
@@ -188,7 +189,7 @@ export default function ShiftWiseKiosk() {
 
   useEffect(() => {
     if (screen==="result") {
-      const t = setTimeout(()=>{ setScreen("idle"); setPin(""); setMatchedEmp(null); setResultMsg(null); setSelectedAction(null); },5000);
+      const t = setTimeout(()=>{ setScreen("idle"); setPin(""); setMatchedEmp(null); setResultMsg(null); setSelectedAction(null); setSelectedEmp(null); },5000);
       return ()=>clearTimeout(t);
     }
   }, [screen]);
@@ -198,22 +199,20 @@ export default function ShiftWiseKiosk() {
   function handleKey(k) {
     if (pin.length>=6) return;
     const next = pin+k; setPin(next);
-    if (bizData?.employees) {
-      const emp = bizData.employees.find(e=>e.pin&&e.pin===next);
-      if (emp) setTimeout(()=>submitPin(next,emp),120);
+    if (selectedEmp && selectedEmp.pin && next===selectedEmp.pin) {
+      setTimeout(()=>submitPin(next),120);
     }
   }
 
   function handleBackspace() { setPin(p=>p.slice(0,-1)); }
 
-  async function submitPin(pinVal, empOverride) {
-    const val = pinVal||pin; if (!val) return;
-    const emp = empOverride||bizData?.employees?.find(e=>e.pin&&e.pin===val);
-    if (!emp) { setResultMsg({ok:false,message:"PIN not recognized. Please try again.",icon:"❌"}); setScreen("result"); return; }
+  async function submitPin(pinVal) {
+    const val = pinVal||pin; if (!val || !selectedEmp) return;
+    if (val !== selectedEmp.pin) { setResultMsg({ok:false,message:"PIN not recognized. Please try again.",icon:"❌"}); setScreen("result"); return; }
+    const emp = selectedEmp;
     setMatchedEmp(emp);
-    try { const punches = await DATA_LAYER.getTodayPunchesForEmp(emp.id); setTodayPunches(punches);
-      if (selectedAction) { await confirmPunchDirect(selectedAction, emp, punches); return; }
-    } catch(e) { setTodayPunches([]); }
+    try { const punches = await DATA_LAYER.getTodayPunchesForEmp(emp.id); setTodayPunches(punches); }
+    catch(e) { setTodayPunches([]); }
     setScreen("confirm");
   }
 
@@ -276,61 +275,32 @@ export default function ShiftWiseKiosk() {
   if (screen==="idle") return (
     <div style={{minHeight:"100vh",background:"#0D1117",display:"flex",flexDirection:"column"}}>
       <style>{CSS}</style>
-      <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:28,padding:"32px 20px"}}>
+      <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:24,padding:"32px 20px"}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{width:36,height:36,background:"#2D6A4F",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>📅</div>
           <span style={{color:"white",fontWeight:900,fontSize:18}}>{bizData?.businessName||"ShiftWise"}</span>
         </div>
         <LiveClock/>
-        <div className="fade-in" style={{width:"100%",maxWidth:480,padding:"0 20px"}}>
-          <div style={{fontSize:12,color:"#8B949E",fontWeight:600,textAlign:"center",letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:16}}>Select an action to get started</div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-            {Object.entries(ACTION_CONFIG).map(([key,cfg])=>(
-              <button key={key} onClick={()=>{setSelectedAction(key);setScreen("pin");}}
-                style={{background:"#161B22",border:`1.5px solid ${cfg.color}40`,borderRadius:18,padding:"22px 12px",display:"flex",flexDirection:"column",alignItems:"center",gap:10,cursor:"pointer",transition:"all 0.15s"}}
-                onMouseEnter={e=>{e.currentTarget.style.background=cfg.color+"22";e.currentTarget.style.borderColor=cfg.color+"99";}}
-                onMouseLeave={e=>{e.currentTarget.style.background="#161B22";e.currentTarget.style.borderColor=cfg.color+"40";}}>
-                <div style={{width:52,height:52,borderRadius:"50%",background:cfg.color+"22",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>{cfg.icon}</div>
-                <div>
-                  <div style={{color:"white",fontWeight:800,fontSize:15}}>{cfg.label}</div>
-                  <div style={{color:"#8B949E",fontSize:12,marginTop:2}}>{cfg.desc}</div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-        {bizData?.employees?.length>0&&(()=>{
-          const now=new Date(),todayIdx=now.getDay(),todayStr=now.toISOString().split("T")[0];
-          const onToday=bizData.employees.filter(emp=>{
-            for (const wkStart of bizData.weeks){
-              const sun=new Date(wkStart+"T00:00:00");
-              const dates=Array.from({length:7},(_,i)=>{const d=new Date(sun);d.setDate(sun.getDate()+i);return d.toISOString().split("T")[0];});
-              if(!dates.includes(todayStr))continue;
-              if(bizData.schedule?.[wkStart]?.[emp.id]?.[todayIdx])return true;
-            }
-            return false;
-          });
-          if(!onToday.length)return null;
-          return (
-            <div style={{width:"100%",maxWidth:420}}>
-              <div style={{fontSize:10,fontWeight:700,color:"#8B949E",letterSpacing:"0.1em",textTransform:"uppercase",marginBottom:10,textAlign:"center"}}>Today's Crew — {DAY_FULL[todayIdx]}</div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:8,justifyContent:"center"}}>
-                {onToday.map(emp=>{
-                  const shift=(()=>{for(const wk of bizData.weeks){const s=bizData.schedule?.[wk]?.[emp.id]?.[todayIdx];if(s)return s;}return null;})();
-                  return (
-                    <div key={emp.id} style={{display:"flex",alignItems:"center",gap:7,background:"#161B22",border:"1px solid #21262D",borderRadius:10,padding:"7px 12px"}}>
-                      <div style={{width:22,height:22,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:10}}>{emp.name?.[0]?.toUpperCase()||"?"}</div>
-                      <div>
-                        <div style={{color:"white",fontWeight:700,fontSize:12}}>{emp.name}</div>
-                        {shift&&<div style={{color:"#8B949E",fontSize:10}}>{fmt(shift.start)} – {fmt(shift.end)}</div>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+        <div className="fade-in" style={{width:"100%",maxWidth:560,padding:"0 20px"}}>
+          <div style={{fontSize:12,color:"#8B949E",fontWeight:600,textAlign:"center",letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:16}}>Tap your name to clock in or out</div>
+          {(!bizData?.employees || bizData.employees.length===0) ? (
+            <div style={{textAlign:"center",color:"#8B949E",fontSize:13,padding:"20px 0"}}>No employees found yet.</div>
+          ) : (
+            <div style={{display:"flex",flexWrap:"wrap",gap:16,justifyContent:"center",maxWidth:900,margin:"0 auto"}}>
+              {bizData.employees.map(emp=>(
+                <button key={emp.id} onClick={()=>{setSelectedEmp(emp);setSelectedAction(null);setScreen("pin");}}
+                  style={{background:"#111",border:`2px solid ${emp.color}33`,borderRadius:16,padding:"24px 16px",width:160,cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",gap:12,transition:"all 0.15s"}}
+                  onMouseEnter={e=>{e.currentTarget.style.background=emp.color+"15";e.currentTarget.style.borderColor=emp.color+"77";}}
+                  onMouseLeave={e=>{e.currentTarget.style.background="#111";e.currentTarget.style.borderColor=emp.color+"33";}}>
+                  <div style={{width:56,height:56,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:24}}>
+                    {emp.name?.[0]?.toUpperCase()||"?"}
+                  </div>
+                  <div style={{color:"white",fontWeight:700,fontSize:15,textAlign:"center"}}>{emp.name}</div>
+                </button>
+              ))}
             </div>
-          );
-        })()}
+          )}
+        </div>
       </div>
       <RecTicker items={bizData?.recognition}/>
     </div>
@@ -342,12 +312,14 @@ export default function ShiftWiseKiosk() {
       <div className="fade-in" style={{...W}}>
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{fontSize:13,color:"#8B949E",fontWeight:500,marginBottom:8}}>{bizData?.businessName}</div>
-          {selectedAction&&(()=>{const cfg=ACTION_CONFIG[selectedAction];return(
-            <div style={{display:"inline-flex",alignItems:"center",gap:8,background:cfg.color+"22",border:`1.5px solid ${cfg.color}55`,borderRadius:999,padding:"6px 16px 6px 10px",marginBottom:14}}>
-              <span style={{fontSize:18}}>{cfg.icon}</span>
-              <span style={{color:"white",fontWeight:700,fontSize:14}}>{cfg.label}</span>
+          {selectedEmp&&(
+            <div style={{display:"inline-flex",alignItems:"center",gap:8,background:selectedEmp.color+"22",border:`1.5px solid ${selectedEmp.color}55`,borderRadius:999,padding:"6px 16px 6px 10px",marginBottom:14}}>
+              <div style={{width:24,height:24,borderRadius:"50%",background:selectedEmp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:11}}>
+                {selectedEmp.name?.[0]?.toUpperCase()||"?"}
+              </div>
+              <span style={{color:"white",fontWeight:700,fontSize:14}}>{selectedEmp.name}</span>
             </div>
-          );})()}
+          )}
           <div style={{fontSize:22,fontWeight:800,color:"white"}}>Enter your PIN</div>
         </div>
         <div style={{marginBottom:20}}>
@@ -362,11 +334,11 @@ export default function ShiftWiseKiosk() {
           ))}
           <button className="key-btn" onClick={handleBackspace} style={{fontSize:20}}>⌫</button>
           <button className="key-btn" onClick={()=>handleKey("0")}>0</button>
-          <button className="key-btn" onClick={()=>{setScreen("idle");setPin("");setSelectedAction(null);}} style={{fontSize:14,color:"#8B949E"}}>← Back</button>
+          <button className="key-btn" onClick={()=>{setScreen("idle");setPin("");setSelectedAction(null);setSelectedEmp(null);}} style={{fontSize:14,color:"#8B949E"}}>← Back</button>
         </div>
         <button onClick={()=>submitPin()} disabled={pin.length<4}
-          style={{width:"100%",padding:"18px 0",borderRadius:14,border:"none",fontSize:16,fontWeight:700,background:pin.length>=4?(selectedAction?ACTION_CONFIG[selectedAction].color:"#2D6A4F"):"#161B22",color:pin.length>=4?"white":"#8B949E"}}>
-          Confirm {selectedAction?ACTION_CONFIG[selectedAction].label:""}
+          style={{width:"100%",padding:"18px 0",borderRadius:14,border:"none",fontSize:16,fontWeight:700,background:pin.length>=4?(selectedEmp?.color||"#2D6A4F"):"#161B22",color:pin.length>=4?"white":"#8B949E"}}>
+          Confirm
         </button>
       </div>
     </div>
@@ -427,7 +399,7 @@ export default function ShiftWiseKiosk() {
             </div>
           )}
 
-          <button onClick={()=>{setScreen("idle");setPin("");setMatchedEmp(null);setSelectedAction(null);}}
+          <button onClick={()=>{setScreen("idle");setPin("");setMatchedEmp(null);setSelectedAction(null);setSelectedEmp(null);}}
             style={{width:"100%",background:"transparent",color:"#8B949E",border:"1px solid #21262D",borderRadius:14,padding:"13px 0",fontSize:14,fontWeight:600}}>
             Cancel
           </button>

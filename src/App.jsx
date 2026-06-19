@@ -1887,6 +1887,7 @@ Rules:
   }
 
   const eDayH = (wk,eid,di) => shiftHrs(getShift(wk,eid,di));
+  const eDayP = (wk,emp,di) => eDayH(wk,emp.id,di)*(parseFloat(emp.hourlyRate)||0);
   const eWkH  = (wk,eid)    => DAYS.reduce((s,_,i)=>s+eDayH(wk,eid,i),0);
   const eWkP  = (wk,emp)    => eWkH(wk,emp.id)*(parseFloat(emp.hourlyRate)||0);
   const eTotalH = eid => weeks.reduce((s,w)=>s+eWkH(w.key,eid),0);
@@ -3527,9 +3528,13 @@ Rules:
                         <td style={{padding:"13px 16px",color:"#777",fontWeight:700,fontSize:11,letterSpacing:"0.06em"}}>TOTALS</td>
                         {DAYS.map((_,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
+                          const dp=employees.reduce((s,e)=>s+eDayP(activeWeek,e,i),0);
                           return (
                             <td key={i} style={{padding:"12px 6px",textAlign:"center",fontWeight:700}}>
-                              {dh>0?<><div style={{color:T.accent,fontSize:13}}>{dh}h</div></>:<span style={{color:"#3A3A3A"}}>—</span>}
+                              {dh>0?<>
+                                <div style={{color:T.accent,fontSize:13}}>{dh}h</div>
+                                <div style={{color:"#4CAF7D",fontSize:11,fontWeight:700,marginTop:1}}>${dp.toFixed(0)}</div>
+                              </>:<span style={{color:"#3A3A3A"}}>—</span>}
                             </td>
                           );
                         })}

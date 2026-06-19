@@ -19,7 +19,7 @@ const SQUARE_VERSION = "2024-01-18";
 const FULL_BACKFILL_DAYS     = 1095;
 const INCREMENTAL_OVERLAP_DAYS = 3;
 
-const APP_BASE_URL = process.env.APP_BASE_URL || "https://shiftwise-mlcm.vercel.app";
+const APP_BASE_URL = process.env.APP_BASE_URL || "https://shiftwise-ten.vercel.app";
 
 async function refreshAccessToken(conn) {
   const r = await fetch(`${SQUARE_BASE}/oauth2/token`, {
