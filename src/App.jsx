@@ -2481,6 +2481,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               const fallbackAP = field==="start" ? "AM" : "PM";
               const hr = getHrTP(val), min = getMinTP(val), ap = getApTP(val, fallbackAP);
               const isOpen = draft._openPanel === field;
+              const filled = !!val;
 
               function setHrTP(h) { setDraft(d=>({...d, [field]: buildValTP(h, getMinTP(d[field]) ?? 0, getApTP(d[field], fallbackAP))})); }
               function setMinTP(m) { setDraft(d=>({...d, [field]: buildValTP(getHrTP(d[field]) ?? 9, m, getApTP(d[field], fallbackAP))})); }
@@ -2513,59 +2514,65 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               return (
                 <div key={field} style={{position:"relative"}}>
                   <label style={{fontSize:11,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>{lbl}</label>
-                  <div onClick={openPanel} style={{
-                    display:"flex",alignItems:"center",border:`2px solid ${isOpen||val?emp.color:T.border}`,
-                    borderRadius:10,padding:"9px 10px",background:"white",cursor:"text",transition:"border-color 0.15s"
+
+                  <div style={{
+                    display:"flex",alignItems:"center",
+                    border:`2px solid ${isOpen||filled?emp.color:T.border}`,borderRadius:999,
+                    background:T.surface,transition:"border-color 0.15s",padding:"4px 6px"
                   }}>
-                    <input id={`tp-hr-${field}`} inputMode="numeric" placeholder="9" value={hr ?? ""}
-                      onChange={handleHrChange} onFocus={openPanel} onKeyDown={handleHrKeyDown}
-                      style={{width:26,border:"none",outline:"none",fontSize:16,fontWeight:800,color:T.text,background:"transparent",textAlign:"center"}}/>
-                    <span style={{fontSize:16,fontWeight:800,color:T.sub,margin:"0 1px"}}>:</span>
-                    <input id={`tp-min-${field}`} inputMode="numeric" placeholder="00" value={min!=null?String(min).padStart(2,"0"):""}
-                      onChange={handleMinChange} onFocus={openPanel} onKeyDown={handleMinKeyDown}
-                      style={{width:26,border:"none",outline:"none",fontSize:16,fontWeight:800,color:T.text,background:"transparent",textAlign:"center"}}/>
-                    <button type="button" onClick={(e)=>{e.stopPropagation(); setApTP(ap==="AM"?"PM":"AM");}}
-                      style={{marginLeft:"auto",border:`1.5px solid ${ap?emp.color:T.border}`,borderRadius:7,
-                        background:ap?emp.color:T.muted,color:ap?"white":T.sub,fontSize:11,fontWeight:800,
-                        padding:"5px 9px",cursor:"pointer",letterSpacing:"0.03em"}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:1}}>
+                      <input id={`tp-hr-${field}`} inputMode="numeric" placeholder="9" value={hr ?? ""}
+                        onChange={handleHrChange} onFocus={openPanel} onKeyDown={handleHrKeyDown}
+                        style={{width:22,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
+                      <span style={{fontSize:17,fontWeight:800,color:T.sub}}>:</span>
+                      <input id={`tp-min-${field}`} inputMode="numeric" placeholder="00" value={min!=null?String(min).padStart(2,"0"):""}
+                        onChange={handleMinChange} onFocus={openPanel} onKeyDown={handleMinKeyDown}
+                        style={{width:30,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
+                    </div>
+                    <button type="button" onClick={()=>setApTP(ap==="AM"?"PM":"AM")}
+                      style={{
+                        border:"none",borderRadius:999,
+                        background:ap?emp.color:T.muted,color:ap?"white":T.sub,
+                        fontSize:12,fontWeight:800,padding:"9px 14px",cursor:"pointer",letterSpacing:"0.03em"
+                      }}>
                       {ap||fallbackAP}
                     </button>
                   </div>
 
                   {isOpen && (
                     <div onClick={e=>e.stopPropagation()} style={{
-                      position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:"white",
-                      border:`1.5px solid ${T.border}`,borderRadius:12,boxShadow:"0 8px 28px rgba(0,0,0,0.14)",
-                      zIndex:50,overflow:"hidden"
+                      marginTop:8,background:T.surface,
+                      border:`1.5px solid ${T.border}`,borderRadius:14,boxShadow:"0 6px 20px rgba(0,0,0,0.1)",
+                      overflow:"hidden",zIndex:50
                     }}>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",height:152}}>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",height:160}}>
                         <div style={{overflowY:"auto",borderRight:`1px solid ${T.muted}`}}>
+                          <div style={{position:"sticky",top:0,background:T.bg,padding:"6px 0",textAlign:"center",fontSize:9,fontWeight:800,color:T.sub,letterSpacing:"0.08em",borderBottom:`1px solid ${T.muted}`}}>HR</div>
                           {HOURS_TP.map(h=>(
                             <div key={h} onClick={()=>setHrTP(h)} style={{
-                              padding:"8px 0",textAlign:"center",fontSize:13,fontWeight:700,cursor:"pointer",
+                              padding:"9px 0",textAlign:"center",fontSize:14,fontWeight:700,cursor:"pointer",
                               background:hr===h?emp.color:"transparent",color:hr===h?"white":T.sub
                             }}>{h}</div>
                           ))}
                         </div>
                         <div style={{overflowY:"auto",borderRight:`1px solid ${T.muted}`}}>
+                          <div style={{position:"sticky",top:0,background:T.bg,padding:"6px 0",textAlign:"center",fontSize:9,fontWeight:800,color:T.sub,letterSpacing:"0.08em",borderBottom:`1px solid ${T.muted}`}}>MIN</div>
                           {MINS_TP.map(m=>(
                             <div key={m} onClick={()=>setMinTP(m)} style={{
-                              padding:"8px 0",textAlign:"center",fontSize:13,fontWeight:700,cursor:"pointer",
+                              padding:"9px 0",textAlign:"center",fontSize:14,fontWeight:700,cursor:"pointer",
                               background:min===m?emp.color:"transparent",color:min===m?"white":T.sub
                             }}>{String(m).padStart(2,"0")}</div>
                           ))}
                         </div>
                         <div style={{overflowY:"auto"}}>
+                          <div style={{position:"sticky",top:0,background:T.bg,padding:"6px 0",textAlign:"center",fontSize:9,fontWeight:800,color:T.sub,letterSpacing:"0.08em",borderBottom:`1px solid ${T.muted}`}}>AM/PM</div>
                           {["AM","PM"].map(a=>(
                             <div key={a} onClick={()=>setApTP(a)} style={{
-                              padding:"8px 0",textAlign:"center",fontSize:13,fontWeight:700,cursor:"pointer",
+                              padding:"9px 0",textAlign:"center",fontSize:14,fontWeight:700,cursor:"pointer",
                               background:ap===a?emp.color:"transparent",color:ap===a?"white":T.sub
                             }}>{a}</div>
                           ))}
                         </div>
-                      </div>
-                      <div style={{padding:"7px 10px",borderTop:`1px solid ${T.muted}`,textAlign:"center",fontSize:10,color:T.sub,background:T.bg}}>
-                        Tap, type, or scroll — Tab moves to minutes
                       </div>
                     </div>
                   )}
