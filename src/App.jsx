@@ -2455,7 +2455,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
     return (
       <div onClick={()=>setOpenCell(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
-        <div onClick={e=>e.stopPropagation()} style={{background:"white",borderRadius:"20px 20px 0 0",padding:"20px 20px calc(20px + env(safe-area-inset-bottom,0px))",width:"100%",maxWidth:500,boxShadow:"0 -12px 48px rgba(0,0,0,0.2)",borderTop:`4px solid ${emp.color}`}}>
+        <div onClick={e=>{e.stopPropagation(); if(draft._openPanel) setDraft(d=>({...d,_openPanel:null}));}} style={{background:"white",borderRadius:"20px 20px 0 0",padding:"20px 20px calc(20px + env(safe-area-inset-bottom,0px))",width:"100%",maxWidth:500,boxShadow:"0 -12px 48px rgba(0,0,0,0.2)",borderTop:`4px solid ${emp.color}`}}>
           <div style={{width:36,height:4,borderRadius:2,background:"#E0DAD2",margin:"0 auto 16px"}}/>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -2469,114 +2469,106 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             </div>
             <button onClick={()=>setOpenCell(null)} style={{background:T.muted,border:"none",borderRadius:"50%",width:34,height:34,fontSize:20,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14,position:"relative"}}>
             {[["Start Time","start"],["End Time","end"]].map(([lbl,field])=>{
-              // Parse "HH:MM" → decimal; format decimal → "HH:MM"
-              const valDec = draft[field] ? timeToDec(draft[field]) : null;
+              const HOURS_TP = [1,2,3,4,5,6,7,8,9,10,11,12];
+              const MINS_TP  = [0,5,10,15,20,25,30,35,40,45,50,55];
+              const val = draft[field];
+              const getHrTP = v => { if(!v) return null; const [h]=v.split(":").map(Number); return h%12===0?12:h%12; };
+              const getMinTP = v => { if(!v) return null; const [,m]=v.split(":").map(Number); return m; };
+              const getApTP = (v, fb) => { if(!v) return fb; const [h]=v.split(":").map(Number); return h<12?"AM":"PM"; };
+              const buildValTP = (hr,min,ap) => { let h=hr%12; if(ap==="PM") h+=12; return String(h).padStart(2,"0")+":"+String(min).padStart(2,"0"); };
+              const fallbackAP = field==="start" ? "AM" : "PM";
+              const hr = getHrTP(val), min = getMinTP(val), ap = getApTP(val, fallbackAP);
+              const isOpen = draft._openPanel === field;
 
-              // Snap a decimal to nearest 15-min increment
-              const snapTo15 = v => Math.round(v * 4) / 4;
+              function setHrTP(h) { setDraft(d=>({...d, [field]: buildValTP(h, getMinTP(d[field]) ?? 0, getApTP(d[field], fallbackAP))})); }
+              function setMinTP(m) { setDraft(d=>({...d, [field]: buildValTP(getHrTP(d[field]) ?? 9, m, getApTP(d[field], fallbackAP))})); }
+              function setApTP(a) { setDraft(d=>({...d, [field]: buildValTP(getHrTP(d[field]) ?? 9, getMinTP(d[field]) ?? 0, a)})); }
+              function openPanel() { setDraft(d=>({...d, _openPanel: field})); }
+              function closePanel() { setDraft(d=>({...d, _openPanel: null})); }
 
-              // Format decimal to display string "9:30 AM"
-              const fmtDisplay = v => {
-                if (v == null) return "";
-                const h = Math.floor(v), m = Math.round((v - h) * 60);
-                const hr = h % 12 === 0 ? 12 : h % 12;
-                const mm = String(m).padStart(2,"0");
-                return hr + ":" + mm + " " + (h < 12 ? "AM" : "PM");
-              };
-
-              // Parse typed input → "HH:MM" 24h string or null
-              function parseTyped(raw) {
-                const s = raw.trim().toUpperCase();
-                // Patterns: "9:30 AM", "930am", "9:30", "930", "9am", "9"
-                let h, m = 0, pm = false;
-                const ampm = s.includes("AM") ? "AM" : s.includes("PM") ? "PM" : null;
-                const digits = s.replace(/[^0-9:]/g,"");
-                if (digits.includes(":")) {
-                  const parts = digits.split(":");
-                  h = parseInt(parts[0]||"0");
-                  m = parseInt(parts[1]||"0");
-                } else if (digits.length <= 2) {
-                  h = parseInt(digits||"0"); m = 0;
-                } else if (digits.length === 3) {
-                  h = parseInt(digits[0]); m = parseInt(digits.slice(1));
-                } else {
-                  h = parseInt(digits.slice(0,2)); m = parseInt(digits.slice(2,4));
+              function handleHrChange(e) {
+                const v = e.target.value.replace(/\D/g,"").slice(0,2);
+                if (v === "") return;
+                let n = parseInt(v); if (n > 12) n = 12;
+                setHrTP(n);
+              }
+              function handleMinChange(e) {
+                const v = e.target.value.replace(/\D/g,"").slice(0,2);
+                if (v === "") return;
+                let n = parseInt(v); if (n > 59) n = 59;
+                setMinTP(n);
+              }
+              function handleHrKeyDown(e) {
+                if (e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) {
+                  e.preventDefault();
+                  document.getElementById(`tp-min-${field}`)?.focus();
                 }
-                if (ampm === "PM" && h !== 12) h += 12;
-                if (ampm === "AM" && h === 12) h = 0;
-                // If no AM/PM and h < 7, assume PM (e.g. "3" → 3 PM)
-                if (!ampm && h >= 1 && h <= 6) h += 12;
-                m = Math.round(m / 15) * 15; // snap to 15
-                if (m === 60) { m = 0; h += 1; }
-                if (h < 0 || h > 23 || m < 0 || m > 59 || isNaN(h) || isNaN(m)) return null;
-                return String(h).padStart(2,"0") + ":" + String(m).padStart(2,"0");
               }
-
-              function handleBlur(e) {
-                const parsed = parseTyped(e.target.value);
-                setDraft(d => ({...d, [field]: parsed || d[field] || ""}));
-              }
-
-              function handleKeyDown(e) {
-                if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
-                e.preventDefault();
-                // Scroll in 30-min increments
-                const step = 0.5;
-                const current = valDec != null ? valDec : (field === "start" ? 9 : 17);
-                const next = Math.max(0, Math.min(23.75, current + (e.key === "ArrowUp" ? step : -step)));
-                const snapped = snapTo15(next);
-                const hh = Math.floor(snapped);
-                const mm = Math.round((snapped - hh) * 60);
-                setDraft(d => ({...d, [field]: String(hh).padStart(2,"0") + ":" + String(mm).padStart(2,"0")}));
+              function handleMinKeyDown(e) {
+                if (e.key === "Enter") { e.preventDefault(); closePanel(); }
               }
 
               return (
-                <div key={field}>
+                <div key={field} style={{position:"relative"}}>
                   <label style={{fontSize:11,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>{lbl}</label>
-                  <div style={{position:"relative"}}>
-                    <input
-                      type="text"
-                      placeholder="e.g. 9:00 AM"
-                      defaultValue={draft[field] ? fmtDisplay(valDec) : ""}
-                      key={field + (draft[field]||"none")}
-                      onBlur={handleBlur}
-                      onKeyDown={handleKeyDown}
-                      style={{
-                        width:"100%",
-                        border:`2px solid ${draft[field] ? emp.color : T.border}`,
-                        borderRadius:10,
-                        padding:"11px 10px 11px 10px",
-                        fontSize:15,
-                        fontWeight:700,
-                        outline:"none",
-                        background:"white",
-                        color:draft[field] ? T.text : "#aaa",
-                        textAlign:"center",
-                        transition:"border 0.15s",
-                      }}
-                    />
-                    {/* Up / Down nudge buttons — 30-min steps */}
-                    <div style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",display:"flex",flexDirection:"column",gap:1}}>
-                      {["▲","▼"].map((arrow, ai) => (
-                        <button key={arrow} type="button"
-                          onMouseDown={e=>{ e.preventDefault();
-                            const step = 0.5;
-                            const current = valDec != null ? valDec : (field==="start"?9:17);
-                            const next = Math.max(0, Math.min(23.75, current + (ai===0?step:-step)));
-                            const snapped = snapTo15(next);
-                            const hh = Math.floor(snapped);
-                            const mm = Math.round((snapped-hh)*60);
-                            setDraft(d=>({...d,[field]:String(hh).padStart(2,"0")+":"+String(mm).padStart(2,"0")}));
-                          }}
-                          style={{background:"none",border:"none",cursor:"pointer",padding:"1px 3px",fontSize:9,color:T.sub,lineHeight:1,opacity:0.7}}>
-                          {arrow}
-                        </button>
-                      ))}
-                    </div>
+                  <div onClick={openPanel} style={{
+                    display:"flex",alignItems:"center",border:`2px solid ${isOpen||val?emp.color:T.border}`,
+                    borderRadius:10,padding:"9px 10px",background:"white",cursor:"text",transition:"border-color 0.15s"
+                  }}>
+                    <input id={`tp-hr-${field}`} inputMode="numeric" placeholder="9" value={hr ?? ""}
+                      onChange={handleHrChange} onFocus={openPanel} onKeyDown={handleHrKeyDown}
+                      style={{width:26,border:"none",outline:"none",fontSize:16,fontWeight:800,color:T.text,background:"transparent",textAlign:"center"}}/>
+                    <span style={{fontSize:16,fontWeight:800,color:T.sub,margin:"0 1px"}}>:</span>
+                    <input id={`tp-min-${field}`} inputMode="numeric" placeholder="00" value={min!=null?String(min).padStart(2,"0"):""}
+                      onChange={handleMinChange} onFocus={openPanel} onKeyDown={handleMinKeyDown}
+                      style={{width:26,border:"none",outline:"none",fontSize:16,fontWeight:800,color:T.text,background:"transparent",textAlign:"center"}}/>
+                    <button type="button" onClick={(e)=>{e.stopPropagation(); setApTP(ap==="AM"?"PM":"AM");}}
+                      style={{marginLeft:"auto",border:`1.5px solid ${ap?emp.color:T.border}`,borderRadius:7,
+                        background:ap?emp.color:T.muted,color:ap?"white":T.sub,fontSize:11,fontWeight:800,
+                        padding:"5px 9px",cursor:"pointer",letterSpacing:"0.03em"}}>
+                      {ap||fallbackAP}
+                    </button>
                   </div>
-                  {draft[field] && <div style={{fontSize:10,color:T.sub,marginTop:4,textAlign:"center"}}>{fmtDisplay(valDec)}</div>}
+
+                  {isOpen && (
+                    <div onClick={e=>e.stopPropagation()} style={{
+                      position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:"white",
+                      border:`1.5px solid ${T.border}`,borderRadius:12,boxShadow:"0 8px 28px rgba(0,0,0,0.14)",
+                      zIndex:50,overflow:"hidden"
+                    }}>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",height:152}}>
+                        <div style={{overflowY:"auto",borderRight:`1px solid ${T.muted}`}}>
+                          {HOURS_TP.map(h=>(
+                            <div key={h} onClick={()=>setHrTP(h)} style={{
+                              padding:"8px 0",textAlign:"center",fontSize:13,fontWeight:700,cursor:"pointer",
+                              background:hr===h?emp.color:"transparent",color:hr===h?"white":T.sub
+                            }}>{h}</div>
+                          ))}
+                        </div>
+                        <div style={{overflowY:"auto",borderRight:`1px solid ${T.muted}`}}>
+                          {MINS_TP.map(m=>(
+                            <div key={m} onClick={()=>setMinTP(m)} style={{
+                              padding:"8px 0",textAlign:"center",fontSize:13,fontWeight:700,cursor:"pointer",
+                              background:min===m?emp.color:"transparent",color:min===m?"white":T.sub
+                            }}>{String(m).padStart(2,"0")}</div>
+                          ))}
+                        </div>
+                        <div style={{overflowY:"auto"}}>
+                          {["AM","PM"].map(a=>(
+                            <div key={a} onClick={()=>setApTP(a)} style={{
+                              padding:"8px 0",textAlign:"center",fontSize:13,fontWeight:700,cursor:"pointer",
+                              background:ap===a?emp.color:"transparent",color:ap===a?"white":T.sub
+                            }}>{a}</div>
+                          ))}
+                        </div>
+                      </div>
+                      <div style={{padding:"7px 10px",borderTop:`1px solid ${T.muted}`,textAlign:"center",fontSize:10,color:T.sub,background:T.bg}}>
+                        Tap, type, or scroll — Tab moves to minutes
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
