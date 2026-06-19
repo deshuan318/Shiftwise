@@ -2803,8 +2803,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             </div>
             <div className="top-stats" style={{display:"flex",alignItems:"center",gap:8,flexShrink:0,minWidth:0}}>
 
-              <button onClick={exportData} style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Export</button>
-
               {/* 🔔 Alert Bell */}
 {(()=>{
   const unreviewed = punches.filter(p => p.flags?.length > 0 && !punchReviews[p.id]).length;
@@ -2820,10 +2818,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     </button>
   );
 })()}
-              <button onClick={handleSignOut} style={{background:"rgba(255,255,255,0.05)",color:"#666",border:"1px solid rgba(255,255,255,0.08)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}} title="Sign Out">⎋</button>
               <label style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
                 Import<input type="file" accept=".json" onChange={e=>{importData(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
               </label>
+              <button onClick={exportData} style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Export</button>
+              <button onClick={handleSignOut} style={{background:"rgba(255,255,255,0.05)",color:"#666",border:"1px solid rgba(255,255,255,0.08)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}} title="Sign Out">⎋</button>
             </div>
           </div>
         </div>
