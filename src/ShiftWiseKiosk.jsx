@@ -378,14 +378,14 @@ export default function ShiftWiseKiosk() {
             )}
           </div>
 
-          <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
             {availableActions.map(action=>{
               const cfg=ACTION_CONFIG[action];
               return (
                 <button key={action} className="punch-btn" onClick={()=>confirmPunch(action)} disabled={submitting}
-                  style={{background:submitting?"#21262D":cfg.color,color:"white"}}>
+                  style={{background:submitting?"#21262D":cfg.color,color:"white",padding:"18px 8px",fontSize:15}}>
                   {submitting
-                    ?<div className="spin" style={{width:20,height:20,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"white",borderRadius:"50%"}}/>
+                    ?<div className="spin" style={{width:18,height:18,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"white",borderRadius:"50%"}}/>
                     :<>{cfg.icon} {cfg.label}</>
                   }
                 </button>
