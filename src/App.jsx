@@ -557,7 +557,6 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
     try {
       await dbPatch("businesses?id=eq." + bizId, {
         name:           bizName.trim(),
-        week_start:     weekStart,
         days_open:      daysOpen,
         weekly_budget:  budgetNum > 0 ? budgetNum : null,
         setup_complete: true,
