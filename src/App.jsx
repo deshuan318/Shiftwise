@@ -830,6 +830,7 @@ export default function App() {
   const [authEmail,   setAuthEmail]   = useState("");
   const [authPass,    setAuthPass]    = useState("");
   const [authMode,    setAuthMode]    = useState("signin");
+  const [resetSent,   setResetSent]   = useState(false);
   const [authError,   setAuthError]   = useState("");
   const [authBizName, setAuthBizName] = useState("");
   const [bizId,       setBizId]       = useState(null);
@@ -975,6 +976,30 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     } catch(err) { setAuthError(err.message); }
   }
 
+  async function handleForgotPassword(e) {
+    if(e?.preventDefault) e.preventDefault();
+    setAuthError("");
+    if (!authEmail.trim()) { setAuthError("Enter your email address first."); return; }
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
+        method:"POST",
+        headers:{ "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body:JSON.stringify({ email: authEmail }),
+      });
+      // Supabase returns 200 with an empty body whether or not the email exists,
+      // to avoid leaking which emails are registered.
+      if (!res.ok) {
+        const text = await res.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch {}
+        throw new Error(data.error_description || data.error || "Could not send reset email.");
+      }
+      setResetSent(true);
+    } catch(err) {
+      setAuthError(err.message);
+    }
+  }
+
   async function handleSignOut() {
     clearSession();
     setAuthState("unauthenticated");
@@ -1109,7 +1134,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setAuthState("authenticated");
     } catch(err) {
       console.error("loadAllData failed:", err);
-      setAuthError("Could not load your data: " + err.message);
+      const isExpired = /jwt expired|invalid token|jwt malformed/i.test(err.message || "");
+      setAuthError(
+        isExpired
+          ? "You were signed out due to inactivity. Please sign in again."
+          : "Could not load your data: " + err.message
+      );
+      if (isExpired) clearSession();
       setAuthState("unauthenticated");
     }
   }
@@ -2719,42 +2750,92 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
           {/* Card */}
           <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:18,padding:"28px 28px 24px"}}>
-            {/* Tab switcher */}
-            <div style={{display:"flex",background:"rgba(0,0,0,0.3)",borderRadius:10,padding:4,marginBottom:24}}>
-              {[["signin","Sign In"],["signup","Create Account"]].map(([m,lbl])=>(
-                <button key={m} onClick={()=>{setAuthMode(m);setAuthError("");}}
-                  style={{flex:1,background:authMode===m?"white":"transparent",color:authMode===m?"#1C1C1C":"#6B7280",border:"none",borderRadius:7,padding:"9px 0",fontWeight:700,fontSize:13,cursor:"pointer",transition:"all 0.15s"}}>
-                  {lbl}
-                </button>
-              ))}
-            </div>
 
-            <div style={{display:"flex",flexDirection:"column",gap:12}}>
-              {authMode==="signup" && (
-                <input value={authBizName} onChange={e=>setAuthBizName(e.target.value)}
-                  placeholder="Business name"
-                  style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-              )}
-              <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
-                placeholder="Email address" type="email"
-                onKeyDown={e=>e.key==="Enter"&&(authMode==="signin"?handleSignIn():handleSignUp())}
-                style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-              <input value={authPass} onChange={e=>setAuthPass(e.target.value)}
-                placeholder="Password" type="password"
-                onKeyDown={e=>e.key==="Enter"&&(authMode==="signin"?handleSignIn():handleSignUp())}
-                style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-
-              {authError && (
-                <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
-                  {authError}
+            {authMode==="forgot" ? (
+              /* ── FORGOT PASSWORD VIEW ── */
+              <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                <div style={{marginBottom:4}}>
+                  <div style={{fontSize:16,fontWeight:800,color:"white",marginBottom:4}}>Reset your password</div>
+                  <div style={{fontSize:12,color:"#9CA3AF",lineHeight:1.5}}>Enter the email on your account and we'll send you a link to set a new password.</div>
                 </div>
-              )}
 
-              <button onClick={authMode==="signin"?handleSignIn:handleSignUp}
-                style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
-                {authMode==="signin" ? "Sign In" : "Create Account"}
-              </button>
-            </div>
+                {resetSent ? (
+                  <div style={{background:"rgba(45,106,79,0.15)",border:"1px solid rgba(45,106,79,0.4)",borderRadius:10,padding:"14px",fontSize:13,color:"#6FCF97",lineHeight:1.6}}>
+                    ✓ If an account exists for <strong>{authEmail}</strong>, a reset link is on its way. Check your inbox (and spam folder).
+                  </div>
+                ) : (
+                  <>
+                    <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
+                      placeholder="Email address" type="email"
+                      onKeyDown={e=>e.key==="Enter"&&handleForgotPassword()}
+                      style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
+
+                    {authError && (
+                      <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
+                        {authError}
+                      </div>
+                    )}
+
+                    <button onClick={handleForgotPassword}
+                      style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
+                      Send Reset Link
+                    </button>
+                  </>
+                )}
+
+                <button onClick={()=>{setAuthMode("signin");setAuthError("");setResetSent(false);}}
+                  style={{background:"none",border:"none",color:"#9CA3AF",fontSize:13,fontWeight:600,cursor:"pointer",marginTop:4,textAlign:"center"}}>
+                  ← Back to Sign In
+                </button>
+              </div>
+            ) : (
+              /* ── SIGN IN / CREATE ACCOUNT VIEW ── */
+              <>
+                {/* Tab switcher */}
+                <div style={{display:"flex",background:"rgba(0,0,0,0.3)",borderRadius:10,padding:4,marginBottom:24}}>
+                  {[["signin","Sign In"],["signup","Create Account"]].map(([m,lbl])=>(
+                    <button key={m} onClick={()=>{setAuthMode(m);setAuthError("");}}
+                      style={{flex:1,background:authMode===m?"white":"transparent",color:authMode===m?"#1C1C1C":"#6B7280",border:"none",borderRadius:7,padding:"9px 0",fontWeight:700,fontSize:13,cursor:"pointer",transition:"all 0.15s"}}>
+                      {lbl}
+                    </button>
+                  ))}
+                </div>
+
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  {authMode==="signup" && (
+                    <input value={authBizName} onChange={e=>setAuthBizName(e.target.value)}
+                      placeholder="Business name"
+                      style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
+                  )}
+                  <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
+                    placeholder="Email address" type="email"
+                    onKeyDown={e=>e.key==="Enter"&&(authMode==="signin"?handleSignIn():handleSignUp())}
+                    style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
+                  <input value={authPass} onChange={e=>setAuthPass(e.target.value)}
+                    placeholder="Password" type="password"
+                    onKeyDown={e=>e.key==="Enter"&&(authMode==="signin"?handleSignIn():handleSignUp())}
+                    style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
+
+                  {authMode==="signin" && (
+                    <button onClick={()=>{setAuthMode("forgot");setAuthError("");setResetSent(false);}}
+                      style={{background:"none",border:"none",color:"#9CA3AF",fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"right",padding:0,marginTop:-4}}>
+                      Forgot password?
+                    </button>
+                  )}
+
+                  {authError && (
+                    <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
+                      {authError}
+                    </div>
+                  )}
+
+                  <button onClick={authMode==="signin"?handleSignIn:handleSignUp}
+                    style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
+                    {authMode==="signin" ? "Sign In" : "Create Account"}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
 
           <div style={{textAlign:"center",marginTop:20,fontSize:11,color:"#374151",lineHeight:1.6}}>
