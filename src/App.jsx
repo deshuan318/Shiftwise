@@ -914,9 +914,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   // Keep daysOpen (used to grey out the schedule grid) in sync with
   // businessHours (the single source of truth set in Settings → Hours of Operation).
-  // Any day not explicitly marked closed is treated as open.
   useEffect(() => {
-    if (Object.keys(businessHours).length === 0) return; // nothing configured yet — leave daysOpen as-is
+    if (Object.keys(businessHours).length === 0) return;
     const open = DAYS.map((_, di) => di).filter(di => !businessHours[di]?.closed);
     setDaysOpen(open);
     if (bizId) {
@@ -3308,16 +3307,23 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         </div>
       </div>
 
-      {/* Week picker */}
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
-        <div style={{fontWeight:700,fontSize:13,color:T.text,minWidth:160}}>{tsWkLabel}</div>
-        <div style={{position:"relative",flexShrink:0}}>
-          <input type="date" value={tsWeekStart} onChange={e=>setTsWeekStart(getSunday(e.target.value))}
-            style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
-          <div style={{background:T.muted,borderRadius:8,padding:"7px 12px",fontSize:13,cursor:"pointer",userSelect:"none",border:`1px solid ${T.border}`,fontWeight:600,color:T.text,display:"flex",alignItems:"center",gap:6}}>
-            📅 Jump to week
+      {/* Week picker — matches Schedule tab's Prev / range / calendar / Next pattern */}
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+        <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,-7)))}
+          style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
+        <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
+          <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
+            <span style={{fontSize:10}}>●</span>
+            {tsWkLabel}
+          </div>
+          <div style={{position:"relative",flexShrink:0,borderLeft:`1px solid ${T.accent}40`}}>
+            <input type="date" value={tsWeekStart} onChange={e=>setTsWeekStart(getSunday(e.target.value))}
+              style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
+            <div style={{background:T.accent+"18",padding:"8px 10px",fontSize:13,cursor:"pointer",userSelect:"none",color:T.accent}}>📅</div>
           </div>
         </div>
+        <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,7)))}
+          style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
       </div>
 
       {/* Grid */}
