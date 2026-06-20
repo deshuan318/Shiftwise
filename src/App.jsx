@@ -912,8 +912,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     } catch { return {}; }
   });
 
-  // Keep daysOpen (used to grey out the schedule grid) in sync with
-  // businessHours (the single source of truth set in Settings → Hours of Operation).
   useEffect(() => {
     if (Object.keys(businessHours).length === 0) return;
     const open = DAYS.map((_, di) => di).filter(di => !businessHours[di]?.closed);
@@ -3073,10 +3071,20 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   }
 
   // ── CELL POPUP ─────────────────────────────────────────────────────────────
+  const ADJUSTMENT_REASONS = [
+    { value:"missed_punch",     label:"Missed Punch" },
+    { value:"clock_offline",    label:"Clock Offline" },
+    { value:"manager_correction", label:"Manager Correction" },
+    { value:"duplicate_punch",  label:"Duplicate Punch" },
+    { value:"other",            label:"Other" },
+  ];
+
   function TimesheetCellPopup() {
     const [editIn,  setEditIn]  = useState("");
     const [editOut, setEditOut] = useState("");
     const [saving,  setSaving]  = useState(false);
+    const [reasonCode, setReasonCode] = useState("missed_punch");
+    const [reasonNote, setReasonNote] = useState("");
 
     useEffect(()=>{
       if (!tsOpenCell) return;
@@ -3114,8 +3122,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
     async function saveManualTime() {
       if (!editIn) { showToast("Enter at least a clock-in time"); return; }
+      if (reasonCode==="other" && !reasonNote.trim()) { showToast("Enter a reason for this adjustment"); return; }
       setSaving(true);
       try {
+        const reasonLabel = ADJUSTMENT_REASONS.find(r=>r.value===reasonCode)?.label || "Manual adjustment";
+        const reasonText  = reasonCode==="other" ? reasonNote.trim() : reasonLabel;
+
         const makeISO = (dateStr, timeStr) => {
           const [h,m] = timeStr.split(":").map(Number);
           const d = new Date(dateStr+"T00:00:00");
@@ -3125,21 +3137,21 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const inTime  = makeISO(dateStr, editIn);
         const outTime = editOut ? makeISO(dateStr, editOut) : null;
 
-        const inPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"in", time:inTime, scheduled:shift||null, flags:["ADJUSTMENT"] };
+        const inPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"in", time:inTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
         setPunches(p=>[...p, inPunch]);
         if (bizId) {
-          await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"in", punched_at:inTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"] });
+          await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"in", punched_at:inTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
         }
 
         if (outTime) {
-          const outPunch = { id:(Date.now()+1).toString(), empId, empName:emp.name, type:"out", time:outTime, scheduled:shift||null, flags:["ADJUSTMENT"] };
+          const outPunch = { id:(Date.now()+1).toString(), empId, empName:emp.name, type:"out", time:outTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
           setPunches(p=>[...p, outPunch]);
           if (bizId) {
-            await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"out", punched_at:outTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"] });
+            await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"out", punched_at:outTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
           }
         }
 
-        addAudit("Manual Time Entry", `${emp.name} — ${dateStr}: ${editIn}${editOut?" – "+editOut:""}`, {empName:emp.name});
+        addAudit("Manual Time Entry", `${emp.name} — ${dateStr}: ${editIn}${editOut?" – "+editOut:""} (${reasonText})`, {empName:emp.name});
         showToast("Time adjustment saved ✓");
         setTsOpenCell(null);
       } catch(e) { showToast("Could not save: "+e.message); }
@@ -3201,11 +3213,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               <div style={{background:T.muted,borderRadius:10,padding:"10px 12px"}}>
                 <div style={{fontSize:10,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Punch log</div>
                 {dp.map((p,i)=>(
-                  <div key={p.id||i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:i<dp.length-1?`1px solid ${T.border}`:"none"}}>
-                    <span style={{fontSize:12,fontWeight:700,color:p.type==="in"||p.type==="break_in"?"#2D6A4F":"#C0392B"}}>
-                      {p.type==="in"?"Clock in":p.type==="out"?"Clock out":p.type==="break_out"?"Break start":"Break end"}
-                    </span>
-                    <span style={{fontSize:12,color:T.sub,fontFamily:"monospace"}}>{new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</span>
+                  <div key={p.id||i} style={{padding:"4px 0",borderBottom:i<dp.length-1?`1px solid ${T.border}`:"none"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <span style={{fontSize:12,fontWeight:700,color:p.type==="in"||p.type==="break_in"?"#2D6A4F":"#C0392B"}}>
+                        {p.type==="in"?"Clock in":p.type==="out"?"Clock out":p.type==="break_out"?"Break start":"Break end"}
+                      </span>
+                      <span style={{fontSize:12,color:T.sub,fontFamily:"monospace"}}>{new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</span>
+                    </div>
+                    {p.adjustmentReason && (
+                      <div style={{fontSize:10,color:"#B7780F",marginTop:2,fontStyle:"italic"}}>↳ {p.adjustmentReason}</div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -3216,6 +3233,22 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               <div style={{fontSize:10,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:10}}>
                 {dp.length>0?"Adjust time":"Add missing time"}
               </div>
+
+              <div style={{marginBottom:10}}>
+                <label style={{fontSize:10,color:T.sub,display:"block",marginBottom:4,fontWeight:600}}>Reason</label>
+                <select value={reasonCode} onChange={e=>setReasonCode(e.target.value)}
+                  style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,fontWeight:700,outline:"none",background:T.surface,color:T.text,cursor:"pointer"}}>
+                  {ADJUSTMENT_REASONS.map(r=>(
+                    <option key={r.value} value={r.value}>{r.label}</option>
+                  ))}
+                </select>
+                {reasonCode==="other" && (
+                  <input value={reasonNote} onChange={e=>setReasonNote(e.target.value)}
+                    placeholder="Briefly describe what happened"
+                    style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none",background:T.surface,color:T.text,marginTop:8,boxSizing:"border-box"}}/>
+                )}
+              </div>
+
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
                 {[["Clock in",editIn,setEditIn],["Clock out",editOut,setEditOut]].map(([lbl,val,setter])=>(
                   <div key={lbl}>
