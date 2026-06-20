@@ -509,21 +509,21 @@ const SETUP_CSS = `
 const SW_LABELS = ["Your business","Operating days","Labor budget","Your team","Connect Square","Review & launch"];
 
 function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectSquare }) {
-  const [step,      setStep]      = React.useState(initialStep ?? 0);
+  const [step,      setStep]      = useState(initialStep ?? 0);
 
-  React.useEffect(() => {
+  useEffect(() => {
     try { localStorage.setItem("sw_setup_step", String(step)); } catch {}
   }, [step]);
-  const [saving,    setSaving]    = React.useState(false);
-  const [saveErr,   setSaveErr]   = React.useState("");
-  const [bizName,   setBizName]   = React.useState("");
-  const [weekStart, setWeekStart] = React.useState("Sunday");
-  const [daysOpen,  setDaysOpen]  = React.useState([0,1,2,3,4,5,6]);
-  const [budget,    setBudget]    = React.useState("");
-  const [employees, setEmployees] = React.useState([]);
-  const [addingEmp, setAddingEmp] = React.useState(false);
-  const [empDraft,  setEmpDraft]  = React.useState({ name:"", role:"", rate:"" });
-  const [empErr,    setEmpErr]    = React.useState("");
+  const [saving,    setSaving]    = useState(false);
+  const [saveErr,   setSaveErr]   = useState("");
+  const [bizName,   setBizName]   = useState("");
+  const [weekStart, setWeekStart] = useState("Sunday");
+  const [daysOpen,  setDaysOpen]  = useState([0,1,2,3,4,5,6]);
+  const [budget,    setBudget]    = useState("");
+  const [employees, setEmployees] = useState([]);
+  const [addingEmp, setAddingEmp] = useState(false);
+  const [empDraft,  setEmpDraft]  = useState({ name:"", role:"", rate:"" });
+  const [empErr,    setEmpErr]    = useState("");
 
   const toggleDay = i => setDaysOpen(prev =>
     prev.includes(i) ? prev.filter(d=>d!==i) : [...prev,i].sort((a,b)=>a-b)
@@ -2899,28 +2899,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         <div style={{color:"#4B5563",fontSize:13,fontWeight:600}}>Loading your schedule…</div>
         <style>{"@keyframes spin{to{transform:rotate(360deg)}}"}</style>
       </div>
-    );
-  }
-
-  // ── SETUP GATE ── show setup flow to new users before the main app
-  // Placed here, between the loading screen and the main app return, so it
-  // can actually intercept the render. (Previously misplaced deep inside a
-  // JSX .map() callback in the History Drawer, where it was unreachable.)
-  if (!setupComplete && bizId) {
-    let resumeStep;
-    try { resumeStep = parseInt(localStorage.getItem("sw_setup_step"), 10); } catch {}
-    return (
-      <SetupFlow
-        bizId={bizId}
-        initialStep={Number.isInteger(resumeStep) ? resumeStep : undefined}
-        squareConnected={squareConnected}
-        onConnectSquare={handleConnectSquare}
-        onComplete={async () => {
-          try { localStorage.removeItem("sw_setup_step"); } catch {}
-          await loadAllData();
-          setSetupComplete(true);
-        }}
-      />
     );
   }
 
@@ -5998,6 +5976,25 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   const wkKeys=entry.weekMode==="2"?[entry.wk1Start,entry.wk2Start]:[entry.wk1Start];
                   const tH=entry.employeeSnapshot.reduce((s,emp)=>s+wkKeys.reduce((ws,wk)=>ws+DAYS.reduce((ds,_,di)=>ds+shiftHrs(entry.scheduleData?.[wk]?.[emp.id]?.[di]||null),0),0),0);
                   const tP=entry.employeeSnapshot.reduce((s,emp)=>s+wkKeys.reduce((ws,wk)=>{const h=DAYS.reduce((ds,_,di)=>ds+shiftHrs(entry.scheduleData?.[wk]?.[emp.id]?.[di]||null),0);return ws+h*(parseFloat(emp.hourlyRate)||0);},0),0);
+                
+  // ── SETUP GATE ── show setup flow to new users before the main app
+  if (!setupComplete && bizId) {
+    let resumeStep;
+    try { resumeStep = parseInt(localStorage.getItem("sw_setup_step"), 10); } catch {}
+    return (
+      <SetupFlow
+        bizId={bizId}
+        initialStep={Number.isInteger(resumeStep) ? resumeStep : undefined}
+        squareConnected={squareConnected}
+        onConnectSquare={handleConnectSquare}
+        onComplete={async () => {
+          try { localStorage.removeItem("sw_setup_step"); } catch {}
+          await loadAllData();
+          setSetupComplete(true);
+        }}
+      />
+    );
+  }
 
   return (
                     <Card T={T} key={entry.id}>
