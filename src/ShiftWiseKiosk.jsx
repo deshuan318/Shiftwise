@@ -347,7 +347,7 @@ export default function ShiftWiseKiosk() {
   );
 
   if (screen==="confirm"&&matchedEmp) {
-    const availableActions=getAvailableActions(todayPunches);
+    const availableActions=["in","out","break_out","break_in"]; // always show all 4 — owner preference
     const todayData=getTodayShift(bizData.schedule,bizData.weeks,matchedEmp.id);
     const lastPunch=todayPunches.length?todayPunches[todayPunches.length-1]:null;
     return (
@@ -378,28 +378,20 @@ export default function ShiftWiseKiosk() {
             )}
           </div>
 
-          {availableActions.length===0?(
-            <div style={{background:"#161B22",border:"1px solid #21262D",borderRadius:16,padding:"24px",textAlign:"center",marginBottom:16}}>
-              <div style={{fontSize:32,marginBottom:10}}>✅</div>
-              <div style={{color:"white",fontWeight:700,fontSize:16}}>All done for today!</div>
-              <div style={{color:"#8B949E",fontSize:13,marginTop:6}}>You've already clocked out. See you next shift!</div>
-            </div>
-          ):(
-            <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
-              {availableActions.map(action=>{
-                const cfg=ACTION_CONFIG[action];
-                return (
-                  <button key={action} className="punch-btn" onClick={()=>confirmPunch(action)} disabled={submitting}
-                    style={{background:submitting?"#21262D":cfg.color,color:"white"}}>
-                    {submitting
-                      ?<div className="spin" style={{width:20,height:20,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"white",borderRadius:"50%"}}/>
-                      :<>{cfg.icon} {cfg.label}</>
-                    }
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <div style={{display:"flex",flexDirection:"column",gap:12,marginBottom:16}}>
+            {availableActions.map(action=>{
+              const cfg=ACTION_CONFIG[action];
+              return (
+                <button key={action} className="punch-btn" onClick={()=>confirmPunch(action)} disabled={submitting}
+                  style={{background:submitting?"#21262D":cfg.color,color:"white"}}>
+                  {submitting
+                    ?<div className="spin" style={{width:20,height:20,border:"2px solid rgba(255,255,255,0.3)",borderTopColor:"white",borderRadius:"50%"}}/>
+                    :<>{cfg.icon} {cfg.label}</>
+                  }
+                </button>
+              );
+            })}
+          </div>
 
           <button onClick={()=>{setScreen("idle");setPin("");setMatchedEmp(null);setSelectedAction(null);setSelectedEmp(null);}}
             style={{width:"100%",background:"transparent",color:"#8B949E",border:"1px solid #21262D",borderRadius:14,padding:"13px 0",fontSize:14,fontWeight:600}}>
