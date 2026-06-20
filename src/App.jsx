@@ -2902,6 +2902,28 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     );
   }
 
+  // ── SETUP GATE ── show setup flow to new users before the main app
+  // Placed here, between the loading screen and the main app return, so it
+  // can actually intercept the render. (Previously misplaced deep inside a
+  // JSX .map() callback in the History Drawer, where it was unreachable.)
+  if (!setupComplete && bizId) {
+    let resumeStep;
+    try { resumeStep = parseInt(localStorage.getItem("sw_setup_step"), 10); } catch {}
+    return (
+      <SetupFlow
+        bizId={bizId}
+        initialStep={Number.isInteger(resumeStep) ? resumeStep : undefined}
+        squareConnected={squareConnected}
+        onConnectSquare={handleConnectSquare}
+        onComplete={async () => {
+          try { localStorage.removeItem("sw_setup_step"); } catch {}
+          await loadAllData();
+          setSetupComplete(true);
+        }}
+      />
+    );
+  }
+
   return (
     <div style={{minHeight:"100vh",width:"100%",background:T.bg,color:T.text}}>
       <style>{CSS}</style>
@@ -5976,25 +5998,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   const wkKeys=entry.weekMode==="2"?[entry.wk1Start,entry.wk2Start]:[entry.wk1Start];
                   const tH=entry.employeeSnapshot.reduce((s,emp)=>s+wkKeys.reduce((ws,wk)=>ws+DAYS.reduce((ds,_,di)=>ds+shiftHrs(entry.scheduleData?.[wk]?.[emp.id]?.[di]||null),0),0),0);
                   const tP=entry.employeeSnapshot.reduce((s,emp)=>s+wkKeys.reduce((ws,wk)=>{const h=DAYS.reduce((ds,_,di)=>ds+shiftHrs(entry.scheduleData?.[wk]?.[emp.id]?.[di]||null),0);return ws+h*(parseFloat(emp.hourlyRate)||0);},0),0);
-                
-  // ── SETUP GATE ── show setup flow to new users before the main app
-  if (!setupComplete && bizId) {
-    let resumeStep;
-    try { resumeStep = parseInt(localStorage.getItem("sw_setup_step"), 10); } catch {}
-    return (
-      <SetupFlow
-        bizId={bizId}
-        initialStep={Number.isInteger(resumeStep) ? resumeStep : undefined}
-        squareConnected={squareConnected}
-        onConnectSquare={handleConnectSquare}
-        onComplete={async () => {
-          try { localStorage.removeItem("sw_setup_step"); } catch {}
-          await loadAllData();
-          setSetupComplete(true);
-        }}
-      />
-    );
-  }
 
   return (
                     <Card T={T} key={entry.id}>
