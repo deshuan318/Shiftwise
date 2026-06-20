@@ -64,12 +64,14 @@ const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","S
 const fmt = v => { if (v == null) return ""; const h = Math.floor(v), m = Math.round((v-h)*60); const hr = h%12===0?12:h%12; return `${hr}:${m===0?"00":"30"} ${h<12?"AM":"PM"}`; };
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end-s.start).toFixed(2))));
 const nowDecimal = () => { const n = new Date(); return n.getHours() + n.getMinutes()/60; };
+// Local-date-safe "YYYY-MM-DD" — avoids UTC rollover shifting the date late in the day
+const toLocalDateStr = d => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
 
 function getTodayShift(schedule, weeks, empId) {
-  const now = new Date(), todayStr = now.toISOString().split("T")[0], todayIdx = now.getDay();
+  const now = new Date(), todayStr = toLocalDateStr(now), todayIdx = now.getDay();
   for (const wkStart of weeks) {
     const sun = new Date(wkStart+"T00:00:00");
-    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return d.toISOString().split("T")[0]; });
+    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return toLocalDateStr(d); });
     if (!dates.includes(todayStr)) continue;
     const shift = schedule?.[wkStart]?.[empId]?.[todayIdx];
     if (shift) return { shift, dayIdx: todayIdx };

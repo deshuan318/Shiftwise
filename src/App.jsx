@@ -89,6 +89,9 @@ const fmt = v => {
 };
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end - s.start).toFixed(2))));
 const getSunday = ds => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()-d.getDay()); return d.toISOString().split("T")[0]; };
+// Local-date-safe "YYYY-MM-DD" — avoids the UTC rollover bug where toISOString()
+// can shift to the next/previous calendar day depending on time of day + timezone.
+const toLocalDateStr = d => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
 const addDays = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
 const weekDatesFromSunday = s => { const sun=new Date(s+"T00:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return d; }); };
 const dl = d => { if(!d) return ""; const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
@@ -986,8 +989,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         headers:{ "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
         body:JSON.stringify({ email: authEmail }),
       });
-      // Supabase returns 200 with an empty body whether or not the email exists,
-      // to avoid leaking which emails are registered.
       if (!res.ok) {
         const text = await res.text();
         let data = {};
@@ -1172,13 +1173,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // ─────────────────────────────────────────────────────────────────────────
   function buildBusinessSnapshot() {
     const today = new Date();
-    const todayStr = today.toISOString().split("T")[0];
+    const todayStr = toLocalDateStr(today);
 
     // Build per-week summaries
     const weekSummaries = weeks.map(wk => {
       const wkDates = wk.dates.map(d => {
         const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
-        return dt.toISOString().split("T")[0];
+        return toLocalDateStr(dt);
       });
 
       const employeeBreakdown = employees.map(emp => {
@@ -2266,13 +2267,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   function getTodayShift(empId) {
     const now = new Date();
-    const todayStr = now.toISOString().split("T")[0];
+    const todayStr = toLocalDateStr(now);
     const todayIdx = now.getDay();
     for (const wk of weeks) {
       // Verify this week actually contains today's date before checking shifts
       const wkDates = wk.dates.map(d => {
         const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
-        return dt.toISOString().split("T")[0];
+        return toLocalDateStr(dt);
       });
       if (!wkDates.includes(todayStr)) continue; // week doesn't contain today
       const shift = getShift(wk.key, empId, todayIdx);
@@ -3916,14 +3917,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           {tab==="coverage" && (()=>{
             const today = new Date();
             const todayIdx = today.getDay();
-            const todayStr = today.toISOString().split("T")[0];
+            const todayStr = toLocalDateStr(today);
             const nowDec = today.getHours() + today.getMinutes()/60;
 
             // ── Helpers ──────────────────────────────────────────────────────
             // Find which week key contains a given date
             function weekKeyForDate(dateStr) {
               for (const wk of weeks) {
-                const dates = wk.dates.map(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toISOString().split("T")[0]; });
+                const dates = wk.dates.map(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt); });
                 if (dates.includes(dateStr)) return { weekKey: wk.key, dayIdx: dates.indexOf(dateStr) };
               }
               return null;
@@ -5849,7 +5850,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:1,borderTop:`1px solid ${T.border}`}}>
                     {[["Reviewed","reviewed","#3A9BE8"],["Approved","approved","#4CAF7D"],["Rejected","rejected","#C0392B"]].map(([lbl,val,color])=>(
-                      <button key={val} onClick={()=>setPunchReviews(prev=>({...prev,[p.id]:val}))}
+                      <button key={val} onClick={()=>setPunchReviews(p=>({...p,[p.id]:val}))}
                         style={{background:status===val?color+"22":T.surface,color:status===val?color:T.sub,border:"none",padding:"9px 0",fontSize:11,fontWeight:700,cursor:"pointer",transition:"all 0.12s"}}>
                         {lbl}
                       </button>
