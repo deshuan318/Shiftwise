@@ -561,6 +561,19 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
         weekly_budget:  budgetNum > 0 ? budgetNum : null,
         setup_complete: true,
       });
+
+      // Write the days-of-operation choice into business_hours too, so
+      // Settings → Hours of Operation reflects it immediately as "configured"
+      // instead of showing "Not configured yet" after a fresh setup.
+      const hoursRows = [0,1,2,3,4,5,6].map(di => ({
+        business_id: bizId,
+        day_index:   di,
+        open_time:   daysOpen.includes(di) ? "09:00" : null,
+        close_time:  daysOpen.includes(di) ? "17:00" : null,
+        is_closed:   !daysOpen.includes(di),
+      }));
+      await dbUpsert("business_hours", hoursRows);
+
       if (employees.length > 0) {
         const rows = employees.map(e => ({
           business_id:  bizId,
@@ -950,6 +963,17 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       return r ? (JSON.parse(r)?.businessHours ?? {}) : {};
     } catch { return {}; }
   });
+
+  // Keep daysOpen (used to grey out the schedule grid) in sync with
+  // businessHours (Settings → Hours of Operation is the single source of truth).
+  useEffect(() => {
+    if (Object.keys(businessHours).length === 0) return;
+    const open = DAYS.map((_, di) => di).filter(di => !businessHours[di]?.closed && !businessHours[di]?.is_closed);
+    setDaysOpen(open);
+    if (bizId) {
+      dbPatch("businesses?id=eq." + bizId, { days_open: open }).catch(()=>{});
+    }
+  }, [businessHours, bizId]);
 
   useEffect(() => {
     if (Object.keys(businessHours).length === 0) return;
