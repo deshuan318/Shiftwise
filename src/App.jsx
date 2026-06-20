@@ -506,10 +506,14 @@ const SETUP_CSS = `
   .closed-day-header { opacity:0.4; }
 `;
 
-const SW_LABELS = ["Your business","Operating days","Labor budget","Your team","Review & launch"];
+const SW_LABELS = ["Your business","Operating days","Labor budget","Your team","Connect Square","Review & launch"];
 
-function SetupFlow({ bizId, onComplete }) {
-  const [step,      setStep]      = React.useState(0);
+function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectSquare }) {
+  const [step,      setStep]      = React.useState(initialStep ?? 0);
+
+  React.useEffect(() => {
+    try { localStorage.setItem("sw_setup_step", String(step)); } catch {}
+  }, [step]);
   const [saving,    setSaving]    = React.useState(false);
   const [saveErr,   setSaveErr]   = React.useState("");
   const [bizName,   setBizName]   = React.useState("");
@@ -546,7 +550,7 @@ function SetupFlow({ bizId, onComplete }) {
     true,
   ];
 
-  const pct = (step / 4) * 100;
+  const pct = (step / (SW_LABELS.length - 1)) * 100;
 
   const handleLaunch = async () => {
     setSaving(true); setSaveErr("");
@@ -585,7 +589,7 @@ function SetupFlow({ bizId, onComplete }) {
             <div className="sw-logo-box">SW</div>
             <span className="sw-logo-name">Shift<span>Wise</span></span>
           </div>
-          <span className="sw-step-ctr">Step {step+1} of 5</span>
+          <span className="sw-step-ctr">Step {step+1} of {SW_LABELS.length}</span>
         </div>
         <div className="sw-prog-wrap">
           <div className="sw-prog-track">
@@ -767,6 +771,42 @@ function SetupFlow({ bizId, onComplete }) {
 
         {step===4 && (
           <div className="sw-card">
+            <div className="sw-eyebrow">Optional · Step 5 of {SW_LABELS.length}</div>
+            <h2 className="sw-title">Connect Square</h2>
+            <p className="sw-sub">
+              Link your Square account to automatically pull daily sales — ShiftWise uses this to show your real labor cost vs. revenue. You can always connect this later in Settings.
+            </p>
+
+            {squareConnected ? (
+              <div className="sw-launch-banner">
+                <span style={{fontSize:18,flexShrink:0}}>✅</span>
+                <div className="sw-launch-banner-text">
+                  <strong>Square is connected.</strong> Your sales data will start syncing automatically.
+                </div>
+              </div>
+            ) : (
+              <button
+                onClick={onConnectSquare}
+                style={{
+                  width:"100%", background:"#1A1A1A", color:"white", border:"none",
+                  borderRadius:10, padding:"14px 0", fontWeight:700, fontSize:14,
+                  cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8
+                }}>
+                <span style={{fontSize:16}}>◼</span> Connect Square Account
+              </button>
+            )}
+
+            <div className="sw-footer">
+              <button className="sw-btn-back" onClick={()=>setStep(3)}>← Back</button>
+              <button className="sw-btn-next" onClick={()=>setStep(5)}>
+                {squareConnected ? "Continue →" : "Skip for now →"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {step===5 && (
+          <div className="sw-card">
             <div className="sw-eyebrow">Almost there</div>
             <h2 className="sw-title">Review & launch</h2>
             <p className="sw-sub">Everything ShiftWise will use to set up your schedule. Edit any of it in Settings later.</p>
@@ -806,7 +846,7 @@ function SetupFlow({ bizId, onComplete }) {
             </div>
             {saveErr && <div className="sw-save-err">{saveErr}</div>}
             <div className="sw-footer">
-              <button className="sw-btn-back" onClick={()=>setStep(3)}>← Back</button>
+              <button className="sw-btn-back" onClick={()=>setStep(4)}>← Back</button>
               <button className="sw-btn-launch" onClick={handleLaunch} disabled={saving}>
                 {saving?"Saving…":"Launch ShiftWise →"}
               </button>
@@ -1022,7 +1062,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   async function loadAllData() {
     try {
       // 1. Get business record
-      const bizRows = await dbGet("businesses?select=*&limit=1");
+      const bizRows = await dbGet("businesses?select=*&order=created_at.asc&limit=1");
       const business = bizRows?.[0];
       if (!business) { setAuthState("unauthenticated"); clearSession(); return; }
 
@@ -1164,11 +1204,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const sq = params.get("square");
     if (sq === "connected") {
       showToast("Square connected ✓", 4000);
-      setTab("dashboard");
+      const inSetup = (() => { try { return localStorage.getItem("sw_setup_step") !== null; } catch { return false; } })();
+      if (!inSetup) setTab("dashboard");
       if (bizId) checkSquareStatus(bizId);
     } else if (sq === "error") {
       showToast("Square connection failed — please try again", 5000);
-      setTab("dashboard");
+      const inSetup = (() => { try { return localStorage.getItem("sw_setup_step") !== null; } catch { return false; } })();
+      if (!inSetup) setTab("dashboard");
     }
     if (sq) window.history.replaceState({}, "", window.location.pathname);
   }, [bizId]);
@@ -5937,11 +5979,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 
   // ── SETUP GATE ── show setup flow to new users before the main app
   if (!setupComplete && bizId) {
+    let resumeStep;
+    try { resumeStep = parseInt(localStorage.getItem("sw_setup_step"), 10); } catch {}
     return (
       <SetupFlow
         bizId={bizId}
+        initialStep={Number.isInteger(resumeStep) ? resumeStep : undefined}
+        squareConnected={squareConnected}
+        onConnectSquare={handleConnectSquare}
         onComplete={async () => {
-          // Reload all data then mark setup done — lands on real schedule
+          try { localStorage.removeItem("sw_setup_step"); } catch {}
           await loadAllData();
           setSetupComplete(true);
         }}
