@@ -89,8 +89,6 @@ const fmt = v => {
 };
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end - s.start).toFixed(2))));
 const getSunday = ds => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()-d.getDay()); return d.toISOString().split("T")[0]; };
-// Local-date-safe "YYYY-MM-DD" — avoids the UTC rollover bug where toISOString()
-// can shift to the next/previous calendar day depending on time of day + timezone.
 const toLocalDateStr = d => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
 const addDays = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
 const weekDatesFromSunday = s => { const sun=new Date(s+"T00:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return d; }); };
@@ -913,6 +911,18 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       return r ? (JSON.parse(r)?.businessHours ?? {}) : {};
     } catch { return {}; }
   });
+
+  // Keep daysOpen (used to grey out the schedule grid) in sync with
+  // businessHours (the single source of truth set in Settings → Hours of Operation).
+  // Any day not explicitly marked closed is treated as open.
+  useEffect(() => {
+    if (Object.keys(businessHours).length === 0) return; // nothing configured yet — leave daysOpen as-is
+    const open = DAYS.map((_, di) => di).filter(di => !businessHours[di]?.closed);
+    setDaysOpen(open);
+    if (bizId) {
+      dbPatch("businesses?id=eq." + bizId, { days_open: open }).catch(()=>{});
+    }
+  }, [businessHours, bizId]);
 
   // ── Drag & Drop ───────────────────────────────────────────────────────────
   // draggedShift: { empId, weekKey, dayIdx, shift }
@@ -2501,7 +2511,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             </div>
             <button onClick={()=>setOpenCell(null)} style={{background:T.muted,border:"none",borderRadius:"50%",width:34,height:34,fontSize:20,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
           </div>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14,position:"relative"}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14,position:"relative"}}>
             {[["Start Time","start"],["End Time","end"]].map(([lbl,field])=>{
               const HOURS_TP = [1,2,3,4,5,6,7,8,9,10,11,12];
               const MINS_TP  = [0,5,10,15,20,25,30,35,40,45,50,55];
@@ -2753,13 +2763,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:18,padding:"28px 28px 24px"}}>
 
             {authMode==="forgot" ? (
-              /* ── FORGOT PASSWORD VIEW ── */
               <div style={{display:"flex",flexDirection:"column",gap:12}}>
                 <div style={{marginBottom:4}}>
                   <div style={{fontSize:16,fontWeight:800,color:"white",marginBottom:4}}>Reset your password</div>
                   <div style={{fontSize:12,color:"#9CA3AF",lineHeight:1.5}}>Enter the email on your account and we'll send you a link to set a new password.</div>
                 </div>
-
                 {resetSent ? (
                   <div style={{background:"rgba(45,106,79,0.15)",border:"1px solid rgba(45,106,79,0.4)",borderRadius:10,padding:"14px",fontSize:13,color:"#6FCF97",lineHeight:1.6}}>
                     ✓ If an account exists for <strong>{authEmail}</strong>, a reset link is on its way. Check your inbox (and spam folder).
@@ -2770,29 +2778,24 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       placeholder="Email address" type="email"
                       onKeyDown={e=>e.key==="Enter"&&handleForgotPassword()}
                       style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-
                     {authError && (
                       <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
                         {authError}
                       </div>
                     )}
-
                     <button onClick={handleForgotPassword}
                       style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
                       Send Reset Link
                     </button>
                   </>
                 )}
-
                 <button onClick={()=>{setAuthMode("signin");setAuthError("");setResetSent(false);}}
                   style={{background:"none",border:"none",color:"#9CA3AF",fontSize:13,fontWeight:600,cursor:"pointer",marginTop:4,textAlign:"center"}}>
                   ← Back to Sign In
                 </button>
               </div>
             ) : (
-              /* ── SIGN IN / CREATE ACCOUNT VIEW ── */
               <>
-                {/* Tab switcher */}
                 <div style={{display:"flex",background:"rgba(0,0,0,0.3)",borderRadius:10,padding:4,marginBottom:24}}>
                   {[["signin","Sign In"],["signup","Create Account"]].map(([m,lbl])=>(
                     <button key={m} onClick={()=>{setAuthMode(m);setAuthError("");}}
@@ -4070,7 +4073,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             );
 
             return (
-              <div style={{maxWidth:720, display:"flex", flexDirection:"column", gap:16}}>
+              <div style={{maxWidth:900, margin:"0 auto", display:"flex", flexDirection:"column", gap:16}}>
 
                 {/* Header */}
                 <div>
@@ -4651,7 +4654,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             const scoreBg    = v => v >= 75 ? "#F0FFF4" : v >= 50 ? "#FEF3E2" : "#FDECEA";
 
             return (
-              <div style={{maxWidth:720, display:"flex", flexDirection:"column", gap:16}}>
+              <div style={{maxWidth:900, margin:"0 auto", display:"flex", flexDirection:"column", gap:16}}>
 
                 {/* Header */}
                 <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12}}>
@@ -4974,7 +4977,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             ];
 
             return (
-              <div style={{maxWidth:600, paddingBottom:20}}>
+              <div style={{maxWidth:760, margin:"0 auto", paddingBottom:20}}>
                 <div style={{marginBottom:20, display:"flex", alignItems:"center", gap:12}}>
                   {settingsSection && (
                     <button onClick={()=>setSettingsSection(null)}
@@ -5850,7 +5853,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:1,borderTop:`1px solid ${T.border}`}}>
                     {[["Reviewed","reviewed","#3A9BE8"],["Approved","approved","#4CAF7D"],["Rejected","rejected","#C0392B"]].map(([lbl,val,color])=>(
-                      <button key={val} onClick={()=>setPunchReviews(p=>({...p,[p.id]:val}))}
+                      <button key={val} onClick={()=>setPunchReviews(prev=>({...prev,[p.id]:val}))}
                         style={{background:status===val?color+"22":T.surface,color:status===val?color:T.sub,border:"none",padding:"9px 0",fontSize:11,fontWeight:700,cursor:"pointer",transition:"all 0.12s"}}>
                         {lbl}
                       </button>
