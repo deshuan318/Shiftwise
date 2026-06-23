@@ -174,7 +174,7 @@ export default async function handler(req, res) {
       const rows = salesData.map(d => ({
         business_id, sale_date: d.date, revenue: d.revenue, transactions: d.transactions,
       }));
-      const upsertRes = await fetch(`${SUPABASE_URL}/rest/v1/sales_data`, {
+      const upsertRes = await fetch(`${SUPABASE_URL}/rest/v1/sales_data?on_conflict=business_id,sale_date`, {
         method: "POST",
         headers: {
           "apikey": SERVICE_KEY,
