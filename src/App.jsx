@@ -1164,7 +1164,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const [
         empRows, weekRows, shiftTypeRows, bizHourRows,
         salesRows, recRows, punchRows, openShiftRows,
-        templateRows, publishedRows, auditRows,
+        templateRows, publishedRows, auditRows, reviewRows,
       ] = await Promise.all([
         dbGet(`employees?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`),
         dbGet(`schedule_weeks?select=*&business_id=eq.${business.id}&order=week_start.asc`),
@@ -1177,6 +1177,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         dbGet(`templates?select=*&business_id=eq.${business.id}&order=created_at.desc`),
         dbGet(`published_schedules?select=*&business_id=eq.${business.id}&order=published_at.desc`),
         dbGet(`audit_log?select=*&business_id=eq.${business.id}&order=created_at.desc&limit=500`),
+        dbGet(`punch_reviews?select=*&business_id=eq.${business.id}`),
       ]);
 
       // 3. Load shifts for all weeks
@@ -1256,6 +1257,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setTemplates((templateRows||[]).map(r=>({ id:r.id, name:r.name, savedAt:r.created_at, scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot })));
       setPublished((publishedRows||[]).map(r=>({ id:r.id, publishedAt:r.published_at, label:r.label, wk1Start:r.week_start, wk2Start:r.week_start, weekMode:"1", scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot, budget:r.budget })));
       setAuditLog((auditRows||[]).map(r=>({ id:r.id, at:r.created_at, action:r.action, detail:r.detail, empName:r.employee_name })));
+      const reviewMap = {};
+      (reviewRows||[]).forEach(r=>{ reviewMap[r.punch_id] = r.status; });
+      setPunchReviews(reviewMap);
 
       setAuthState("authenticated");
     } catch(err) {
@@ -3252,9 +3256,34 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const FLAG_LABELS = {LATE:"Late clock-in",EARLY:"Early clock-in",EARLY_OUT:"Early clock-out",NO_SHIFT:"No shift scheduled",ADJUSTMENT:"Manual adjustment"};
     const STATUS_COLOR = {reviewed:"#3A9BE8",approved:"#4CAF7D",rejected:"#C0392B",pending:"#E8A93A"};
 
-    function setStatus(val) {
+    async function setStatus(val) {
       if (!punchId) return;
-      dp.forEach(p => setPunchReviews(prev=>({...prev,[p.id]:val})));
+      dp.forEach(p => {
+        setPunchReviews(prev=>({...prev,[p.id]:val}));
+        // Upsert review status to Supabase
+        if (bizId) {
+          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?punch_id=eq.${p.id}`, {
+            method: "GET",
+            headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}` }
+          }).then(r=>r.json()).then(existing => {
+            if (existing && existing.length > 0) {
+              // Update existing row
+              fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?punch_id=eq.${p.id}`, {
+                method: "PATCH",
+                headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "return=minimal" },
+                body: JSON.stringify({ status: val, updated_at: new Date().toISOString() })
+              }).catch(e=>console.warn("punch_reviews update failed:", e));
+            } else {
+              // Insert new row
+              fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
+                method: "POST",
+                headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "return=minimal" },
+                body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
+              }).catch(e=>console.warn("punch_reviews insert failed:", e));
+            }
+          }).catch(e=>console.warn("punch_reviews fetch failed:", e));
+        }
+      });
       setTsOpenCell(null);
       showToast(`Marked as ${val} ✓`);
     }
@@ -5974,6 +6003,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               const updates = {};
               flagged.forEach(p=>{ if(!punchReviews[p.id]) updates[p.id]="reviewed"; });
               setPunchReviews(prev=>({...prev,...updates}));
+              // Persist to Supabase
+              if (bizId) {
+                Object.entries(updates).forEach(([pid, status]) => {
+                  fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
+                    method: "POST",
+                    headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
+                    body: JSON.stringify({ business_id: bizId, punch_id: pid, status, reviewed_by: getSession()?.user?.id || null })
+                  }).catch(e=>console.warn("punch_reviews insert failed:", e));
+                });
+              }
               showToast("All alerts marked as reviewed ✓");
             }} style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer",width:"100%"}}>
               Mark All Reviewed
@@ -6012,7 +6051,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:1,borderTop:`1px solid ${T.border}`}}>
                     {[["Reviewed","reviewed","#3A9BE8"],["Approved","approved","#4CAF7D"],["Rejected","rejected","#C0392B"]].map(([lbl,val,color])=>(
-                      <button key={val} onClick={()=>setPunchReviews(prev=>({...prev,[p.id]:val}))}
+                      <button key={val} onClick={()=>{
+                        setPunchReviews(prev=>({...prev,[p.id]:val}));
+                        if (bizId) {
+                          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
+                            method: "POST",
+                            headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
+                            body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
+                          }).catch(e=>console.warn("punch_reviews insert failed:", e));
+                        }
+                      }}
                         style={{background:status===val?color+"22":T.surface,color:status===val?color:T.sub,border:"none",padding:"9px 0",fontSize:11,fontWeight:700,cursor:"pointer",transition:"all 0.12s"}}>
                         {lbl}
                       </button>
