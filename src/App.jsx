@@ -3582,7 +3582,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         </div>
       )}
 
-      <TimesheetCellPopup/>
+      {TimesheetCellPopup()}
     </div>
   );
 })()}
