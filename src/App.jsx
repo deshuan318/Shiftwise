@@ -5074,10 +5074,30 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           <div style={{fontSize:17, fontWeight:800, color:"white", lineHeight:1.4}}>{insight.headline}</div>
                         </div>
                         {insight.score && (
-                          <div style={{background:scoreBg(insight.score.value), borderRadius:12, padding:"12px 18px", textAlign:"center", flexShrink:0}}>
-                            <div style={{fontSize:32, fontWeight:900, color:scoreColor(insight.score.value), lineHeight:1}}>{insight.score.value}</div>
-                            <div style={{fontSize:11, fontWeight:800, color:scoreColor(insight.score.value), marginTop:2}}>{insight.score.label}</div>
-                            <div style={{fontSize:9, color:"#888", marginTop:4, maxWidth:120, lineHeight:1.3}}>{insight.score.reason}</div>
+                          <div style={{flexShrink:0}}>
+                            <div style={{background:scoreBg(insight.score.value), borderRadius:12, padding:"12px 18px", textAlign:"center", marginBottom:8}}>
+                              <div style={{fontSize:32, fontWeight:900, color:scoreColor(insight.score.value), lineHeight:1}}>{insight.score.value}</div>
+                              <div style={{fontSize:11, fontWeight:800, color:scoreColor(insight.score.value), marginTop:2}}>{insight.score.label}</div>
+                              <div style={{fontSize:9, color:"#888", marginTop:4, maxWidth:120, lineHeight:1.3}}>{insight.score.reason}</div>
+                            </div>
+                            {/* Score legend */}
+                            <div style={{display:"flex", flexDirection:"column", gap:3}}>
+                              {[
+                                {range:"75–100", label:"Healthy",  color:"#4CAF7D", bg:"#F0FFF4"},
+                                {range:"50–74",  label:"Caution",  color:"#E8A93A", bg:"#FEF3E2"},
+                                {range:"30–49",  label:"Warning",  color:"#C0392B", bg:"#FDECEA"},
+                                {range:"0–29",   label:"Critical", color:"#7B0000", bg:"#FDECEA"},
+                              ].map(s=>(
+                                <div key={s.label} style={{display:"flex", alignItems:"center", gap:6, padding:"3px 6px", borderRadius:6,
+                                  background: insight.score.label===s.label ? s.bg : "transparent",
+                                  border: insight.score.label===s.label ? `1px solid ${s.color}30` : "1px solid transparent"}}>
+                                  <div style={{width:8, height:8, borderRadius:"50%", background:s.color, flexShrink:0}}/>
+                                  <span style={{fontSize:9, fontWeight:insight.score.label===s.label?800:500, color:insight.score.label===s.label?s.color:"#aaa", whiteSpace:"nowrap"}}>
+                                    {s.range} — {s.label}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>
