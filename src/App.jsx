@@ -3176,14 +3176,20 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
     async function setStatus(val) {
       if (!punchId) return;
+      console.log("setStatus fired", {val, punchId, bizId, dpCount: dp.length});
       dp.forEach(p => {
         setPunchReviews(prev=>({...prev,[p.id]:val}));
+        console.log("attempting fetch for punch", p.id, "bizId:", bizId);
         if (bizId) {
           fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?on_conflict=punch_id`, {
             method: "POST",
             headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
             body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
-          }).catch(e=>console.warn("punch_reviews upsert failed:", e));
+          }).then(r=>{ console.log("punch_reviews response:", r.status); return r.text(); })
+            .then(t=>console.log("punch_reviews body:", t))
+            .catch(e=>console.warn("punch_reviews upsert failed:", e));
+        } else {
+          console.warn("bizId is null/undefined — skipping fetch");
         }
       });
       setTsOpenCell(null);
