@@ -3140,7 +3140,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     { value:"other",            label:"Other" },
   ];
 
-  function TimesheetCellPopup() {
+  function TimesheetCellPopup({ bizId }) {
     const [editIn,  setEditIn]  = useState("");
     const [editOut, setEditOut] = useState("");
     const [saving,  setSaving]  = useState(false);
@@ -3582,7 +3582,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         </div>
       )}
 
-      {TimesheetCellPopup()}
+      <TimesheetCellPopup bizId={bizId}/>
     </div>
   );
 })()}
