@@ -3174,9 +3174,18 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const FLAG_LABELS = {LATE:"Late clock-in",EARLY:"Early clock-in",EARLY_OUT:"Early clock-out",NO_SHIFT:"No shift scheduled",ADJUSTMENT:"Manual adjustment"};
     const STATUS_COLOR = {reviewed:"#3A9BE8",approved:"#4CAF7D",rejected:"#C0392B",pending:"#E8A93A"};
 
-    function setStatus(val) {
+    async function setStatus(val) {
       if (!punchId) return;
-      dp.forEach(p => setPunchReviews(prev=>({...prev,[p.id]:val})));
+      dp.forEach(p => {
+        setPunchReviews(prev=>({...prev,[p.id]:val}));
+        if (bizId) {
+          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
+            method: "POST",
+            headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
+            body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
+          }).catch(e=>console.warn("punch_reviews upsert failed:", e));
+        }
+      });
       setTsOpenCell(null);
       showToast(`Marked as ${val} ✓`);
     }
@@ -4541,36 +4550,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         {[
                           { l:"Total Revenue", v:totalRevenue>0?`$${totalRevenue.toFixed(0)}`:"-", c:"#3A9BE8", sub:"this week" },
                           { l:"Labor Cost", v:`$${payWeekLabor.toFixed(2)}`, c:T.accent, sub:"this week" },
-                          (() => {
-                            const projPct = forecastThisWeek.hasEnoughData && forecastThisWeek.total > 0
-                              ? (payWeekLabor / forecastThisWeek.total) * 100 : null;
-                            const actPct  = totalRevenue > 0 ? laborCostPct : null;
-                            const dispPct = laborPctMode === "projected" ? projPct : actPct;
-                            const pctColor = dispPct == null ? T.sub : dispPct > 35 ? "#C0392B" : dispPct > 25 ? "#E8A93A" : "#4CAF7D";
-                            const pctSub = laborPctMode === "projected"
-                              ? (forecastThisWeek.hasEnoughData ? `vs $${forecastThisWeek.total.toFixed(0)} forecasted` : "need more history")
-                              : (totalRevenue > 0 ? `vs $${totalRevenue.toFixed(0)} actual` : "no revenue yet");
-                            return (
-                              <div style={{background:T.muted,borderRadius:10,padding:"12px 14px"}}>
-                                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-                                  <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>Labor Cost %</div>
-                                  <div style={{display:"flex",background:T.border,borderRadius:20,padding:2,gap:2}}>
-                                    {["projected","actual"].map(m=>(
-                                      <button key={m} onClick={()=>setLaborPctMode(m)}
-                                        style={{background:laborPctMode===m?T.accent:"transparent",color:laborPctMode===m?"white":T.sub,border:"none",borderRadius:18,padding:"3px 8px",fontSize:9,fontWeight:700,cursor:"pointer",transition:"all 0.15s",textTransform:"capitalize",whiteSpace:"nowrap"}}>
-                                        {m}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                                <div style={{fontSize:20,fontWeight:800,color:pctColor,lineHeight:1}}>{dispPct!=null?`${dispPct.toFixed(1)}%`:"-"}</div>
-                                <div style={{fontSize:9,color:T.sub,marginTop:4}}>{pctSub}</div>
-                                <div style={{fontSize:9,color:T.sub,marginTop:6,padding:"4px 6px",background:laborPctMode==="projected"?"#EAF4EF":"#FEF3E2",borderRadius:5}}>
-                                  {dispPct!=null?(dispPct<25?"✓ Under target":dispPct<=35?"✓ On target":"⚠ Over target"):""} target: 25–35%
-                                </div>
-                              </div>
-                            );
-                          })(),
                           { l:"Total Hours", v:pwHrs+"h", c:"#3A9BE8", sub:"scheduled" },
                           { l:"Staff Scheduled", v:pwStaff+"/"+employees.length, c:"#4CAF7D", sub:"have shifts" },
                           { l:"Forecast (Next 7 Days)",
@@ -4584,6 +4563,37 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                             <div style={{fontSize:9,color:T.sub,marginTop:4}}>{s.sub}</div>
                           </div>
                         ))}
+                        {/* Labor Cost % — standalone tile with Projected/Actual toggle */}
+                        {(()=>{
+                          const projPct = forecastThisWeek.hasEnoughData && forecastThisWeek.total > 0
+                            ? (payWeekLabor / forecastThisWeek.total) * 100 : null;
+                          const actPct  = totalRevenue > 0 ? laborCostPct : null;
+                          const dispPct = laborPctMode === "projected" ? projPct : actPct;
+                          const pctColor = dispPct == null ? T.sub : dispPct > 35 ? "#C0392B" : dispPct > 25 ? "#E8A93A" : "#4CAF7D";
+                          const pctSub = laborPctMode === "projected"
+                            ? (forecastThisWeek.hasEnoughData ? `vs $${forecastThisWeek.total.toFixed(0)} forecasted` : "need more history")
+                            : (totalRevenue > 0 ? `vs $${totalRevenue.toFixed(0)} actual` : "no revenue yet");
+                          return (
+                            <div key="labor-pct" style={{background:T.muted,borderRadius:10,padding:"12px 14px"}}>
+                              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                                <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>Labor Cost %</div>
+                                <div style={{display:"flex",background:T.border,borderRadius:20,padding:2,gap:2}}>
+                                  {["projected","actual"].map(m=>(
+                                    <button key={m} onClick={()=>setLaborPctMode(m)}
+                                      style={{background:laborPctMode===m?T.accent:"transparent",color:laborPctMode===m?"white":T.sub,border:"none",borderRadius:18,padding:"3px 8px",fontSize:9,fontWeight:700,cursor:"pointer",transition:"all 0.15s",textTransform:"capitalize",whiteSpace:"nowrap"}}>
+                                      {m}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                              <div style={{fontSize:20,fontWeight:800,color:pctColor,lineHeight:1}}>{dispPct!=null?`${dispPct.toFixed(1)}%`:"-"}</div>
+                              <div style={{fontSize:9,color:T.sub,marginTop:4}}>{pctSub}</div>
+                              <div style={{fontSize:9,color:T.sub,marginTop:6,padding:"4px 6px",background:laborPctMode==="projected"?"#EAF4EF":"#FEF3E2",borderRadius:5}}>
+                                {dispPct!=null?(dispPct<25?"✓ Under target":dispPct<=35?"✓ On target":"⚠ Over target"):""} target: 25–35%
+                              </div>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       <div>
@@ -5933,15 +5943,34 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const FLAG_COLORS = { LATE:"#E8A93A", EARLY:"#3A9BE8", EARLY_OUT:"#E8A93A", NO_SHIFT:"#C0392B" };
         return (
           <div style={{flex:1,overflowY:"auto",padding:14,display:"flex",flexDirection:"column",gap:10}}>
-            {/* Mark all reviewed button */}
-            <button onClick={()=>{
-              const updates = {};
-              flagged.forEach(p=>{ if(!punchReviews[p.id]) updates[p.id]="reviewed"; });
-              setPunchReviews(prev=>({...prev,...updates}));
-              showToast("All alerts marked as reviewed ✓");
-            }} style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer",width:"100%"}}>
-              Mark All Reviewed
-            </button>
+            {/* Mark all reviewed + Clear actioned */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <button onClick={()=>{
+                const updates = {};
+                flagged.forEach(p=>{ if(!punchReviews[p.id]) updates[p.id]="reviewed"; });
+                setPunchReviews(prev=>({...prev,...updates}));
+                if (bizId) {
+                  Object.entries(updates).forEach(([pid, status]) => {
+                    fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
+                      method: "POST",
+                      headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
+                      body: JSON.stringify({ business_id: bizId, punch_id: pid, status, reviewed_by: getSession()?.user?.id || null })
+                    }).catch(e=>console.warn("punch_reviews insert failed:", e));
+                  });
+                }
+                showToast("All alerts marked as reviewed ✓");
+              }} style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                Mark All Reviewed
+              </button>
+              <button onClick={()=>{
+                const actionedIds = flagged.filter(p => punchReviews[p.id] && punchReviews[p.id] !== "pending").map(p=>p.id);
+                if (actionedIds.length === 0) { showToast("No actioned alerts to clear"); return; }
+                setPunches(prev => prev.map(p => actionedIds.includes(p.id) ? {...p, flags:[]} : p));
+                showToast(`Cleared ${actionedIds.length} actioned alert${actionedIds.length!==1?"s":""} ✓`);
+              }} style={{background:"#FDECEA",color:"#C0392B",border:"1px solid #C0392B22",borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                Clear Actioned
+              </button>
+            </div>
 
             {flagged.map(p=>{
               const emp = employees.find(e=>e.id===p.empId);
@@ -5976,7 +6005,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:1,borderTop:`1px solid ${T.border}`}}>
                     {[["Reviewed","reviewed","#3A9BE8"],["Approved","approved","#4CAF7D"],["Rejected","rejected","#C0392B"]].map(([lbl,val,color])=>(
-                      <button key={val} onClick={()=>setPunchReviews(prev=>({...prev,[p.id]:val}))}
+                      <button key={val} onClick={()=>{
+                        setPunchReviews(prev=>({...prev,[p.id]:val}));
+                        if (bizId) {
+                          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
+                            method: "POST",
+                            headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
+                            body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
+                          }).catch(e=>console.warn("punch_reviews insert failed:", e));
+                        }
+                      }}
                         style={{background:status===val?color+"22":T.surface,color:status===val?color:T.sub,border:"none",padding:"9px 0",fontSize:11,fontWeight:700,cursor:"pointer",transition:"all 0.12s"}}>
                         {lbl}
                       </button>
