@@ -3179,7 +3179,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       dp.forEach(p => {
         setPunchReviews(prev=>({...prev,[p.id]:val}));
         if (bizId) {
-          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
+          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?on_conflict=punch_id`, {
             method: "POST",
             headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
             body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
@@ -4579,7 +4579,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                                 <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>Labor Cost %</div>
                                 <div style={{display:"flex",background:T.border,borderRadius:20,padding:2,gap:2}}>
                                   {["projected","actual"].map(m=>(
-                                    <button key={m} onClick={()=>setLaborPctMode(m)}
+                                    <button key={m} onClick={e=>{e.stopPropagation();setLaborPctMode(m);}}
                                       style={{background:laborPctMode===m?T.accent:"transparent",color:laborPctMode===m?"white":T.sub,border:"none",borderRadius:18,padding:"3px 8px",fontSize:9,fontWeight:700,cursor:"pointer",transition:"all 0.15s",textTransform:"capitalize",whiteSpace:"nowrap"}}>
                                       {m}
                                     </button>
@@ -5951,7 +5951,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 setPunchReviews(prev=>({...prev,...updates}));
                 if (bizId) {
                   Object.entries(updates).forEach(([pid, status]) => {
-                    fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
+                    fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?on_conflict=punch_id`, {
                       method: "POST",
                       headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
                       body: JSON.stringify({ business_id: bizId, punch_id: pid, status, reviewed_by: getSession()?.user?.id || null })
@@ -6008,7 +6008,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       <button key={val} onClick={()=>{
                         setPunchReviews(prev=>({...prev,[p.id]:val}));
                         if (bizId) {
-                          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
+                          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?on_conflict=punch_id`, {
                             method: "POST",
                             headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
                             body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
