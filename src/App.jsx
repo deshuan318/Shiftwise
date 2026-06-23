@@ -861,10 +861,10 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
 
 // ─── PunchRow: single punch log entry with inline per-row delete + reason ───
 function PunchRow({ p, i, total, emp, dateStr, bizId, setPunches, setPunchReviews, addAudit, showToast, T, ADJUSTMENT_REASONS }) {
-  const [delOpen, setDelOpen] = React.useState(false);
-  const [delReason, setDelReason] = React.useState("duplicate_punch");
-  const [delNote, setDelNote] = React.useState("");
-  const [deleting, setDeleting] = React.useState(false);
+  const [delOpen, setDelOpen] = useState(false);
+  const [delReason, setDelReason] = useState("duplicate_punch");
+  const [delNote, setDelNote] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   const typeLabel = p.type==="in"?"Clock in":p.type==="out"?"Clock out":p.type==="break_out"?"Break start":"Break end";
   const typeColor = p.type==="in"||p.type==="break_in" ? "#2D6A4F" : "#C0392B";
