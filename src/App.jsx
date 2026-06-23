@@ -603,7 +603,7 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
 
         {step===0 && (
           <div className="sw-card">
-            <div className="sw-eyebrow">Welcome to ShiftWise</div>
+            <div className="sw-eyebrow">Welcome to ShiftWise | Veredian</div>
             <h2 className="sw-title">Tell us about your business</h2>
             <p className="sw-sub">Shows on your schedule and reports. Edit any time in Settings.</p>
             <div className="sw-fgroup">
@@ -2798,7 +2798,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           {/* Logo */}
           <div style={{textAlign:"center",marginBottom:32}}>
             <div style={{width:56,height:56,background:"#2D6A4F",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 16px"}}>📅</div>
-            <div style={{fontSize:26,fontWeight:900,color:"white",letterSpacing:"-0.01em"}}>ShiftWise</div>
+            <div style={{fontSize:26,fontWeight:900,color:"white",letterSpacing:"-0.01em",display:"inline-flex",alignItems:"center",gap:0}}>
+              ShiftWise
+              <span style={{color:"#6B7280",margin:"0 7px",fontWeight:300}}>|</span>
+              Veredian
+              <span style={{fontSize:11,fontWeight:400,color:"#93c5fd",position:"relative",bottom:"9px",marginLeft:3,letterSpacing:"0.06em"}}>Beta</span>
+            </div>
             <div style={{fontSize:13,color:"#4B5563",marginTop:4}}>Schedule smarter. Run better.</div>
           </div>
 
@@ -5215,7 +5220,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                               style={{borderRadius:T.radius, overflow:"hidden", cursor:"pointer", border:`2px solid ${isActive?T.accent:T.border}`, boxShadow:isActive?`0 0 0 3px ${T.accent}28`:T.shadow, background:T.surface, transition:"all 0.15s"}}>
                               <div style={{background:theme.dark, padding:"9px 12px", display:"flex", alignItems:"center", gap:8}}>
                                 <div style={{width:18,height:18,background:theme.accent,borderRadius:4,fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>📅</div>
-                                <span style={{fontSize:11,fontWeight:800,color:theme.id==="commander"?theme.text:"white"}}>ShiftWise</span>
+                                <span style={{fontSize:11,fontWeight:800,color:theme.id==="commander"?theme.text:"white",display:"inline-flex",alignItems:"center",gap:0}}>
+                                  ShiftWise
+                                  <span style={{color:"#6B7280",margin:"0 4px",fontWeight:300}}>|</span>
+                                  Veredian
+                                  <span style={{fontSize:7,fontWeight:400,color:"#93c5fd",position:"relative",bottom:"4px",marginLeft:2,letterSpacing:"0.05em"}}>Beta</span>
+                                </span>
                                 <div style={{marginLeft:"auto",display:"flex",gap:3}}>
                                   {["Schedule","Team","Dashboard"].map(lbl=>(<div key={lbl} style={{background:lbl==="Schedule"?theme.accent:"transparent",color:"#888",borderRadius:3,padding:"2px 6px",fontSize:8,fontWeight:700}}>{lbl}</div>))}
                                 </div>
