@@ -89,7 +89,6 @@ const fmt = v => {
 };
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end - s.start).toFixed(2))));
 const getSunday = ds => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()-d.getDay()); return d.toISOString().split("T")[0]; };
-const toLocalDateStr = d => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
 const addDays = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
 const weekDatesFromSunday = s => { const sun=new Date(s+"T00:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return d; }); };
 const dl = d => { if(!d) return ""; const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
@@ -323,621 +322,6 @@ const Divider = ({ T }) => (
   <div className="controls-divider" style={{ width:1, background:T.border, alignSelf:"stretch" }} />
 );
 
-// ── Setup flow helpers ─────────────────────────────────────────────────────
-const SETUP_DAYS_FULL  = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
-const SETUP_DAYS_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
-const SETUP_ROLES = [
-  "Barista","Cashier","Server","Cook","Host","Manager",
-  "Opener","Closer","Shift Lead","Line Cook","Prep Cook","Other"
-];
-const SETUP_AV_COLORS = [
-  "#2D6A4F","#B45309","#1D4ED8","#7C3AED",
-  "#0F766E","#9D174D","#92400E","#1E40AF"
-];
-const getSetupInitials = name =>
-  (name||"").trim().split(" ").slice(0,2).map(w=>w[0]||"").join("").toUpperCase() || "?";
-
-// ── SetupFlow component ─────────────────────────────────────────────────────
-const SETUP_CSS = `
-  .sw-setup-shell {
-    min-height:100vh; display:flex; flex-direction:column;
-    align-items:center; padding:0 20px 60px; background:#F7F7F5;
-    font-family:-apple-system,BlinkMacSystemFont,'Inter',sans-serif;
-  }
-  .sw-topbar {
-    width:100%; max-width:580px; padding:20px 0 0;
-    display:flex; align-items:center; justify-content:space-between;
-  }
-  .sw-logo { display:flex; align-items:center; gap:8px; }
-  .sw-logo-box {
-    width:34px; height:34px; border-radius:8px; background:#2D6A4F;
-    color:#fff; font-weight:700; font-size:13px;
-    display:flex; align-items:center; justify-content:center;
-  }
-  .sw-logo-name { font-size:16px; font-weight:700; color:#1A1A18; }
-  .sw-logo-name span { color:#2D6A4F; }
-  .sw-step-ctr { font-size:12px; color:#6B6B67; font-weight:500; }
-  .sw-prog-wrap { width:100%; max-width:580px; margin:20px 0 28px; }
-  .sw-prog-track { height:4px; background:#E8E6E1; border-radius:2px; overflow:hidden; }
-  .sw-prog-fill { height:100%; background:#2D6A4F; border-radius:2px; transition:width .4s cubic-bezier(.4,0,.2,1); }
-  .sw-prog-labels { display:flex; justify-content:space-between; margin-top:8px; }
-  .sw-prog-lbl { font-size:10px; font-weight:500; color:#C4C0BB; }
-  .sw-prog-lbl.done { color:#2D6A4F; }
-  .sw-prog-lbl.active { color:#1A1A18; font-weight:700; }
-  .sw-card {
-    width:100%; max-width:580px; background:#fff;
-    border:1px solid #E8E6E1; border-radius:16px; padding:36px;
-    box-shadow:0 2px 16px rgba(0,0,0,.05);
-  }
-  .sw-eyebrow { font-size:11px; font-weight:700; color:#2D6A4F; text-transform:uppercase; letter-spacing:.1em; margin-bottom:8px; }
-  .sw-title { font-size:24px; font-weight:700; color:#1A1A18; line-height:1.2; margin-bottom:6px; }
-  .sw-sub { font-size:14px; color:#6B6B67; margin-bottom:28px; line-height:1.6; }
-  .sw-sub strong { color:#2D6A4F; font-weight:600; }
-  .sw-fgroup { margin-bottom:20px; }
-  .sw-flabel { font-size:11px; font-weight:700; color:#6B6B67; text-transform:uppercase; letter-spacing:.07em; margin-bottom:6px; display:block; }
-  .sw-fhint { font-size:12px; color:#6B6B67; margin-top:5px; }
-  .sw-input {
-    width:100%; background:#F7F7F5; border:1.5px solid #E8E6E1;
-    border-radius:9px; padding:12px 14px; color:#1A1A18;
-    font-size:15px; font-family:inherit; outline:none;
-    transition:border-color .15s,background .15s;
-  }
-  .sw-input:focus { border-color:#2D6A4F; background:#fff; }
-  .sw-input::placeholder { color:#C4C0BB; }
-  .sw-toggle-row { display:flex; gap:8px; }
-  .sw-toggle-btn {
-    flex:1; padding:12px; border-radius:9px; border:1.5px solid #E8E6E1;
-    background:#F7F7F5; color:#6B6B67; font-size:14px; font-weight:500;
-    cursor:pointer; transition:all .15s; font-family:inherit;
-  }
-  .sw-toggle-btn.sel { border-color:#2D6A4F; background:#E8F4EE; color:#1B4332; font-weight:600; }
-  .sw-days-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:6px; margin-bottom:8px; }
-  .sw-day-pill {
-    display:flex; flex-direction:column; align-items:center; gap:4px;
-    padding:9px 2px 7px; border-radius:9px; border:1.5px solid #E8E6E1;
-    background:#F7F7F5; cursor:pointer; transition:all .15s; user-select:none;
-  }
-  .sw-day-pill.open { border-color:#2D6A4F; background:#E8F4EE; }
-  .sw-dpname { font-size:11px; font-weight:700; color:#6B6B67; }
-  .sw-day-pill.open .sw-dpname { color:#1B4332; }
-  .sw-dpstatus { font-size:9px; color:#C4C0BB; font-weight:500; }
-  .sw-day-pill.open .sw-dpstatus { color:#2D6A4F; font-weight:700; }
-  .sw-dpcheck {
-    width:16px; height:16px; border-radius:50%; border:1.5px solid #E8E6E1;
-    background:#fff; display:flex; align-items:center; justify-content:center;
-    font-size:8px; color:#fff; transition:all .15s;
-  }
-  .sw-day-pill.open .sw-dpcheck { background:#2D6A4F; border-color:#2D6A4F; }
-  .sw-days-hint { font-size:12px; color:#6B6B67; margin-top:6px; }
-  .sw-budget-display {
-    background:#E8F4EE; border:1px solid #A7D7C0; border-radius:10px;
-    padding:14px 16px; margin-top:12px;
-    display:flex; align-items:center; justify-content:space-between;
-  }
-  .sw-budget-lbl { font-size:12px; color:#1B4332; font-weight:500; }
-  .sw-budget-val { font-size:22px; font-weight:700; color:#2D6A4F; }
-  .sw-budget-grid { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:12px; }
-  .sw-budget-mini { background:#F7F7F5; border:1px solid #E8E6E1; border-radius:8px; padding:10px 12px; }
-  .sw-bm-label { font-size:10px; color:#6B6B67; font-weight:700; text-transform:uppercase; letter-spacing:.06em; }
-  .sw-bm-val { font-size:15px; font-weight:700; color:#1A1A18; margin-top:2px; }
-  .sw-emp-cards { display:flex; flex-direction:column; gap:8px; margin-bottom:14px; }
-  .sw-emp-card {
-    background:#F7F7F5; border:1px solid #E8E6E1; border-radius:10px;
-    padding:11px 14px; display:flex; align-items:center; gap:10px;
-  }
-  .sw-emp-av {
-    width:34px; height:34px; border-radius:50%; color:#fff;
-    font-size:12px; font-weight:700; display:flex; align-items:center;
-    justify-content:center; flex-shrink:0;
-  }
-  .sw-emp-name { font-size:14px; font-weight:600; color:#1A1A18; }
-  .sw-emp-meta { font-size:12px; color:#6B6B67; }
-  .sw-emp-remove {
-    background:none; border:none; color:#C4C0BB; font-size:15px;
-    cursor:pointer; padding:2px 6px; border-radius:5px; margin-left:auto; font-family:inherit;
-  }
-  .sw-emp-remove:hover { color:#991B1B; }
-  .sw-emp-count { display:inline-flex; align-items:center; gap:5px; background:#E8F4EE; border-radius:20px; padding:3px 10px; font-size:12px; font-weight:600; color:#1B4332; margin-bottom:12px; }
-  .sw-add-form { background:#F7F7F5; border:1.5px dashed #E8E6E1; border-radius:10px; padding:16px; margin-bottom:4px; }
-  .sw-add-form.active { border-color:#2D6A4F; background:#fff; }
-  .sw-form-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin-bottom:10px; }
-  .sw-form-lbl { font-size:10px; font-weight:700; color:#6B6B67; text-transform:uppercase; letter-spacing:.06em; margin-bottom:4px; display:block; }
-  .sw-form-input {
-    width:100%; background:#fff; border:1.5px solid #E8E6E1;
-    border-radius:8px; padding:9px 11px; color:#1A1A18;
-    font-size:14px; font-family:inherit; outline:none;
-  }
-  .sw-form-input:focus { border-color:#2D6A4F; }
-  .sw-form-select {
-    width:100%; background:#fff; border:1.5px solid #E8E6E1;
-    border-radius:8px; padding:9px 11px; color:#1A1A18;
-    font-size:14px; font-family:inherit; outline:none; appearance:none; cursor:pointer;
-  }
-  .sw-form-select:focus { border-color:#2D6A4F; }
-  .sw-form-actions { display:flex; gap:8px; }
-  .sw-btn-confirm { background:#2D6A4F; color:#fff; border:none; border-radius:8px; padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer; font-family:inherit; }
-  .sw-btn-cancel { background:none; border:1px solid #E8E6E1; border-radius:8px; padding:9px 14px; font-size:13px; color:#6B6B67; cursor:pointer; font-family:inherit; }
-  .sw-btn-add-emp {
-    width:100%; padding:12px; border-radius:9px; border:1.5px dashed #E8E6E1;
-    background:transparent; color:#2D6A4F; font-size:14px; font-weight:600;
-    cursor:pointer; font-family:inherit; transition:all .15s;
-    display:flex; align-items:center; justify-content:center; gap:6px;
-  }
-  .sw-btn-add-emp:hover { border-color:#2D6A4F; background:#E8F4EE; }
-  .sw-emp-error { font-size:12px; color:#991B1B; margin-bottom:8px; }
-  .sw-review-section { margin-bottom:18px; }
-  .sw-review-title { font-size:11px; font-weight:700; color:#6B6B67; text-transform:uppercase; letter-spacing:.08em; margin-bottom:8px; padding-bottom:6px; border-bottom:1px solid #E8E6E1; }
-  .sw-review-row { display:flex; align-items:center; justify-content:space-between; padding:7px 0; border-bottom:1px solid #F0EEE9; }
-  .sw-review-row:last-child { border-bottom:none; }
-  .sw-review-label { font-size:13px; color:#6B6B67; }
-  .sw-review-val { font-size:13px; font-weight:600; color:#1A1A18; }
-  .sw-review-days { display:flex; gap:5px; flex-wrap:wrap; }
-  .sw-day-tag { background:#E8F4EE; color:#1B4332; border-radius:5px; padding:2px 8px; font-size:12px; font-weight:600; }
-  .sw-day-tag.closed { background:#F0EEE9; color:#6B6B67; }
-  .sw-review-emps { display:flex; flex-direction:column; gap:6px; }
-  .sw-review-emp { display:flex; align-items:center; gap:10px; padding:8px 10px; background:#F7F7F5; border-radius:8px; }
-  .sw-rev-av { width:26px; height:26px; border-radius:50%; color:#fff; font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-  .sw-rev-name { font-size:13px; font-weight:600; color:#1A1A18; }
-  .sw-rev-role { font-size:12px; color:#6B6B67; }
-  .sw-rev-rate { margin-left:auto; font-size:13px; font-weight:700; color:#2D6A4F; }
-  .sw-launch-banner { background:#E8F4EE; border:1px solid #A7D7C0; border-radius:10px; padding:14px 16px; margin-top:18px; display:flex; align-items:flex-start; gap:10px; }
-  .sw-launch-text { font-size:13px; color:#1B4332; line-height:1.6; }
-  .sw-launch-text strong { font-weight:700; }
-  .sw-footer { display:flex; align-items:center; justify-content:space-between; margin-top:28px; }
-  .sw-btn-back { background:none; border:none; color:#6B6B67; font-size:14px; cursor:pointer; font-family:inherit; }
-  .sw-btn-back:hover { color:#1A1A18; }
-  .sw-btn-next { background:#2D6A4F; color:#fff; border:none; border-radius:9px; padding:13px 26px; font-size:14px; font-weight:600; cursor:pointer; font-family:inherit; }
-  .sw-btn-next:hover { background:#1B4332; }
-  .sw-btn-next:disabled { opacity:.35; cursor:default; }
-  .sw-btn-launch { background:#2D6A4F; color:#fff; border:none; border-radius:9px; padding:14px 30px; font-size:15px; font-weight:700; cursor:pointer; font-family:inherit; }
-  .sw-btn-launch:hover { background:#1B4332; }
-  .sw-btn-launch:disabled { opacity:.45; cursor:default; }
-  .sw-skip { font-size:12px; color:#6B6B67; cursor:pointer; text-align:center; margin-top:14px; }
-  .sw-skip:hover { color:#2D6A4F; }
-  .sw-save-err { font-size:13px; color:#991B1B; text-align:center; margin-top:10px; }
-  .sw-saving { font-size:13px; color:#6B6B67; text-align:center; margin-top:10px; }
-  .closed-day-cell {
-    background: repeating-linear-gradient(
-      45deg, transparent, transparent 4px, #F0EEE9 4px, #F0EEE9 5px
-    ) !important;
-    pointer-events: none !important;
-    opacity: 0.6;
-  }
-  .closed-day-header { opacity:0.4; }
-`;
-
-const SW_LABELS = ["Your business","Operating days","Labor budget","Your team","Connect Square","Review & launch"];
-
-function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectSquare }) {
-  const [step,      setStep]      = useState(initialStep ?? 0);
-
-  useEffect(() => {
-    try { localStorage.setItem("sw_setup_step", String(step)); } catch {}
-  }, [step]);
-  const [saving,    setSaving]    = useState(false);
-  const [saveErr,   setSaveErr]   = useState("");
-  const [bizName,   setBizName]   = useState("");
-  const [weekStart, setWeekStart] = useState("Sunday");
-  const [daysOpen,  setDaysOpen]  = useState([0,1,2,3,4,5,6]);
-  const [budget,    setBudget]    = useState("");
-  const [employees, setEmployees] = useState([]);
-  const [addingEmp, setAddingEmp] = useState(false);
-  const [empDraft,  setEmpDraft]  = useState({ name:"", role:"", rate:"" });
-  const [empErr,    setEmpErr]    = useState("");
-
-  const toggleDay = i => setDaysOpen(prev =>
-    prev.includes(i) ? prev.filter(d=>d!==i) : [...prev,i].sort((a,b)=>a-b)
-  );
-
-  const confirmEmp = () => {
-    if (!empDraft.name.trim())                      { setEmpErr("Name is required."); return; }
-    if (!empDraft.role)                             { setEmpErr("Please select a role."); return; }
-    if (!empDraft.rate || isNaN(+empDraft.rate))    { setEmpErr("Enter a valid hourly rate."); return; }
-    setEmployees(prev => [...prev, { ...empDraft, rate: parseFloat(empDraft.rate) }]);
-    setAddingEmp(false);
-    setEmpDraft({ name:"", role:"", rate:"" });
-    setEmpErr("");
-  };
-
-  const budgetNum = parseFloat(budget.replace(/[^0-9.]/g,"")) || 0;
-  const fmt$ = n => "$" + Math.round(n).toLocaleString("en-US");
-
-  const canNext = [
-    bizName.trim().length > 0,
-    daysOpen.length >= 1,
-    true,
-    employees.length >= 1 && !addingEmp,
-    true,
-  ];
-
-  const pct = (step / (SW_LABELS.length - 1)) * 100;
-
-  const handleLaunch = async () => {
-    setSaving(true); setSaveErr("");
-    try {
-      await dbPatch("businesses?id=eq." + bizId, {
-        name:           bizName.trim(),
-        days_open:      daysOpen,
-        weekly_budget:  budgetNum > 0 ? budgetNum : null,
-        setup_complete: true,
-      });
-      if (employees.length > 0) {
-        const rows = employees.map(e => ({
-          business_id:  bizId,
-          name:         e.name.trim(),
-          role:         e.role,
-          hourly_rate:  e.rate,
-          color:        SETUP_AV_COLORS[employees.indexOf(e) % SETUP_AV_COLORS.length],
-        }));
-        await dbPost("employees", rows);
-      }
-      onComplete();
-    } catch(err) {
-      console.error("Setup error:", err);
-      setSaveErr("Something went wrong. Please try again.");
-      setSaving(false);
-    }
-  };
-
-  return (
-    <>
-      <style>{SETUP_CSS}</style>
-      <div className="sw-setup-shell">
-        <div className="sw-topbar">
-          <div className="sw-logo">
-            <div className="sw-logo-box">SW</div>
-            <span className="sw-logo-name">Shift<span>Wise</span></span>
-          </div>
-          <span className="sw-step-ctr">Step {step+1} of {SW_LABELS.length}</span>
-        </div>
-        <div className="sw-prog-wrap">
-          <div className="sw-prog-track">
-            <div className="sw-prog-fill" style={{width:`${pct}%`}} />
-          </div>
-          <div className="sw-prog-labels">
-            {SW_LABELS.map((l,i)=>(
-              <span key={i} className={`sw-prog-lbl ${i<step?"done":i===step?"active":""}`}>{l}</span>
-            ))}
-          </div>
-        </div>
-
-        {step===0 && (
-          <div className="sw-card">
-            <div className="sw-eyebrow">Welcome to ShiftWise | Veredian</div>
-            <h2 className="sw-title">Tell us about your business</h2>
-            <p className="sw-sub">Shows on your schedule and reports. Edit any time in Settings.</p>
-            <div className="sw-fgroup">
-              <label className="sw-flabel">Business name</label>
-              <input className="sw-input" placeholder="e.g. Coastal Grounds Coffee"
-                value={bizName} onChange={e=>setBizName(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&canNext[0]&&setStep(1)} autoFocus />
-            </div>
-            <div className="sw-fgroup">
-              <label className="sw-flabel">Week starts on</label>
-              <div className="sw-toggle-row">
-                {["Sunday","Monday"].map(d=>(
-                  <button key={d} className={"sw-toggle-btn"+(weekStart===d?" sel":"")}
-                    onClick={()=>setWeekStart(d)}>{d}</button>
-                ))}
-              </div>
-              <div className="sw-fhint">Your schedule grid always begins on this day.</div>
-            </div>
-            <div className="sw-footer">
-              <span/>
-              <button className="sw-btn-next" disabled={!canNext[0]} onClick={()=>setStep(1)}>Continue →</button>
-            </div>
-          </div>
-        )}
-
-        {step===1 && (
-          <div className="sw-card">
-            <div className="sw-eyebrow">Operating days</div>
-            <h2 className="sw-title">Which days do you operate?</h2>
-            <p className="sw-sub"><strong>Closed days are greyed out on your schedule</strong> so you never accidentally assign a shift when you're not open. Update any time in Settings.</p>
-            <div className="sw-fgroup">
-              <div className="sw-days-grid">
-                {SETUP_DAYS_FULL.map((day,i)=>(
-                  <div key={i} className={"sw-day-pill"+(daysOpen.includes(i)?" open":"")}
-                    onClick={()=>toggleDay(i)}>
-                    <div className="sw-dpcheck">{daysOpen.includes(i)?"✓":""}</div>
-                    <div className="sw-dpname">{SETUP_DAYS_SHORT[i]}</div>
-                    <div className="sw-dpstatus">{daysOpen.includes(i)?"Open":"Closed"}</div>
-                  </div>
-                ))}
-              </div>
-              <div className="sw-days-hint">
-                {daysOpen.length===7
-                  ? "Open every day — tap any day to mark it closed."
-                  : `Open ${daysOpen.length} day${daysOpen.length!==1?"s":""} · ${7-daysOpen.length} closed`}
-              </div>
-            </div>
-            <div className="sw-footer">
-              <button className="sw-btn-back" onClick={()=>setStep(0)}>← Back</button>
-              <button className="sw-btn-next" disabled={!canNext[1]} onClick={()=>setStep(2)}>Continue →</button>
-            </div>
-          </div>
-        )}
-
-        {step===2 && (
-          <div className="sw-card">
-            <div className="sw-eyebrow">Labor budget</div>
-            <h2 className="sw-title">What's your weekly labor target?</h2>
-            <p className="sw-sub">ShiftWise tracks your running labor cost as you schedule. <strong>We flag you before you go over</strong> — so you decide before the shift, not after payroll.</p>
-            <div className="sw-fgroup">
-              <label className="sw-flabel">Weekly labor budget ($)</label>
-              <input className="sw-input" placeholder="e.g. 2400" type="number"
-                value={budget} onChange={e=>setBudget(e.target.value)} autoFocus />
-              <div className="sw-fhint">Dollar amount only — no $ sign needed.</div>
-            </div>
-            {budgetNum>0 && (
-              <>
-                <div className="sw-budget-display">
-                  <span className="sw-budget-lbl">Weekly target</span>
-                  <span className="sw-budget-val">{fmt$(budgetNum)}</span>
-                </div>
-                <div className="sw-budget-grid">
-                  <div className="sw-budget-mini">
-                    <div className="sw-bm-label">Per open day</div>
-                    <div className="sw-bm-val">{fmt$(budgetNum/(daysOpen.length||7))}</div>
-                  </div>
-                  <div className="sw-budget-mini">
-                    <div className="sw-bm-label">Per month</div>
-                    <div className="sw-bm-val">{fmt$(budgetNum*4.33)}</div>
-                  </div>
-                  <div className="sw-budget-mini">
-                    <div className="sw-bm-label">Per year</div>
-                    <div className="sw-bm-val">{fmt$(budgetNum*52)}</div>
-                  </div>
-                </div>
-              </>
-            )}
-            <div className="sw-footer">
-              <button className="sw-btn-back" onClick={()=>setStep(1)}>← Back</button>
-              <button className="sw-btn-next" onClick={()=>setStep(3)}>Continue →</button>
-            </div>
-            <p className="sw-skip" onClick={()=>setStep(3)}>Skip — I'll add this in Settings later</p>
-          </div>
-        )}
-
-        {step===3 && (
-          <div className="sw-card">
-            <div className="sw-eyebrow">Your team</div>
-            <h2 className="sw-title">Build your roster</h2>
-            <p className="sw-sub">Name, role, and hourly rate — ShiftWise calculates labor cost the moment you add a shift.</p>
-            {employees.length>0 && (
-              <>
-                <div className="sw-emp-count">✓ {employees.length} employee{employees.length!==1?"s":""} added</div>
-                <div className="sw-emp-cards">
-                  {employees.map((emp,i)=>(
-                    <div key={i} className="sw-emp-card">
-                      <div className="sw-emp-av" style={{background:SETUP_AV_COLORS[i%SETUP_AV_COLORS.length]}}>
-                        {getSetupInitials(emp.name)}
-                      </div>
-                      <div>
-                        <div className="sw-emp-name">{emp.name}</div>
-                        <div className="sw-emp-meta">{emp.role} · ${emp.rate}/hr</div>
-                      </div>
-                      <button className="sw-emp-remove"
-                        onClick={()=>setEmployees(prev=>prev.filter((_,idx)=>idx!==i))}>✕</button>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-            {addingEmp ? (
-              <div className="sw-add-form active">
-                <div className="sw-form-row">
-                  <div>
-                    <label className="sw-form-lbl">Full name</label>
-                    <input className="sw-form-input" placeholder="e.g. Jordan M."
-                      value={empDraft.name} onChange={e=>setEmpDraft(d=>({...d,name:e.target.value}))} autoFocus />
-                  </div>
-                  <div>
-                    <label className="sw-form-lbl">Role</label>
-                    <select className="sw-form-select" value={empDraft.role}
-                      onChange={e=>setEmpDraft(d=>({...d,role:e.target.value}))}>
-                      <option value="">Select…</option>
-                      {SETUP_ROLES.map(r=><option key={r} value={r}>{r}</option>)}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="sw-form-lbl">Hourly rate ($)</label>
-                    <input className="sw-form-input" placeholder="13.50" type="number"
-                      value={empDraft.rate} onChange={e=>setEmpDraft(d=>({...d,rate:e.target.value}))} />
-                  </div>
-                </div>
-                {empErr && <div className="sw-emp-error">⚠ {empErr}</div>}
-                <div className="sw-form-actions">
-                  <button className="sw-btn-confirm" onClick={confirmEmp}>Add employee</button>
-                  <button className="sw-btn-cancel" onClick={()=>{setAddingEmp(false);setEmpErr("");}}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <button className="sw-btn-add-emp"
-                onClick={()=>{setEmpDraft({name:"",role:"",rate:""});setAddingEmp(true);}}>
-                + Add {employees.length>0?"another":"an"} employee
-              </button>
-            )}
-            <div className="sw-footer">
-              <button className="sw-btn-back" onClick={()=>setStep(2)}>← Back</button>
-              <button className="sw-btn-next" disabled={!canNext[3]} onClick={()=>setStep(4)}>Review →</button>
-            </div>
-            {employees.length>=1&&!addingEmp&&(
-              <p className="sw-skip" onClick={()=>setStep(4)}>I'll add more employees later</p>
-            )}
-          </div>
-        )}
-
-        {step===4 && (
-          <div className="sw-card">
-            <div className="sw-eyebrow">Optional · Step 5 of {SW_LABELS.length}</div>
-            <h2 className="sw-title">Connect Square</h2>
-            <p className="sw-sub">
-              Link your Square account to automatically pull daily sales — ShiftWise uses this to show your real labor cost vs. revenue. You can always connect this later in Settings.
-            </p>
-
-            {squareConnected ? (
-              <div className="sw-launch-banner">
-                <span style={{fontSize:18,flexShrink:0}}>✅</span>
-                <div className="sw-launch-banner-text">
-                  <strong>Square is connected.</strong> Your sales data will start syncing automatically.
-                </div>
-              </div>
-            ) : (
-              <button
-                onClick={onConnectSquare}
-                style={{
-                  width:"100%", background:"#1A1A1A", color:"white", border:"none",
-                  borderRadius:10, padding:"14px 0", fontWeight:700, fontSize:14,
-                  cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:8
-                }}>
-                <span style={{fontSize:16}}>◼</span> Connect Square Account
-              </button>
-            )}
-
-            <div className="sw-footer">
-              <button className="sw-btn-back" onClick={()=>setStep(3)}>← Back</button>
-              <button className="sw-btn-next" onClick={()=>setStep(5)}>
-                {squareConnected ? "Continue →" : "Skip for now →"}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {step===5 && (
-          <div className="sw-card">
-            <div className="sw-eyebrow">Almost there</div>
-            <h2 className="sw-title">Review & launch</h2>
-            <p className="sw-sub">Everything ShiftWise will use to set up your schedule. Edit any of it in Settings later.</p>
-            <div className="sw-review-section">
-              <div className="sw-review-title">Business</div>
-              <div className="sw-review-row"><span className="sw-review-label">Name</span><span className="sw-review-val">{bizName}</span></div>
-              <div className="sw-review-row"><span className="sw-review-label">Week starts</span><span className="sw-review-val">{weekStart}</span></div>
-              <div className="sw-review-row"><span className="sw-review-label">Weekly budget</span><span className="sw-review-val">{budgetNum>0?fmt$(budgetNum):"Not set"}</span></div>
-            </div>
-            <div className="sw-review-section">
-              <div className="sw-review-title">Days of operation</div>
-              <div className="sw-review-days">
-                {SETUP_DAYS_SHORT.map((d,i)=>(
-                  <span key={i} className={"sw-day-tag"+(daysOpen.includes(i)?"":" closed")}>
-                    {d}{!daysOpen.includes(i)?" ✕":""}
-                  </span>
-                ))}
-              </div>
-            </div>
-            <div className="sw-review-section">
-              <div className="sw-review-title">Team ({employees.length})</div>
-              <div className="sw-review-emps">
-                {employees.map((emp,i)=>(
-                  <div key={i} className="sw-review-emp">
-                    <div className="sw-rev-av" style={{background:SETUP_AV_COLORS[i%SETUP_AV_COLORS.length]}}>{getSetupInitials(emp.name)}</div>
-                    <div><div className="sw-rev-name">{emp.name}</div><div className="sw-rev-role">{emp.role}</div></div>
-                    <span className="sw-rev-rate">${emp.rate}/hr</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="sw-launch-banner">
-              <span style={{fontSize:18,flexShrink:0}}>🚀</span>
-              <div className="sw-launch-text">
-                <strong>Your schedule is ready to build.</strong> Closed days will be greyed out, your team is on the grid, and ShiftWise tracks labor the moment you add your first shift.
-              </div>
-            </div>
-            {saveErr && <div className="sw-save-err">{saveErr}</div>}
-            <div className="sw-footer">
-              <button className="sw-btn-back" onClick={()=>setStep(4)}>← Back</button>
-              <button className="sw-btn-launch" onClick={handleLaunch} disabled={saving}>
-                {saving?"Saving…":"Launch ShiftWise →"}
-              </button>
-            </div>
-            {saving && <p className="sw-saving">Setting up your workspace…</p>}
-          </div>
-        )}
-      </div>
-    </>
-  );
-}
-// ── END SetupFlow ────────────────────────────────────────────────────────────
-
-// ─── PunchRow: single punch log entry with inline per-row delete + reason ───
-function PunchRow({ p, i, total, emp, dateStr, bizId, setPunches, setPunchReviews, addAudit, showToast, T, ADJUSTMENT_REASONS }) {
-  const [delOpen, setDelOpen] = useState(false);
-  const [delReason, setDelReason] = useState("duplicate_punch");
-  const [delNote, setDelNote] = useState("");
-  const [deleting, setDeleting] = useState(false);
-
-  const typeLabel = p.type==="in"?"Clock in":p.type==="out"?"Clock out":p.type==="break_out"?"Break start":"Break end";
-  const typeColor = p.type==="in"||p.type==="break_in" ? "#2D6A4F" : "#C0392B";
-
-  async function confirmDelete() {
-    if (delReason==="other" && !delNote.trim()) { showToast("Enter a reason for deleting this punch"); return; }
-    setDeleting(true);
-    try {
-      const reasonLabel = ADJUSTMENT_REASONS.find(r=>r.value===delReason)?.label || "Manager Correction";
-      const reasonText  = delReason==="other" ? delNote.trim() : reasonLabel;
-      // Remove from local state
-      setPunches(prev => prev.filter(px => px.id !== p.id));
-      setPunchReviews(prev => { const n={...prev}; delete n[p.id]; return n; });
-      // Delete from Supabase
-      if (bizId) {
-        await fetch(`https://kyrjgfeowmflazywsuir.supabase.co/rest/v1/punches?id=eq.${p.id}`, {
-          method:"DELETE",
-          headers:{ apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cmpnZmVvd21mbGF6eXdzdWlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzMzMTQsImV4cCI6MjA5NTA0OTMxNH0.njuDREVF4oIgTYN6wLXKw6Hw_KsFzKPoMabkld_jy0E", Authorization:`Bearer ${(()=>{try{const s=JSON.parse(localStorage.getItem("sw_session")||"null");return s?.access_token||"";}catch{return "";}})()}` }
-        });
-      }
-      // Audit trail
-      addAudit("Punch Deleted", `${emp.name} — ${dateStr}: ${typeLabel} at ${new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})} removed (${reasonText})`, {empName:emp.name});
-      showToast("Punch deleted ✓");
-    } catch(e) { showToast("Could not delete: "+e.message); }
-    finally { setDeleting(false); }
-  }
-
-  return (
-    <div style={{borderBottom:i<total-1?`1px solid ${T.border}`:"none",paddingBottom:delOpen?8:0}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0"}}>
-        <span style={{fontSize:12,fontWeight:700,color:typeColor}}>{typeLabel}</span>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontSize:12,color:T.sub,fontFamily:"monospace"}}>{new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</span>
-          <button onClick={()=>setDelOpen(o=>!o)}
-            title="Delete this punch"
-            style={{background:delOpen?"#FDECEA":"transparent",border:`1px solid ${delOpen?"#C0392B44":T.border}`,borderRadius:6,width:24,height:24,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:delOpen?"#C0392B":T.sub,transition:"all 0.12s"}}>
-            🗑
-          </button>
-        </div>
-      </div>
-      {p.adjustmentReason && !delOpen && (
-        <div style={{fontSize:10,color:"#B7780F",marginBottom:4,fontStyle:"italic"}}>↳ {p.adjustmentReason}</div>
-      )}
-      {delOpen && (
-        <div style={{background:"#FDECEA",borderRadius:8,padding:"10px 10px",marginBottom:4,border:"1px solid #C0392B22"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#C0392B",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Delete reason</div>
-          <select value={delReason} onChange={e=>setDelReason(e.target.value)}
-            style={{width:"100%",border:"1.5px solid #C0392B33",borderRadius:6,padding:"6px 8px",fontSize:12,fontWeight:700,background:"white",color:"#C0392B",marginBottom:6,outline:"none"}}>
-            {ADJUSTMENT_REASONS.map(r=><option key={r.value} value={r.value}>{r.label}</option>)}
-          </select>
-          {delReason==="other" && (
-            <input value={delNote} onChange={e=>setDelNote(e.target.value)}
-              placeholder="Briefly describe why"
-              style={{width:"100%",border:"1.5px solid #C0392B33",borderRadius:6,padding:"6px 8px",fontSize:12,background:"white",color:"#333",marginBottom:6,outline:"none",boxSizing:"border-box"}}/>
-          )}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
-            <button onClick={()=>{setDelOpen(false);setDelNote("");}}
-              style={{background:"white",border:`1px solid ${T.border}`,borderRadius:6,padding:"6px 0",fontSize:12,fontWeight:700,cursor:"pointer",color:T.sub}}>
-              Cancel
-            </button>
-            <button onClick={confirmDelete} disabled={deleting}
-              style={{background:"#C0392B",border:"none",borderRadius:6,padding:"6px 0",fontSize:12,fontWeight:700,cursor:"pointer",color:"white",opacity:deleting?0.6:1}}>
-              {deleting?"Deleting…":"Confirm Delete"}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-// ─────────────────────────────────────────────────────────────────────────────
-
-
 export default function App() {
   const defaultSun = useMemo(() => getSunday(new Date().toISOString().split("T")[0]), []);
 
@@ -949,7 +333,6 @@ export default function App() {
   const [authEmail,   setAuthEmail]   = useState("");
   const [authPass,    setAuthPass]    = useState("");
   const [authMode,    setAuthMode]    = useState("signin");
-  const [resetSent,   setResetSent]   = useState(false);
   const [authError,   setAuthError]   = useState("");
   const [authBizName, setAuthBizName] = useState("");
   const [bizId,       setBizId]       = useState(null);
@@ -959,8 +342,6 @@ export default function App() {
   const [themeId,     setThemeId]     = useState("fieldwork");
   const T = THEMES[themeId] || THEMES.fieldwork;
   const [biz,         setBiz]         = useState("My Business");
-  const [setupComplete, setSetupComplete] = useState(true);   // true = skip setup
-  const [daysOpen,      setDaysOpen]      = useState([0,1,2,3,4,5,6]);
   const [weekMode,    setWeekMode]     = useState("1");
   const [wk1Start,    setWk1Start]     = useState(defaultSun);
   const [wk2Start,    setWk2Start]     = useState(addDays(defaultSun,7));
@@ -1030,15 +411,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     } catch { return {}; }
   });
 
-  useEffect(() => {
-    if (Object.keys(businessHours).length === 0) return;
-    const open = DAYS.map((_, di) => di).filter(di => !businessHours[di]?.closed);
-    setDaysOpen(open);
-    if (bizId) {
-      dbPatch("businesses?id=eq." + bizId, { days_open: open }).catch(()=>{});
-    }
-  }, [businessHours, bizId]);
-
   // ── Drag & Drop ───────────────────────────────────────────────────────────
   // draggedShift: { empId, weekKey, dayIdx, shift }
   const [draggedShift, setDraggedShift] = useState(null);
@@ -1104,28 +476,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     } catch(err) { setAuthError(err.message); }
   }
 
-  async function handleForgotPassword(e) {
-    if(e?.preventDefault) e.preventDefault();
-    setAuthError("");
-    if (!authEmail.trim()) { setAuthError("Enter your email address first."); return; }
-    try {
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
-        method:"POST",
-        headers:{ "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
-        body:JSON.stringify({ email: authEmail }),
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        let data = {};
-        try { data = JSON.parse(text); } catch {}
-        throw new Error(data.error_description || data.error || "Could not send reset email.");
-      }
-      setResetSent(true);
-    } catch(err) {
-      setAuthError(err.message);
-    }
-  }
-
   async function handleSignOut() {
     clearSession();
     setAuthState("unauthenticated");
@@ -1140,15 +490,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   async function loadAllData() {
     try {
       // 1. Get business record
-      const bizRows = await dbGet("businesses?select=*&order=created_at.asc&limit=1");
+      const bizRows = await dbGet("businesses?select=*&limit=1");
       const business = bizRows?.[0];
       if (!business) { setAuthState("unauthenticated"); clearSession(); return; }
 
       setBizId(business.id);
-      setBiz(business.name ?? "My Business");
-      setSetupComplete(business.setup_complete ?? true);
-      setDaysOpen(business.days_open ?? [0,1,2,3,4,5,6]);
-      setWeeklyBudget(business.weekly_budget ?? null);
       checkSquareStatus(business.id);
       try {
         const w = await dbGet(`dashboard_widgets?business_id=eq.${business.id}&order=sort_order.asc`);
@@ -1164,7 +510,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const [
         empRows, weekRows, shiftTypeRows, bizHourRows,
         salesRows, recRows, punchRows, openShiftRows,
-        templateRows, publishedRows, auditRows, reviewRows,
+        templateRows, publishedRows, auditRows,
       ] = await Promise.all([
         dbGet(`employees?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`),
         dbGet(`schedule_weeks?select=*&business_id=eq.${business.id}&order=week_start.asc`),
@@ -1177,7 +523,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         dbGet(`templates?select=*&business_id=eq.${business.id}&order=created_at.desc`),
         dbGet(`published_schedules?select=*&business_id=eq.${business.id}&order=published_at.desc`),
         dbGet(`audit_log?select=*&business_id=eq.${business.id}&order=created_at.desc&limit=500`),
-        dbGet(`punch_reviews?select=*&business_id=eq.${business.id}`),
       ]);
 
       // 3. Load shifts for all weeks
@@ -1252,25 +597,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       // 10. Other state
       setSalesData((salesRows||[]).map(r=>({ date:r.sale_date, revenue:parseFloat(r.revenue), transactions:r.transactions })));
       setRecognition((recRows||[]).map(r=>({ id:r.id, at:r.created_at, type:r.rec_type, emoji:r.emoji, message:r.message, fromName:r.from_name, toName:r.to_name, toId:r.to_id })));
-      setPunches((punchRows||[]).map(r=>({ id:r.id, empId:r.employee_id, empName:r.employee_name, type:r.punch_type, time:r.punched_at, scheduled:r.scheduled_start?{start:parseFloat(r.scheduled_start),end:parseFloat(r.scheduled_end)}:null, flags:r.flags||[], adjustmentReason:r.adjustment_reason||null })));
+      setPunches((punchRows||[]).map(r=>({ id:r.id, empId:r.employee_id, empName:r.employee_name, type:r.punch_type, time:r.punched_at, scheduled:r.scheduled_start?{start:parseFloat(r.scheduled_start),end:parseFloat(r.scheduled_end)}:null, flags:r.flags||[] })));
       setOpenShifts((openShiftRows||[]).map(r=>({ id:r.id, weekKey:wks.find(w=>w.id===r.week_id)?.week_start||r.week_id, empId:r.employee_id, dayIdx:r.day_index, originalShift:r.shift_start?{start:parseFloat(r.shift_start),end:parseFloat(r.shift_end)}:null, reason:r.reason, status:r.status, claimedBy:r.claimed_by, createdAt:r.created_at })));
       setTemplates((templateRows||[]).map(r=>({ id:r.id, name:r.name, savedAt:r.created_at, scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot })));
       setPublished((publishedRows||[]).map(r=>({ id:r.id, publishedAt:r.published_at, label:r.label, wk1Start:r.week_start, wk2Start:r.week_start, weekMode:"1", scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot, budget:r.budget })));
       setAuditLog((auditRows||[]).map(r=>({ id:r.id, at:r.created_at, action:r.action, detail:r.detail, empName:r.employee_name })));
-      const reviewMap = {};
-      (reviewRows||[]).forEach(r=>{ reviewMap[r.punch_id] = r.status; });
-      setPunchReviews(reviewMap);
 
       setAuthState("authenticated");
     } catch(err) {
       console.error("loadAllData failed:", err);
-      const isExpired = /jwt expired|invalid token|jwt malformed/i.test(err.message || "");
-      setAuthError(
-        isExpired
-          ? "You were signed out due to inactivity. Please sign in again."
-          : "Could not load your data: " + err.message
-      );
-      if (isExpired) clearSession();
+      setAuthError("Could not load your data: " + err.message);
       setAuthState("unauthenticated");
     }
   }
@@ -1286,13 +622,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const sq = params.get("square");
     if (sq === "connected") {
       showToast("Square connected ✓", 4000);
-      const inSetup = (() => { try { return localStorage.getItem("sw_setup_step") !== null; } catch { return false; } })();
-      if (!inSetup) setTab("dashboard");
+      setTab("dashboard");
       if (bizId) checkSquareStatus(bizId);
     } else if (sq === "error") {
       showToast("Square connection failed — please try again", 5000);
-      const inSetup = (() => { try { return localStorage.getItem("sw_setup_step") !== null; } catch { return false; } })();
-      if (!inSetup) setTab("dashboard");
+      setTab("dashboard");
     }
     if (sq) window.history.replaceState({}, "", window.location.pathname);
   }, [bizId]);
@@ -1304,13 +638,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // ─────────────────────────────────────────────────────────────────────────
   function buildBusinessSnapshot() {
     const today = new Date();
-    const todayStr = toLocalDateStr(today);
+    const todayStr = today.toISOString().split("T")[0];
 
     // Build per-week summaries
     const weekSummaries = weeks.map(wk => {
       const wkDates = wk.dates.map(d => {
         const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
-        return toLocalDateStr(dt);
+        return dt.toISOString().split("T")[0];
       });
 
       const employeeBreakdown = employees.map(emp => {
@@ -1361,11 +695,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const staffCount = employees.filter(e => schedule?.[wk.key]?.[e.id]?.[di]).length;
         const dayHours = employees.reduce((s, e) => s + shiftHrs(schedule?.[wk.key]?.[e.id]?.[di] || null), 0);
         const sale = wkSales.find(s => s.date === wkDates[di]);
-        const rplhDay = (sale?.revenue && dayHours > 0) ? parseFloat((sale.revenue / dayHours).toFixed(2)) : null;
-        return { day, date: wkDates[di], staffCount, totalHours: dayHours, revenue: sale?.revenue || null, revenuePerLaborHour: rplhDay };
+        return { day, date: wkDates[di], staffCount, totalHours: dayHours, revenue: sale?.revenue || null };
       });
-
-      const rplhWeek = (totalRevenue > 0 && totalHours > 0) ? parseFloat((totalRevenue / totalHours).toFixed(2)) : null;
 
       return {
         label: wk.label,
@@ -1375,7 +706,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         totalEstimatedPay: parseFloat(totalPay.toFixed(2)),
         totalRevenue: totalRevenue > 0 ? parseFloat(totalRevenue.toFixed(2)) : null,
         laborCostPct: laborPct !== null ? parseFloat(laborPct.toFixed(1)) : null,
-        revenuePerLaborHour: rplhWeek,
         staffScheduled: staffed,
         totalStaff: employees.length,
         budget: parseFloat(weeklyBudget) || null,
@@ -1386,130 +716,33 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     });
 
     // Recent punch flags
-    // ── Budget burn (mid-week pace → projected end) ──────────────────────────
-    const budget = parseFloat(weeklyBudget) || null;
-    let budgetBurn = null;
-    if (budget && weekSummaries[0]) {
-      const wk0 = weekSummaries[0];
-      const wkDates0 = weeks[0]?.dates.map(d => {
-        const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
-        return toLocalDateStr(dt);
-      }) || [];
-      const todayIdx0 = wkDates0.indexOf(todayStr);
-      const daysPassed = todayIdx0 >= 0 ? todayIdx0 + 1 : 7;
-      const dailyRate = daysPassed > 0 ? wk0.totalEstimatedPay / daysPassed : 0;
-      const projectedEnd = parseFloat((dailyRate * 7).toFixed(2));
-      const overBy = parseFloat((projectedEnd - budget).toFixed(2));
-      budgetBurn = {
-        spent: wk0.totalEstimatedPay,
-        budget,
-        projectedEnd,
-        projectedOver: projectedEnd > budget,
-        overBy: overBy > 0 ? overBy : 0,
-        pct: parseFloat(((wk0.totalEstimatedPay / budget) * 100).toFixed(1)),
-        daysPassed,
-      };
-    }
-
-    // ── Punch variance (scheduled vs actual clocked hours per employee) ───────
-    const wk0Dates = weeks[0]?.dates.map(d => {
-      const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
-      return toLocalDateStr(dt);
-    }) || [];
-    const punchVariance = employees.map(emp => {
-      const scheduled = weekSummaries[0]?.employeeBreakdown?.find(e => e.name === emp.name)?.scheduledHours || 0;
-      const actualPunches = punches.filter(p => {
-        const pd = toLocalDateStr(new Date(p.time));
-        return p.empId === emp.id && wk0Dates.includes(pd);
-      });
-      // pair in/out punches
-      let actual = 0, inT = null;
-      for (const p of [...actualPunches].sort((a,b)=>new Date(a.time)-new Date(b.time))) {
-        if (p.type === "in" || p.type === "break_in") inT = new Date(p.time);
-        else if ((p.type === "out") && inT) { actual += (new Date(p.time)-inT)/3600000; inT = null; }
-      }
-      actual = parseFloat(actual.toFixed(2));
-      const diff = parseFloat((actual - scheduled).toFixed(2));
-      return { name: emp.name, scheduled, actual, diff };
-    }).filter(e => e.scheduled > 0 || e.actual > 0);
-
-    // ── Attendance flags ──────────────────────────────────────────────────────
-    const recentPunches = punches.filter(p => {
-      const pd = new Date(p.time);
-      return (today - pd) / (1000*60*60*24) <= 30;
-    });
-
-    const todayDayIdx = today.getDay();
-    const todayWeekKey = weeks[0]?.key;
-
-    // Late arrivals — clocked in >10min after scheduled start this week
-    const lateArrivals = employees.map(emp => {
-      const lates = wk0Dates.map((dateStr, di) => {
-        const shift = schedule?.[todayWeekKey]?.[emp.id]?.[di] || null;
-        if (!shift) return null;
-        const scheduledStart = new Date(dateStr+"T00:00:00");
-        scheduledStart.setHours(Math.floor(shift.start), Math.round((shift.start % 1) * 60));
-        const clockIn = punches.find(p =>
-          p.empId === emp.id &&
-          p.type === "in" &&
-          toLocalDateStr(new Date(p.time)) === dateStr
-        );
-        if (!clockIn) return null;
-        const minsLate = (new Date(clockIn.time) - scheduledStart) / 60000;
-        return minsLate > 10 ? minsLate : null;
-      }).filter(Boolean);
-      return lates.length > 0 ? { name: emp.name, count: lates.length } : null;
-    }).filter(Boolean);
-
-    // Missed punches — has a shift today but no clock-in recorded
-    const missedPunches = employees.map(emp => {
-      const shift = schedule?.[todayWeekKey]?.[emp.id]?.[todayDayIdx] || null;
-      if (!shift) return null;
-      const scheduledStart = new Date(todayStr+"T00:00:00");
-      scheduledStart.setHours(Math.floor(shift.start), Math.round((shift.start % 1) * 60));
-      if (today < scheduledStart) return null; // shift hasn't started yet
-      const hasPunch = punches.some(p =>
-        p.empId === emp.id &&
-        p.type === "in" &&
-        toLocalDateStr(new Date(p.time)) === todayStr
-      );
-      return hasPunch ? null : { name: emp.name };
-    }).filter(Boolean);
-
-    // Reliability flags — employees with most punch flags in last 30 days
-    const reliabilityFlags = employees.map(emp => {
-      const flagCount = recentPunches.filter(p => p.empId === emp.id && p.flags?.length > 0).length;
-      return flagCount > 0 ? { name: emp.name, flags30Days: flagCount } : null;
-    }).filter(Boolean).sort((a,b) => b.flags30Days - a.flags30Days);
-
-    // ── Overtime ──────────────────────────────────────────────────────────────
-    const overtimeAlerts = employees
-      .filter(e => weeks.some(w => eWkH(w.key, e.id) > 40))
-      .map(e => ({ name: e.name, hours: Math.max(...weeks.map(w => eWkH(w.key, e.id))) }));
-
     const recentFlags = punches
       .filter(p => p.flags && p.flags.length > 0)
       .slice(-20)
       .map(p => ({ employee: p.empName, type: p.type, flags: p.flags, time: p.time }));
 
+    // Overtime employees
+    const overtimeAlerts = employees
+      .filter(e => weeks.some(w => eWkH(w.key, e.id) > 40))
+      .map(e => ({ name: e.name, hours: Math.max(...weeks.map(w => eWkH(w.key, e.id))) }));
+
     return {
+      // ── swap this section for Supabase queries ──
       businessName: biz,
       businessHours: Object.entries(businessHours).reduce((acc,[di,h])=>({...acc,[DAYS[parseInt(di)]]:h}),{}),
       today: todayStr,
       dayOfWeek: today.toLocaleDateString("en-US", { weekday: "long" }),
       totalEmployees: employees.length,
-      weeklyBudget: budget,
+      weeklyBudget: parseFloat(weeklyBudget) || null,
       hasSalesData: salesData.length > 0,
       salesDateRange: salesData.length > 0
         ? { from: salesData[0].date, to: salesData[salesData.length - 1].date }
         : null,
       weeks: weekSummaries,
-      budgetBurn,
-      punchVariance,
-      attendanceFlags: { lateArrivals, missedPunches, reliabilityFlags },
       overtimeAlerts,
       recentPunchFlags: recentFlags,
       publishedSchedulesCount: published.length,
+      // ─────────────────────────────────────────────
     };
   }
 
@@ -1517,361 +750,80 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // AI INSIGHT GENERATOR — calls Claude with the business snapshot.
   // The prompt and API call are data-source agnostic.
   // ─────────────────────────────────────────────────────────────────────────
-  function generateInsight() {
+  async function generateInsight() {
     if (insightLoading) return;
     setInsightLoading(true);
     setInsightError(null);
 
-    // Small delay so the loading skeleton renders before heavy computation
-    setTimeout(() => {
-      try {
-        const snapshot = buildBusinessSnapshot();
-        const result   = computePulse(snapshot);
-        setInsight({ ...result, generatedAt: new Date().toISOString(), snapshot });
-      } catch (err) {
-        setInsightError("Could not generate insights right now. Check your data and try again.");
-        console.error("Pulse engine error:", err);
-      } finally {
-        setInsightLoading(false);
-      }
-    }, 600);
+    const snapshot = buildBusinessSnapshot();
+
+    const prompt = `You are a sharp, concise business operations advisor for a small business owner-operator named ${snapshot.businessName || "the owner"}. 
+They manage hourly staff (cafes, retail, service businesses) and handle everything themselves — scheduling, payroll, HR, operations.
+
+Today is ${snapshot.dayOfWeek}, ${snapshot.today}.
+
+Here is a complete snapshot of their current business data:
+${JSON.stringify(snapshot, null, 2)}
+
+Analyze this data and respond ONLY with a JSON object in exactly this structure (no markdown, no preamble):
+{
+  "headline": "One punchy sentence summarizing the most important thing they need to know right now (max 12 words)",
+  "score": {
+    "value": <number 1-100 representing overall scheduling health>,
+    "label": "<one word: Healthy | Caution | Warning | Critical>",
+    "reason": "<one sentence explaining the score>"
+  },
+  "sections": [
+    {
+      "title": "<section title>",
+      "icon": "<single emoji>",
+      "insight": "<2-3 sentences of plain-English analysis specific to their actual data>",
+      "urgency": "<low|medium|high>"
+    }
+  ],
+  "actions": [
+    {
+      "priority": <1-5, 1=most urgent>,
+      "action": "<specific thing they should do, phrased as a direct instruction>",
+      "why": "<one sentence explaining the business impact>"
+    }
+  ],
+  "positives": ["<one thing going well>", "<another thing going well>"],
+  "nextWeekFocus": "<one forward-looking recommendation for next week's scheduling>"
+}
+
+Rules:
+- Every insight must reference their ACTUAL data (real names, real numbers, real dates). Never give generic advice.
+- If they have no employees or no schedule yet, your sections and actions should guide them on getting started.
+- If they have no sales data, note this as an opportunity but don't make it the main focus.
+- Actions should be specific and immediately actionable, not vague.
+- Keep total response under 800 tokens.
+- Sections: include 2-4 most relevant from: Labor Cost, Staffing Coverage, Overtime Risk, Budget Tracking, Attendance Flags, Schedule Gaps, Team Availability.`;
+
+    try {
+      const response = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 1000,
+          messages: [{ role: "user", content: prompt }],
+        }),
+      });
+
+      const data = await response.json();
+      const raw = data.content?.map(b => b.text || "").join("") || "";
+      const clean = raw.replace(/```json|```/g, "").trim();
+      const parsed = JSON.parse(clean);
+
+      setInsight({ ...parsed, generatedAt: new Date().toISOString(), snapshot });
+    } catch (err) {
+      setInsightError("Could not generate insights right now. Check your data and try again.");
+      console.error("AI insight error:", err);
+    } finally {
+      setInsightLoading(false);
+    }
   }
-
-  // ── Deterministic Pulse engine ─────────────────────────────────────────────
-  // Reads the snapshot produced by buildBusinessSnapshot() and returns the
-  // same JSON shape that the Claude API used to return — so the UI is unchanged.
-  function computePulse(snap) {
-    const wk      = snap.weeks?.[0] || {};
-    const burn    = snap.budgetBurn;
-    const pv      = snap.punchVariance || [];
-    const af      = snap.attendanceFlags || {};
-    const ot      = snap.overtimeAlerts || [];
-    const budget  = snap.weeklyBudget;
-    const hasSales = snap.hasSalesData && wk.totalRevenue > 0;
-    const rplh    = wk.revenuePerLaborHour;
-    const laborPct = wk.laborCostPct;
-    const totalPay = wk.totalEstimatedPay || 0;
-    const totalHrs = wk.totalScheduledHours || 0;
-    const staffed  = wk.staffScheduled || 0;
-    const empCount = snap.totalEmployees || 0;
-    const bizName  = snap.businessName || "your business";
-
-    // ── helper: $ formatter ──
-    const $$ = n => `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-
-    // ── Score calculation (0-100) ────────────────────────────────────────────
-    let score = 100;
-    const scorePenalties = [];
-
-    // Overtime
-    if (ot.length > 0) {
-      score -= 20;
-      scorePenalties.push(`${ot.length} employee${ot.length > 1 ? "s" : ""} over 40h`);
-    } else {
-      const nearOT = wk.employeeBreakdown?.filter(e => e.scheduledHours >= 36 && e.scheduledHours <= 40) || [];
-      if (nearOT.length) { score -= 8; scorePenalties.push("near overtime risk"); }
-    }
-
-    // Budget
-    if (budget) {
-      if (totalPay > budget) { score -= 15; scorePenalties.push("over budget"); }
-      else if (burn?.projectedOver) { score -= 10; scorePenalties.push("projected over budget"); }
-    }
-
-    // Punch variance — total absolute overage
-    const totalOverage = pv.reduce((s, e) => s + Math.max(0, e.diff), 0);
-    if (totalOverage > 8) { score -= 12; scorePenalties.push(`${totalOverage.toFixed(1)}h punch overage`); }
-    else if (totalOverage > 4) { score -= 6; }
-
-    // Missed punches
-    if (af.missedPunches?.length) { score -= 10; scorePenalties.push("missed punch-in today"); }
-
-    // Attendance flags
-    const topFlagCount = af.reliabilityFlags?.[0]?.flags30Days || 0;
-    if (topFlagCount >= 7) { score -= 8; scorePenalties.push("attendance reliability concern"); }
-    else if (topFlagCount >= 4) { score -= 4; }
-
-    // Coverage gaps — days with no staff but business is open
-    const openDays = Object.values(snap.businessHours || {}).filter(h => h?.isOpen !== false).length;
-    const coveredDays = wk.dailyTotals?.filter(d => d.staffCount > 0).length || 0;
-    const gapDays = Math.max(0, openDays - coveredDays);
-    if (gapDays > 0) { score -= gapDays * 5; scorePenalties.push(`${gapDays} uncovered day${gapDays > 1 ? "s" : ""}`); }
-
-    // No sales data — minor deduction (can't measure efficiency)
-    if (!hasSales) score -= 3;
-
-    score = Math.max(0, Math.min(100, Math.round(score)));
-    const scoreLabel  = score >= 75 ? "Healthy" : score >= 50 ? "Caution" : score >= 30 ? "Warning" : "Critical";
-    const scoreReason = scorePenalties.length
-      ? `Key concerns: ${scorePenalties.slice(0,2).join(" and ")}.`
-      : "Schedule looks solid with no major issues detected.";
-
-    // ── Headline ─────────────────────────────────────────────────────────────
-    let headline = "";
-    if (ot.length > 0) {
-      headline = `${ot[0].name} is headed for overtime — act before it posts`;
-    } else if (burn?.projectedOver) {
-      headline = `On pace to run ${$$( burn.overBy)} over budget this week`;
-    } else if (budget && totalPay > budget) {
-      headline = `Labor spend is ${$$(totalPay - budget)} over your weekly budget`;
-    } else if (af.missedPunches?.length) {
-      headline = `${af.missedPunches[0].name} has no punch-in recorded today`;
-    } else if (hasSales && rplh) {
-      headline = score >= 75
-        ? `Strong week — earning ${$$(rplh)} per labor hour`
-        : `Earning ${$$(rplh)}/labor hr — check your lowest-revenue days`;
-    } else if (gapDays > 0) {
-      headline = `${gapDays} open day${gapDays > 1 ? "s" : ""} with no staff scheduled`;
-    } else if (totalHrs === 0) {
-      headline = "No shifts scheduled yet — build your schedule to get insights";
-    } else {
-      headline = `${staffed} of ${empCount} employees scheduled — ${totalHrs}h total labor this week`;
-    }
-
-    // ── Pulse narrative (3-4 sentences) ──────────────────────────────────────
-    const sentences = [];
-
-    // Sentence 1 — labor cost / budget
-    if (budget) {
-      const runway = budget - totalPay;
-      if (totalPay > budget) {
-        sentences.push(`This week's scheduled labor is ${$$(totalPay)}, which is ${$$(Math.abs(runway))} over your ${$$(budget)} budget.`);
-      } else {
-        sentences.push(`This week's scheduled labor is ${$$(totalPay)} against a ${$$(budget)} budget, leaving ${$$(runway)} of runway.`);
-      }
-    } else if (totalHrs > 0) {
-      sentences.push(`You have ${totalHrs}h of scheduled labor this week across ${staffed} employee${staffed !== 1 ? "s" : ""}, estimated at ${$$(totalPay)}.`);
-    } else {
-      sentences.push(`No shifts are scheduled yet for ${bizName} this week.`);
-    }
-
-    // Sentence 2 — revenue efficiency or sales prompt
-    if (hasSales && rplh) {
-      const days = wk.dailyTotals?.filter(d => d.revenuePerLaborHour) || [];
-      const best  = days.reduce((b, d) => (!b || d.revenuePerLaborHour > b.revenuePerLaborHour) ? d : b, null);
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
-      if (best && worst && best.day !== worst.day) {
-        sentences.push(`You're earning ${$$(rplh)} per labor hour on average — ${best.day} leads at ${$$(best.revenuePerLaborHour)}/hr while ${worst.day} lags at ${$$(worst.revenuePerLaborHour)}/hr.`);
-      } else {
-        sentences.push(`With ${$$(wk.totalRevenue)} in sales, you're earning ${$$(rplh)} per labor hour${laborPct ? ` and running a ${laborPct}% labor cost` : ""}.`);
-      }
-    } else if (!hasSales) {
-      sentences.push(`No sales data is loaded yet — import your Square CSV to unlock revenue-per-labor-hour and labor cost % tracking.`);
-    }
-
-    // Sentence 3 — biggest risk
-    if (ot.length > 0) {
-      const topOT = ot[0];
-      sentences.push(`Watch overtime — ${topOT.name} is scheduled for ${topOT.hours}h and will trigger overtime pay if not adjusted before end of week.`);
-    } else if (totalOverage > 3) {
-      const topOver = [...pv].sort((a,b) => b.diff - a.diff)[0];
-      sentences.push(`Punch variance is running high — ${topOver.name} has clocked ${topOver.diff.toFixed(1)}h over their scheduled hours, which will push actual labor costs above estimates.`);
-    } else if (burn?.projectedOver) {
-      sentences.push(`Mid-week pace puts you on track to finish at ${$$(burn.projectedEnd)} — ${$$(burn.overBy)} over budget — unless you trim hours in the back half of the week.`);
-    } else if (af.missedPunches?.length) {
-      sentences.push(`${af.missedPunches.map(m => m.name).join(" and ")} ${af.missedPunches.length === 1 ? "has" : "have"} a shift today with no punch-in recorded — verify attendance.`);
-    } else if (gapDays > 0) {
-      sentences.push(`You have ${gapDays} day${gapDays > 1 ? "s" : ""} without any staff scheduled during posted business hours — review coverage before the week runs out.`);
-    }
-
-    // Sentence 4 — forward look or positive
-    if (score >= 75) {
-      sentences.push(`Overall the schedule looks healthy — focus next week on maintaining coverage on your highest-revenue days.`);
-    } else if (hasSales) {
-      const days = wk.dailyTotals?.filter(d => d.revenuePerLaborHour) || [];
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
-      if (worst) {
-        sentences.push(`Your biggest efficiency opportunity is ${worst.day} — consider pulling back staffing there and redirecting hours to higher-revenue days.`);
-      }
-    }
-
-    const pulse = sentences.join(" ");
-
-    // ── Actions (priority-ordered) ────────────────────────────────────────────
-    const actions = [];
-    let priority = 1;
-
-    // 1. Overtime — most urgent
-    ot.forEach(e => {
-      if (priority <= 5) {
-        actions.push({
-          priority: priority++,
-          action: `Reduce ${e.name}'s hours to stay under 40 this week`,
-          why: `At ${e.hours}h scheduled, any additional time will trigger overtime pay — typically 1.5× their hourly rate for every hour over 40.`,
-        });
-      }
-    });
-
-    // 2. Missed punch-in today
-    (af.missedPunches || []).forEach(m => {
-      if (priority <= 5) {
-        actions.push({
-          priority: priority++,
-          action: `Confirm ${m.name} came in and add a manual punch for today`,
-          why: `No clock-in recorded for their ${m.day} shift — payroll and punch variance will be inaccurate without it.`,
-        });
-      }
-    });
-
-    // 3. Budget overrun
-    if (priority <= 5 && budget && (totalPay > budget || burn?.projectedOver)) {
-      const overBy = totalPay > budget ? totalPay - budget : burn?.overBy || 0;
-      actions.push({
-        priority: priority++,
-        action: `Find ${$$(Math.ceil(overBy / 15))}h to cut from the back half of the week`,
-        why: `You're ${$$(overBy)} over budget${burn?.projectedOver ? " on current pace" : ""} — trimming overlap shifts is the fastest fix.`,
-      });
-    }
-
-    // 4. Worst RPLH day — rebalance staffing
-    if (priority <= 5 && hasSales) {
-      const days = (wk.dailyTotals || []).filter(d => d.revenuePerLaborHour && d.totalHours > 0);
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
-      const best  = days.reduce((b, d) => (!b || d.revenuePerLaborHour > b.revenuePerLaborHour) ? d : b, null);
-      if (worst && best && worst.day !== best.day && worst.revenuePerLaborHour < rplh * 0.7) {
-        actions.push({
-          priority: priority++,
-          action: `Pull one shift from ${worst.day} and add it to ${best.day}`,
-          why: `${worst.day} earns ${$$(worst.revenuePerLaborHour)}/labor hr vs ${best.day}'s ${$$(best.revenuePerLaborHour)}/hr — a simple swap improves your margin without cutting total hours.`,
-        });
-      }
-    }
-
-    // 5. Coverage gaps
-    if (priority <= 5 && gapDays > 0) {
-      const uncovered = (wk.dailyTotals || []).filter(d => d.staffCount === 0);
-      const dayNames = uncovered.map(d => d.day).join(", ");
-      actions.push({
-        priority: priority++,
-        action: `Schedule at least one person for ${dayNames}`,
-        why: `Business hours show you're open on ${dayNames} but no staff are assigned — you're either losing revenue or working alone.`,
-      });
-    }
-
-    // 6. High punch variance
-    if (priority <= 5 && totalOverage > 4) {
-      const top = [...pv].sort((a,b) => b.diff - a.diff)[0];
-      if (top?.diff > 2) {
-        actions.push({
-          priority: priority++,
-          action: `Talk to ${top.name} about clocking out on time`,
-          why: `They've run ${top.diff.toFixed(1)}h over scheduled hours — at their rate that's roughly ${$$(top.diff * ((wk.employeeBreakdown?.find(e=>e.name===top.name)?.hourlyRate)||0))} in unplanned labor cost.`,
-        });
-      }
-    }
-
-    // 7. No schedule at all
-    if (priority === 1 && totalHrs === 0) {
-      actions.push({
-        priority: 1,
-        action: "Build your schedule for this week to start tracking labor costs",
-        why: "Without shifts, ShiftWise can't calculate budget burn, overtime risk, or revenue efficiency.",
-      });
-    }
-
-    // ── Sections (2-4 most relevant) ─────────────────────────────────────────
-    const sections = [];
-
-    // Labor cost — always
-    sections.push({
-      title: "Labor Cost",
-      icon: "💰",
-      urgency: budget && totalPay > budget ? "high" : burn?.projectedOver ? "medium" : "low",
-      insight: budget
-        ? `Scheduled labor is ${$$(totalPay)} against a ${$$(budget)} budget — ${totalPay > budget ? `${$$(totalPay - budget)} over` : `${$$(budget - totalPay)} of runway remaining`}. ${hasSales && laborPct ? `Labor cost is running at ${laborPct}% of revenue.` : ""} ${burn ? `Mid-week pace projects you to finish at ${$$(burn.projectedEnd)}.` : ""}`
-        : `Estimated labor spend is ${$$(totalPay)} for ${totalHrs} scheduled hours this week across ${staffed} employee${staffed !== 1 ? "s" : ""}. Set a weekly budget in Settings to track variance automatically.`,
-    });
-
-    // Revenue efficiency — if sales data
-    if (hasSales && rplh) {
-      const days = (wk.dailyTotals || []).filter(d => d.revenuePerLaborHour);
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
-      sections.push({
-        title: "Revenue Efficiency",
-        icon: "💵",
-        urgency: rplh < 15 ? "high" : rplh < 25 ? "medium" : "low",
-        insight: `You're generating ${$$(rplh)} in revenue per labor hour this week. ${worst ? `${worst.day} is your weakest day at ${$$(worst.revenuePerLaborHour)}/hr` : ""} — ${laborPct ? `your overall labor cost is ${laborPct}% of revenue` : "load Square sales data to track labor cost %"}.`,
-      });
-    }
-
-    // Overtime risk — if anyone >= 36h
-    const nearOTEmps = wk.employeeBreakdown?.filter(e => e.scheduledHours >= 36) || [];
-    if (nearOTEmps.length > 0) {
-      const topEmp = nearOTEmps.sort((a,b) => b.scheduledHours - a.scheduledHours)[0];
-      sections.push({
-        title: "Overtime Risk",
-        icon: "⏱️",
-        urgency: topEmp.scheduledHours > 40 ? "high" : "medium",
-        insight: `${topEmp.name} is scheduled for ${topEmp.scheduledHours}h this week${topEmp.scheduledHours > 40 ? " — already over the 40h threshold" : " — close to the overtime threshold"}. ${ot.length > 0 ? `Reducing their hours by ${(topEmp.scheduledHours - 38).toFixed(1)}h eliminates the risk entirely.` : "Keep an eye on punch-in times to avoid unplanned overtime."}`,
-      });
-    }
-
-    // Attendance patterns — if flags exist
-    const hasAttendance = (af.lateArrivals?.length || 0) + (af.missedPunches?.length || 0) + (af.reliabilityFlags?.length || 0) > 0;
-    if (hasAttendance) {
-      const topFlag = af.reliabilityFlags?.[0];
-      sections.push({
-        title: "Attendance Patterns",
-        icon: "🚩",
-        urgency: af.missedPunches?.length ? "high" : topFlag?.flags30Days >= 7 ? "medium" : "low",
-        insight: `${af.missedPunches?.length ? `${af.missedPunches.map(m=>m.name).join(", ")} missed a punch-in today. ` : ""}${af.lateArrivals?.length ? `${af.lateArrivals.map(a=>`${a.name} (${a.count}×)`).join(", ")} arrived late this period. ` : ""}${topFlag ? `${topFlag.name} has ${topFlag.flags30Days} attendance flags in the last 30 days — worth a quick check-in.` : ""}`,
-      });
-    }
-
-    // Schedule gaps
-    if (gapDays > 0) {
-      const uncovered = (wk.dailyTotals || []).filter(d => d.staffCount === 0).map(d => d.day);
-      sections.push({
-        title: "Schedule Gaps",
-        icon: "📅",
-        urgency: gapDays >= 2 ? "high" : "medium",
-        insight: `${uncovered.join(", ")} ${uncovered.length === 1 ? "has" : "have"} no staff scheduled this week while your posted business hours show you're open. Leaving days uncovered either loses revenue or means you're working solo.`,
-      });
-    }
-
-    // ── Positives ─────────────────────────────────────────────────────────────
-    const positives = [];
-    if (budget && totalPay <= budget && !burn?.projectedOver) {
-      positives.push(`Labor budget on track — ${$$(budget - totalPay)} of runway remaining`);
-    }
-    if (ot.length === 0 && nearOTEmps.length === 0) {
-      positives.push("No overtime risk detected this week");
-    }
-    if (hasSales && rplh >= 25) {
-      positives.push(`Strong revenue efficiency at ${$$(rplh)}/labor hour`);
-    }
-    if (coveredDays >= openDays && openDays > 0) {
-      positives.push(`All ${openDays} open days have staff scheduled`);
-    }
-    if (staffed === empCount && empCount > 0) {
-      positives.push(`Full team scheduled — all ${empCount} employees have shifts this week`);
-    }
-    if (positives.length === 0) {
-      positives.push(`${staffed} employee${staffed !== 1 ? "s" : ""} scheduled and tracked`);
-    }
-
-    // ── Next week focus ───────────────────────────────────────────────────────
-    let nextWeekFocus = "";
-    if (hasSales) {
-      const days = (wk.dailyTotals || []).filter(d => d.revenue && d.totalHours > 0).sort((a,b) => b.revenue - a.revenue);
-      const topDay = days[0];
-      if (topDay) {
-        nextWeekFocus = `Build next week's schedule around ${topDay.day} first — it's your highest-revenue day at ${$$(topDay.revenue)} in sales. Staff decisions there have the biggest margin impact.`;
-      }
-    }
-    if (!nextWeekFocus && ot.length > 0) {
-      nextWeekFocus = `Resolve this week's overtime before building next week's schedule. Redistributing ${ot[0].name}'s hours now will make next week's labor math cleaner.`;
-    }
-    if (!nextWeekFocus && budget) {
-      nextWeekFocus = `Use this week's labor actuals as your baseline for next week's budget. If punch variance ran high, tighten scheduled hours by the same amount to land under budget.`;
-    }
-    if (!nextWeekFocus) {
-      nextWeekFocus = `Add your Square sales data to unlock revenue-per-labor-hour tracking — it's the single most useful number for deciding where to add or cut shifts.`;
-    }
-
-    return { pulse, headline, score: { value: score, label: scoreLabel, reason: scoreReason }, sections: sections.slice(0, 4), actions: actions.slice(0, 5), positives: positives.slice(0, 3), nextWeekFocus };
-  }
-  // ── end computePulse ───────────────────────────────────────────────────────
 
   function importSquareCSV(file) {
     if (!file) return;
@@ -2432,7 +1384,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   }
 
   const eDayH = (wk,eid,di) => shiftHrs(getShift(wk,eid,di));
-  const eDayP = (wk,emp,di) => eDayH(wk,emp.id,di)*(parseFloat(emp.hourlyRate)||0);
   const eWkH  = (wk,eid)    => DAYS.reduce((s,_,i)=>s+eDayH(wk,eid,i),0);
   const eWkP  = (wk,emp)    => eWkH(wk,emp.id)*(parseFloat(emp.hourlyRate)||0);
   const eTotalH = eid => weeks.reduce((s,w)=>s+eWkH(w.key,eid),0);
@@ -2499,13 +1450,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   function getTodayShift(empId) {
     const now = new Date();
-    const todayStr = toLocalDateStr(now);
+    const todayStr = now.toISOString().split("T")[0];
     const todayIdx = now.getDay();
     for (const wk of weeks) {
       // Verify this week actually contains today's date before checking shifts
       const wkDates = wk.dates.map(d => {
         const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
-        return toLocalDateStr(dt);
+        return dt.toISOString().split("T")[0];
       });
       if (!wkDates.includes(todayStr)) continue; // week doesn't contain today
       const shift = getShift(wk.key, empId, todayIdx);
@@ -2719,7 +1670,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
     return (
       <div onClick={()=>setOpenCell(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
-        <div onClick={e=>{e.stopPropagation(); if(draft._openPanel) setDraft(d=>({...d,_openPanel:null}));}} style={{background:"white",borderRadius:"20px 20px 0 0",padding:"20px 20px calc(20px + env(safe-area-inset-bottom,0px))",width:"100%",maxWidth:500,boxShadow:"0 -12px 48px rgba(0,0,0,0.2)",borderTop:`4px solid ${emp.color}`}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:"white",borderRadius:"20px 20px 0 0",padding:"20px 20px calc(20px + env(safe-area-inset-bottom,0px))",width:"100%",maxWidth:500,boxShadow:"0 -12px 48px rgba(0,0,0,0.2)",borderTop:`4px solid ${emp.color}`}}>
           <div style={{width:36,height:4,borderRadius:2,background:"#E0DAD2",margin:"0 auto 16px"}}/>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -2733,113 +1684,114 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             </div>
             <button onClick={()=>setOpenCell(null)} style={{background:T.muted,border:"none",borderRadius:"50%",width:34,height:34,fontSize:20,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
           </div>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14,position:"relative"}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14}}>
             {[["Start Time","start"],["End Time","end"]].map(([lbl,field])=>{
-              const HOURS_TP = [1,2,3,4,5,6,7,8,9,10,11,12];
-              const MINS_TP  = [0,5,10,15,20,25,30,35,40,45,50,55];
-              const val = draft[field];
-              const getHrTP = v => { if(!v) return null; const [h]=v.split(":").map(Number); return h%12===0?12:h%12; };
-              const getMinTP = v => { if(!v) return null; const [,m]=v.split(":").map(Number); return m; };
-              const getApTP = (v, fb) => { if(!v) return fb; const [h]=v.split(":").map(Number); return h<12?"AM":"PM"; };
-              const buildValTP = (hr,min,ap) => { let h=hr%12; if(ap==="PM") h+=12; return String(h).padStart(2,"0")+":"+String(min).padStart(2,"0"); };
-              const fallbackAP = field==="start" ? "AM" : "PM";
-              const hr = getHrTP(val), min = getMinTP(val), ap = getApTP(val, fallbackAP);
-              const isOpen = draft._openPanel === field;
-              const filled = !!val;
+              // Parse "HH:MM" → decimal; format decimal → "HH:MM"
+              const valDec = draft[field] ? timeToDec(draft[field]) : null;
 
-              function setHrTP(h) { setDraft(d=>({...d, [field]: buildValTP(h, getMinTP(d[field]) ?? 0, getApTP(d[field], fallbackAP))})); }
-              function setMinTP(m) { setDraft(d=>({...d, [field]: buildValTP(getHrTP(d[field]) ?? 9, m, getApTP(d[field], fallbackAP))})); }
-              function setApTP(a) { setDraft(d=>({...d, [field]: buildValTP(getHrTP(d[field]) ?? 9, getMinTP(d[field]) ?? 0, a)})); }
-              function openPanel() { setDraft(d=>({...d, _openPanel: field})); }
-              function closePanel() { setDraft(d=>({...d, _openPanel: null})); }
+              // Snap a decimal to nearest 15-min increment
+              const snapTo15 = v => Math.round(v * 4) / 4;
 
-              function handleHrChange(e) {
-                const v = e.target.value.replace(/\D/g,"").slice(0,2);
-                if (v === "") return;
-                let n = parseInt(v); if (n > 12) n = 12;
-                setHrTP(n);
-              }
-              function handleMinChange(e) {
-                const v = e.target.value.replace(/\D/g,"").slice(0,2);
-                if (v === "") return;
-                let n = parseInt(v); if (n > 59) n = 59;
-                setMinTP(n);
-              }
-              function handleHrKeyDown(e) {
-                if (e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) {
-                  e.preventDefault();
-                  document.getElementById(`tp-min-${field}`)?.focus();
+              // Format decimal to display string "9:30 AM"
+              const fmtDisplay = v => {
+                if (v == null) return "";
+                const h = Math.floor(v), m = Math.round((v - h) * 60);
+                const hr = h % 12 === 0 ? 12 : h % 12;
+                const mm = String(m).padStart(2,"0");
+                return hr + ":" + mm + " " + (h < 12 ? "AM" : "PM");
+              };
+
+              // Parse typed input → "HH:MM" 24h string or null
+              function parseTyped(raw) {
+                const s = raw.trim().toUpperCase();
+                // Patterns: "9:30 AM", "930am", "9:30", "930", "9am", "9"
+                let h, m = 0, pm = false;
+                const ampm = s.includes("AM") ? "AM" : s.includes("PM") ? "PM" : null;
+                const digits = s.replace(/[^0-9:]/g,"");
+                if (digits.includes(":")) {
+                  const parts = digits.split(":");
+                  h = parseInt(parts[0]||"0");
+                  m = parseInt(parts[1]||"0");
+                } else if (digits.length <= 2) {
+                  h = parseInt(digits||"0"); m = 0;
+                } else if (digits.length === 3) {
+                  h = parseInt(digits[0]); m = parseInt(digits.slice(1));
+                } else {
+                  h = parseInt(digits.slice(0,2)); m = parseInt(digits.slice(2,4));
                 }
+                if (ampm === "PM" && h !== 12) h += 12;
+                if (ampm === "AM" && h === 12) h = 0;
+                // If no AM/PM and h < 7, assume PM (e.g. "3" → 3 PM)
+                if (!ampm && h >= 1 && h <= 6) h += 12;
+                m = Math.round(m / 15) * 15; // snap to 15
+                if (m === 60) { m = 0; h += 1; }
+                if (h < 0 || h > 23 || m < 0 || m > 59 || isNaN(h) || isNaN(m)) return null;
+                return String(h).padStart(2,"0") + ":" + String(m).padStart(2,"0");
               }
-              function handleMinKeyDown(e) {
-                if (e.key === "Enter") { e.preventDefault(); closePanel(); }
+
+              function handleBlur(e) {
+                const parsed = parseTyped(e.target.value);
+                setDraft(d => ({...d, [field]: parsed || d[field] || ""}));
+              }
+
+              function handleKeyDown(e) {
+                if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+                e.preventDefault();
+                // Scroll in 30-min increments
+                const step = 0.5;
+                const current = valDec != null ? valDec : (field === "start" ? 9 : 17);
+                const next = Math.max(0, Math.min(23.75, current + (e.key === "ArrowUp" ? step : -step)));
+                const snapped = snapTo15(next);
+                const hh = Math.floor(snapped);
+                const mm = Math.round((snapped - hh) * 60);
+                setDraft(d => ({...d, [field]: String(hh).padStart(2,"0") + ":" + String(mm).padStart(2,"0")}));
               }
 
               return (
-                <div key={field} style={{position:"relative"}}>
+                <div key={field}>
                   <label style={{fontSize:11,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>{lbl}</label>
-
-                  <div style={{
-                    display:"flex",alignItems:"center",
-                    border:`2px solid ${isOpen||filled?emp.color:T.border}`,borderRadius:999,
-                    background:T.surface,transition:"border-color 0.15s",padding:"4px 6px"
-                  }}>
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:1}}>
-                      <input id={`tp-hr-${field}`} inputMode="numeric" placeholder="9" value={hr ?? ""}
-                        onChange={handleHrChange} onFocus={openPanel} onKeyDown={handleHrKeyDown}
-                        style={{width:22,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
-                      <span style={{fontSize:17,fontWeight:800,color:T.sub}}>:</span>
-                      <input id={`tp-min-${field}`} inputMode="numeric" placeholder="00" value={min!=null?String(min).padStart(2,"0"):""}
-                        onChange={handleMinChange} onFocus={openPanel} onKeyDown={handleMinKeyDown}
-                        style={{width:30,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
-                    </div>
-                    <button type="button" onClick={()=>setApTP(ap==="AM"?"PM":"AM")}
+                  <div style={{position:"relative"}}>
+                    <input
+                      type="text"
+                      placeholder="e.g. 9:00 AM"
+                      defaultValue={draft[field] ? fmtDisplay(valDec) : ""}
+                      key={field + (draft[field]||"none")}
+                      onBlur={handleBlur}
+                      onKeyDown={handleKeyDown}
                       style={{
-                        border:"none",borderRadius:999,
-                        background:ap?emp.color:T.muted,color:ap?"white":T.sub,
-                        fontSize:12,fontWeight:800,padding:"9px 14px",cursor:"pointer",letterSpacing:"0.03em"
-                      }}>
-                      {ap||fallbackAP}
-                    </button>
-                  </div>
-
-                  {isOpen && (
-                    <div onClick={e=>e.stopPropagation()} style={{
-                      marginTop:8,background:T.surface,
-                      border:`1.5px solid ${T.border}`,borderRadius:14,boxShadow:"0 6px 20px rgba(0,0,0,0.1)",
-                      overflow:"hidden",zIndex:50
-                    }}>
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",height:160}}>
-                        <div style={{overflowY:"auto",borderRight:`1px solid ${T.muted}`}}>
-                          <div style={{position:"sticky",top:0,background:T.bg,padding:"6px 0",textAlign:"center",fontSize:9,fontWeight:800,color:T.sub,letterSpacing:"0.08em",borderBottom:`1px solid ${T.muted}`}}>HR</div>
-                          {HOURS_TP.map(h=>(
-                            <div key={h} onClick={()=>setHrTP(h)} style={{
-                              padding:"9px 0",textAlign:"center",fontSize:14,fontWeight:700,cursor:"pointer",
-                              background:hr===h?emp.color:"transparent",color:hr===h?"white":T.sub
-                            }}>{h}</div>
-                          ))}
-                        </div>
-                        <div style={{overflowY:"auto",borderRight:`1px solid ${T.muted}`}}>
-                          <div style={{position:"sticky",top:0,background:T.bg,padding:"6px 0",textAlign:"center",fontSize:9,fontWeight:800,color:T.sub,letterSpacing:"0.08em",borderBottom:`1px solid ${T.muted}`}}>MIN</div>
-                          {MINS_TP.map(m=>(
-                            <div key={m} onClick={()=>setMinTP(m)} style={{
-                              padding:"9px 0",textAlign:"center",fontSize:14,fontWeight:700,cursor:"pointer",
-                              background:min===m?emp.color:"transparent",color:min===m?"white":T.sub
-                            }}>{String(m).padStart(2,"0")}</div>
-                          ))}
-                        </div>
-                        <div style={{overflowY:"auto"}}>
-                          <div style={{position:"sticky",top:0,background:T.bg,padding:"6px 0",textAlign:"center",fontSize:9,fontWeight:800,color:T.sub,letterSpacing:"0.08em",borderBottom:`1px solid ${T.muted}`}}>AM/PM</div>
-                          {["AM","PM"].map(a=>(
-                            <div key={a} onClick={()=>setApTP(a)} style={{
-                              padding:"9px 0",textAlign:"center",fontSize:14,fontWeight:700,cursor:"pointer",
-                              background:ap===a?emp.color:"transparent",color:ap===a?"white":T.sub
-                            }}>{a}</div>
-                          ))}
-                        </div>
-                      </div>
+                        width:"100%",
+                        border:`2px solid ${draft[field] ? emp.color : T.border}`,
+                        borderRadius:10,
+                        padding:"11px 10px 11px 10px",
+                        fontSize:15,
+                        fontWeight:700,
+                        outline:"none",
+                        background:"white",
+                        color:draft[field] ? T.text : "#aaa",
+                        textAlign:"center",
+                        transition:"border 0.15s",
+                      }}
+                    />
+                    {/* Up / Down nudge buttons — 30-min steps */}
+                    <div style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",display:"flex",flexDirection:"column",gap:1}}>
+                      {["▲","▼"].map((arrow, ai) => (
+                        <button key={arrow} type="button"
+                          onMouseDown={e=>{ e.preventDefault();
+                            const step = 0.5;
+                            const current = valDec != null ? valDec : (field==="start"?9:17);
+                            const next = Math.max(0, Math.min(23.75, current + (ai===0?step:-step)));
+                            const snapped = snapTo15(next);
+                            const hh = Math.floor(snapped);
+                            const mm = Math.round((snapped-hh)*60);
+                            setDraft(d=>({...d,[field]:String(hh).padStart(2,"0")+":"+String(mm).padStart(2,"0")}));
+                          }}
+                          style={{background:"none",border:"none",cursor:"pointer",padding:"1px 3px",fontSize:9,color:T.sub,lineHeight:1,opacity:0.7}}>
+                          {arrow}
+                        </button>
+                      ))}
                     </div>
-                  )}
+                  </div>
+                  {draft[field] && <div style={{fontSize:10,color:T.sub,marginTop:4,textAlign:"center"}}>{fmtDisplay(valDec)}</div>}
                 </div>
               );
             })}
@@ -2977,96 +1929,48 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           {/* Logo */}
           <div style={{textAlign:"center",marginBottom:32}}>
             <div style={{width:56,height:56,background:"#2D6A4F",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 16px"}}>📅</div>
-            <div style={{fontSize:26,fontWeight:900,color:"white",letterSpacing:"-0.01em",display:"inline-flex",alignItems:"center",gap:0}}>
-              ShiftWise
-              <span style={{color:"#6B7280",margin:"0 7px",fontWeight:300}}>|</span>
-              Veredian
-              <span style={{fontSize:11,fontWeight:400,color:"#93c5fd",position:"relative",bottom:"9px",marginLeft:3,letterSpacing:"0.06em"}}>Beta</span>
-            </div>
+            <div style={{fontSize:26,fontWeight:900,color:"white",letterSpacing:"-0.01em"}}>ShiftWise</div>
             <div style={{fontSize:13,color:"#4B5563",marginTop:4}}>Schedule smarter. Run better.</div>
           </div>
 
           {/* Card */}
           <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:18,padding:"28px 28px 24px"}}>
-
-            {authMode==="forgot" ? (
-              <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                <div style={{marginBottom:4}}>
-                  <div style={{fontSize:16,fontWeight:800,color:"white",marginBottom:4}}>Reset your password</div>
-                  <div style={{fontSize:12,color:"#9CA3AF",lineHeight:1.5}}>Enter the email on your account and we'll send you a link to set a new password.</div>
-                </div>
-                {resetSent ? (
-                  <div style={{background:"rgba(45,106,79,0.15)",border:"1px solid rgba(45,106,79,0.4)",borderRadius:10,padding:"14px",fontSize:13,color:"#6FCF97",lineHeight:1.6}}>
-                    ✓ If an account exists for <strong>{authEmail}</strong>, a reset link is on its way. Check your inbox (and spam folder).
-                  </div>
-                ) : (
-                  <>
-                    <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
-                      placeholder="Email address" type="email"
-                      onKeyDown={e=>e.key==="Enter"&&handleForgotPassword()}
-                      style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-                    {authError && (
-                      <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
-                        {authError}
-                      </div>
-                    )}
-                    <button onClick={handleForgotPassword}
-                      style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
-                      Send Reset Link
-                    </button>
-                  </>
-                )}
-                <button onClick={()=>{setAuthMode("signin");setAuthError("");setResetSent(false);}}
-                  style={{background:"none",border:"none",color:"#9CA3AF",fontSize:13,fontWeight:600,cursor:"pointer",marginTop:4,textAlign:"center"}}>
-                  ← Back to Sign In
+            {/* Tab switcher */}
+            <div style={{display:"flex",background:"rgba(0,0,0,0.3)",borderRadius:10,padding:4,marginBottom:24}}>
+              {[["signin","Sign In"],["signup","Create Account"]].map(([m,lbl])=>(
+                <button key={m} onClick={()=>{setAuthMode(m);setAuthError("");}}
+                  style={{flex:1,background:authMode===m?"white":"transparent",color:authMode===m?"#1C1C1C":"#6B7280",border:"none",borderRadius:7,padding:"9px 0",fontWeight:700,fontSize:13,cursor:"pointer",transition:"all 0.15s"}}>
+                  {lbl}
                 </button>
-              </div>
-            ) : (
-              <>
-                <div style={{display:"flex",background:"rgba(0,0,0,0.3)",borderRadius:10,padding:4,marginBottom:24}}>
-                  {[["signin","Sign In"],["signup","Create Account"]].map(([m,lbl])=>(
-                    <button key={m} onClick={()=>{setAuthMode(m);setAuthError("");}}
-                      style={{flex:1,background:authMode===m?"white":"transparent",color:authMode===m?"#1C1C1C":"#6B7280",border:"none",borderRadius:7,padding:"9px 0",fontWeight:700,fontSize:13,cursor:"pointer",transition:"all 0.15s"}}>
-                      {lbl}
-                    </button>
-                  ))}
+              ))}
+            </div>
+
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              {authMode==="signup" && (
+                <input value={authBizName} onChange={e=>setAuthBizName(e.target.value)}
+                  placeholder="Business name"
+                  style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
+              )}
+              <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
+                placeholder="Email address" type="email"
+                onKeyDown={e=>e.key==="Enter"&&(authMode==="signin"?handleSignIn():handleSignUp())}
+                style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
+              <input value={authPass} onChange={e=>setAuthPass(e.target.value)}
+                placeholder="Password" type="password"
+                onKeyDown={e=>e.key==="Enter"&&(authMode==="signin"?handleSignIn():handleSignUp())}
+                style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
+
+              {authError && (
+                <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
+                  {authError}
                 </div>
+              )}
 
-                <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                  {authMode==="signup" && (
-                    <input value={authBizName} onChange={e=>setAuthBizName(e.target.value)}
-                      placeholder="Business name"
-                      style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-                  )}
-                  <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
-                    placeholder="Email address" type="email"
-                    onKeyDown={e=>e.key==="Enter"&&(authMode==="signin"?handleSignIn():handleSignUp())}
-                    style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-                  <input value={authPass} onChange={e=>setAuthPass(e.target.value)}
-                    placeholder="Password" type="password"
-                    onKeyDown={e=>e.key==="Enter"&&(authMode==="signin"?handleSignIn():handleSignUp())}
-                    style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-
-                  {authMode==="signin" && (
-                    <button onClick={()=>{setAuthMode("forgot");setAuthError("");setResetSent(false);}}
-                      style={{background:"none",border:"none",color:"#9CA3AF",fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"right",padding:0,marginTop:-4}}>
-                      Forgot password?
-                    </button>
-                  )}
-
-                  {authError && (
-                    <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
-                      {authError}
-                    </div>
-                  )}
-
-                  <button onClick={authMode==="signin"?handleSignIn:handleSignUp}
-                    style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
-                    {authMode==="signin" ? "Sign In" : "Create Account"}
-                  </button>
-                </div>
-              </>
-            )}
+              <button onClick={authMode==="signin"?handleSignIn:handleSignUp}
+                style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
+                {authMode==="signin" ? "Sign In" : "Create Account"}
+              </button>
+            </div>
           </div>
 
           <div style={{textAlign:"center",marginTop:20,fontSize:11,color:"#374151",lineHeight:1.6}}>
@@ -3087,25 +1991,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         <div style={{color:"#4B5563",fontSize:13,fontWeight:600}}>Loading your schedule…</div>
         <style>{"@keyframes spin{to{transform:rotate(360deg)}}"}</style>
       </div>
-    );
-  }
-
-  // ── SETUP GATE ── show setup flow to new users before the main app
-  if (!setupComplete && bizId) {
-    let resumeStep;
-    try { resumeStep = parseInt(localStorage.getItem("sw_setup_step"), 10); } catch {}
-    return (
-      <SetupFlow
-        bizId={bizId}
-        initialStep={Number.isInteger(resumeStep) ? resumeStep : undefined}
-        squareConnected={squareConnected}
-        onConnectSquare={handleConnectSquare}
-        onComplete={async () => {
-          try { localStorage.removeItem("sw_setup_step"); } catch {}
-          await loadAllData();
-          setSetupComplete(true);
-        }}
-      />
     );
   }
 
@@ -3134,6 +2019,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             </div>
             <div className="top-stats" style={{display:"flex",alignItems:"center",gap:8,flexShrink:0,minWidth:0}}>
 
+              <button onClick={exportData} style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Export</button>
+
               {/* 🔔 Alert Bell */}
 {(()=>{
   const unreviewed = punches.filter(p => p.flags?.length > 0 && !punchReviews[p.id]).length;
@@ -3149,11 +2036,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     </button>
   );
 })()}
+              <button onClick={handleSignOut} style={{background:"rgba(255,255,255,0.05)",color:"#666",border:"1px solid rgba(255,255,255,0.08)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}} title="Sign Out">⎋</button>
               <label style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
                 Import<input type="file" accept=".json" onChange={e=>{importData(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
               </label>
-              <button onClick={exportData} style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Export</button>
-              <button onClick={handleSignOut} style={{background:"rgba(255,255,255,0.05)",color:"#666",border:"1px solid rgba(255,255,255,0.08)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}} title="Sign Out">⎋</button>
             </div>
           </div>
         </div>
@@ -3207,7 +2093,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   function getDayPunches(empId, dateStr) {
     return punches.filter(p => {
-      const pd = toLocalDateStr(new Date(p.time));
+      const pd = new Date(p.time).toISOString().split("T")[0];
       return p.empId === empId && pd === dateStr;
     }).sort((a,b) => new Date(a.time)-new Date(b.time));
   }
@@ -3224,7 +2110,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   const pendingFlags = punches.filter(p =>
     p.flags?.length > 0 &&
-    tsWkDates.includes(toLocalDateStr(new Date(p.time))) &&
+    tsWkDates.includes(new Date(p.time).toISOString().split("T")[0]) &&
     !punchReviews[p.id]
   ).length;
 
@@ -3320,20 +2206,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   }
 
   // ── CELL POPUP ─────────────────────────────────────────────────────────────
-  const ADJUSTMENT_REASONS = [
-    { value:"missed_punch",     label:"Missed Punch" },
-    { value:"clock_offline",    label:"Clock Offline" },
-    { value:"manager_correction", label:"Manager Correction" },
-    { value:"duplicate_punch",  label:"Duplicate Punch" },
-    { value:"other",            label:"Other" },
-  ];
-
   function TimesheetCellPopup() {
     const [editIn,  setEditIn]  = useState("");
     const [editOut, setEditOut] = useState("");
     const [saving,  setSaving]  = useState(false);
-    const [reasonCode, setReasonCode] = useState("missed_punch");
-    const [reasonNote, setReasonNote] = useState("");
 
     useEffect(()=>{
       if (!tsOpenCell) return;
@@ -3362,46 +2238,17 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const FLAG_LABELS = {LATE:"Late clock-in",EARLY:"Early clock-in",EARLY_OUT:"Early clock-out",NO_SHIFT:"No shift scheduled",ADJUSTMENT:"Manual adjustment"};
     const STATUS_COLOR = {reviewed:"#3A9BE8",approved:"#4CAF7D",rejected:"#C0392B",pending:"#E8A93A"};
 
-    async function setStatus(val) {
+    function setStatus(val) {
       if (!punchId) return;
-      dp.forEach(p => {
-        setPunchReviews(prev=>({...prev,[p.id]:val}));
-        // Upsert review status to Supabase
-        if (bizId) {
-          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?punch_id=eq.${p.id}`, {
-            method: "GET",
-            headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}` }
-          }).then(r=>r.json()).then(existing => {
-            if (existing && existing.length > 0) {
-              // Update existing row
-              fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?punch_id=eq.${p.id}`, {
-                method: "PATCH",
-                headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "return=minimal" },
-                body: JSON.stringify({ status: val, updated_at: new Date().toISOString() })
-              }).catch(e=>console.warn("punch_reviews update failed:", e));
-            } else {
-              // Insert new row
-              fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
-                method: "POST",
-                headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "return=minimal" },
-                body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
-              }).catch(e=>console.warn("punch_reviews insert failed:", e));
-            }
-          }).catch(e=>console.warn("punch_reviews fetch failed:", e));
-        }
-      });
+      dp.forEach(p => setPunchReviews(prev=>({...prev,[p.id]:val})));
       setTsOpenCell(null);
       showToast(`Marked as ${val} ✓`);
     }
 
     async function saveManualTime() {
       if (!editIn) { showToast("Enter at least a clock-in time"); return; }
-      if (reasonCode==="other" && !reasonNote.trim()) { showToast("Enter a reason for this adjustment"); return; }
       setSaving(true);
       try {
-        const reasonLabel = ADJUSTMENT_REASONS.find(r=>r.value===reasonCode)?.label || "Manual adjustment";
-        const reasonText  = reasonCode==="other" ? reasonNote.trim() : reasonLabel;
-
         const makeISO = (dateStr, timeStr) => {
           const [h,m] = timeStr.split(":").map(Number);
           const d = new Date(dateStr+"T00:00:00");
@@ -3411,35 +2258,21 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const inTime  = makeISO(dateStr, editIn);
         const outTime = editOut ? makeISO(dateStr, editOut) : null;
 
-        // Remove existing local ADJUSTMENT punches for this employee/day before inserting fresh ones
-        setPunches(p => p.filter(px => {
-          const sameEmp = px.empId === empId;
-          const sameDay = toLocalDateStr(new Date(px.time)) === dateStr;
-          const isAdj   = px.flags?.includes("ADJUSTMENT");
-          return !(sameEmp && sameDay && isAdj);
-        }));
-        // Delete existing ADJUSTMENT punch rows from Supabase for this employee/day
-        if (bizId) {
-          const dayStart = new Date(dateStr+"T00:00:00").toISOString();
-          const dayEnd   = new Date(dateStr+"T23:59:59").toISOString();
-          await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}&adjustment_reason=not.is.null`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} });
-        }
-
-        const inPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"in", time:inTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
+        const inPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"in", time:inTime, scheduled:shift||null, flags:["ADJUSTMENT"] };
         setPunches(p=>[...p, inPunch]);
         if (bizId) {
-          await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"in", punched_at:inTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
+          await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"in", punched_at:inTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"] });
         }
 
         if (outTime) {
-          const outPunch = { id:(Date.now()+1).toString(), empId, empName:emp.name, type:"out", time:outTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
+          const outPunch = { id:(Date.now()+1).toString(), empId, empName:emp.name, type:"out", time:outTime, scheduled:shift||null, flags:["ADJUSTMENT"] };
           setPunches(p=>[...p, outPunch]);
           if (bizId) {
-            await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"out", punched_at:outTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
+            await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"out", punched_at:outTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"] });
           }
         }
 
-        addAudit("Manual Time Entry", `${emp.name} — ${dateStr}: ${editIn}${editOut?" – "+editOut:""} (${reasonText})`, {empName:emp.name});
+        addAudit("Manual Time Entry", `${emp.name} — ${dateStr}: ${editIn}${editOut?" – "+editOut:""}`, {empName:emp.name});
         showToast("Time adjustment saved ✓");
         setTsOpenCell(null);
       } catch(e) { showToast("Could not save: "+e.message); }
@@ -3496,15 +2329,17 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               </div>
             )}
 
-            {/* Punch log — per-row delete with reason */}
+            {/* Punch log */}
             {dp.length>0&&(
               <div style={{background:T.muted,borderRadius:10,padding:"10px 12px"}}>
                 <div style={{fontSize:10,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Punch log</div>
                 {dp.map((p,i)=>(
-                  <PunchRow key={p.id||i} p={p} i={i} total={dp.length} emp={emp} dateStr={dateStr} bizId={bizId}
-                    setPunches={setPunches} setPunchReviews={setPunchReviews}
-                    addAudit={addAudit} showToast={showToast} T={T}
-                    ADJUSTMENT_REASONS={ADJUSTMENT_REASONS} />
+                  <div key={p.id||i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"4px 0",borderBottom:i<dp.length-1?`1px solid ${T.border}`:"none"}}>
+                    <span style={{fontSize:12,fontWeight:700,color:p.type==="in"||p.type==="break_in"?"#2D6A4F":"#C0392B"}}>
+                      {p.type==="in"?"Clock in":p.type==="out"?"Clock out":p.type==="break_out"?"Break start":"Break end"}
+                    </span>
+                    <span style={{fontSize:12,color:T.sub,fontFamily:"monospace"}}>{new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</span>
+                  </div>
                 ))}
               </div>
             )}
@@ -3514,22 +2349,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               <div style={{fontSize:10,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:10}}>
                 {dp.length>0?"Adjust time":"Add missing time"}
               </div>
-
-              <div style={{marginBottom:10}}>
-                <label style={{fontSize:10,color:T.sub,display:"block",marginBottom:4,fontWeight:600}}>Reason</label>
-                <select value={reasonCode} onChange={e=>setReasonCode(e.target.value)}
-                  style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,fontWeight:700,outline:"none",background:T.surface,color:T.text,cursor:"pointer"}}>
-                  {ADJUSTMENT_REASONS.map(r=>(
-                    <option key={r.value} value={r.value}>{r.label}</option>
-                  ))}
-                </select>
-                {reasonCode==="other" && (
-                  <input value={reasonNote} onChange={e=>setReasonNote(e.target.value)}
-                    placeholder="Briefly describe what happened"
-                    style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none",background:T.surface,color:T.text,marginTop:8,boxSizing:"border-box"}}/>
-                )}
-              </div>
-
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
                 {[["Clock in",editIn,setEditIn],["Clock out",editOut,setEditOut]].map(([lbl,val,setter])=>(
                   <div key={lbl}>
@@ -3546,7 +2365,27 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               <div style={{fontSize:10,color:T.sub,marginTop:6,textAlign:"center"}}>Creates an audit trail entry flagged as ADJUSTMENT</div>
             </div>
 
-
+{/* Delete punches */}
+{dp.length>0&&(
+  <div style={{borderTop:`1px solid ${T.border}`,paddingTop:12}}>
+    <button onClick={()=>{
+      if(!window.confirm(`Delete all ${dp.length} punch record${dp.length!==1?"s":""} for ${emp.name} on ${dateStr}?\n\nThis cannot be undone. An audit entry will be created.`)) return;
+      const idsToRemove = new Set(dp.map(p=>p.id));
+      setPunches(p=>p.filter(p=>!idsToRemove.has(p.id)));
+      setPunchReviews(prev=>{ const n={...prev}; dp.forEach(p=>delete n[p.id]); return n; });
+      if (bizId) {
+        dp.forEach(p=>{
+          dbDelete(`punches?id=eq.${p.id}`).catch(e=>console.warn("Punch delete failed:",e));
+        });
+      }
+      addAudit("Punches Deleted", `${emp.name} — ${dateStr}: ${dp.length} record${dp.length!==1?"s":""} removed`, {empName:emp.name});
+      showToast(`${dp.length} punch record${dp.length!==1?"s":""} deleted ✓`);
+      setTsOpenCell(null);
+    }} style={{width:"100%",background:"#FDECEA",color:"#C0392B",border:"1px solid #C0392B22",borderRadius:9,padding:"10px 0",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+      Delete {dp.length} punch record{dp.length!==1?"s":""}
+    </button>
+  </div>
+)}
 
             {/* Review buttons */}
             <div>
@@ -3601,23 +2440,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         </div>
       </div>
 
-      {/* Week picker — matches Schedule tab's Prev / range / calendar / Next pattern */}
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
-        <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,-7)))}
-          style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
-        <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
-          <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
-            <span style={{fontSize:10}}>●</span>
-            {tsWkLabel}
-          </div>
-          <div style={{position:"relative",flexShrink:0,borderLeft:`1px solid ${T.accent}40`}}>
-            <input type="date" value={tsWeekStart} onChange={e=>setTsWeekStart(getSunday(e.target.value))}
-              style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
-            <div style={{background:T.accent+"18",padding:"8px 10px",fontSize:13,cursor:"pointer",userSelect:"none",color:T.accent}}>📅</div>
+      {/* Week picker */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+        <div style={{fontWeight:700,fontSize:13,color:T.text,minWidth:160}}>{tsWkLabel}</div>
+        <div style={{position:"relative",flexShrink:0}}>
+          <input type="date" value={tsWeekStart} onChange={e=>setTsWeekStart(getSunday(e.target.value))}
+            style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
+          <div style={{background:T.muted,borderRadius:8,padding:"7px 12px",fontSize:13,cursor:"pointer",userSelect:"none",border:`1px solid ${T.border}`,fontWeight:600,color:T.text,display:"flex",alignItems:"center",gap:6}}>
+            📅 Jump to week
           </div>
         </div>
-        <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,7)))}
-          style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
       </div>
 
       {/* Grid */}
@@ -4192,13 +3024,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         <td style={{padding:"13px 16px",color:"#777",fontWeight:700,fontSize:11,letterSpacing:"0.06em"}}>TOTALS</td>
                         {DAYS.map((_,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
-                          const dp=employees.reduce((s,e)=>s+eDayP(activeWeek,e,i),0);
                           return (
                             <td key={i} style={{padding:"12px 6px",textAlign:"center",fontWeight:700}}>
-                              {dh>0?<>
-                                <div style={{color:T.accent,fontSize:13}}>{dh}h</div>
-                                <div style={{color:"#4CAF7D",fontSize:11,fontWeight:700,marginTop:1}}>${dp.toFixed(0)}</div>
-                              </>:<span style={{color:"#3A3A3A"}}>—</span>}
+                              {dh>0?<><div style={{color:T.accent,fontSize:13}}>{dh}h</div></>:<span style={{color:"#3A3A3A"}}>—</span>}
                             </td>
                           );
                         })}
@@ -4220,14 +3048,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           {tab==="coverage" && (()=>{
             const today = new Date();
             const todayIdx = today.getDay();
-            const todayStr = toLocalDateStr(today);
+            const todayStr = today.toISOString().split("T")[0];
             const nowDec = today.getHours() + today.getMinutes()/60;
 
             // ── Helpers ──────────────────────────────────────────────────────
             // Find which week key contains a given date
             function weekKeyForDate(dateStr) {
               for (const wk of weeks) {
-                const dates = wk.dates.map(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt); });
+                const dates = wk.dates.map(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toISOString().split("T")[0]; });
                 if (dates.includes(dateStr)) return { weekKey: wk.key, dayIdx: dates.indexOf(dateStr) };
               }
               return null;
@@ -4373,7 +3201,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             );
 
             return (
-              <div style={{maxWidth:900, margin:"0 auto", display:"flex", flexDirection:"column", gap:16}}>
+              <div style={{maxWidth:720, display:"flex", flexDirection:"column", gap:16}}>
 
                 {/* Header */}
                 <div>
@@ -4954,7 +3782,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             const scoreBg    = v => v >= 75 ? "#F0FFF4" : v >= 50 ? "#FEF3E2" : "#FDECEA";
 
             return (
-              <div style={{maxWidth:900, margin:"0 auto", display:"flex", flexDirection:"column", gap:16}}>
+              <div style={{maxWidth:720, display:"flex", flexDirection:"column", gap:16}}>
 
                 {/* Header */}
                 <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", flexWrap:"wrap", gap:12}}>
@@ -5133,7 +3961,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       </Card>
                     )}
 
-
+                    {/* Supabase upgrade note */}
+                    <div style={{background:T.muted, borderRadius:T.radius, padding:"12px 16px", display:"flex", gap:10, alignItems:"flex-start"}}>
+                      <span style={{fontSize:16, flexShrink:0}}>🔗</span>
+                      <div style={{fontSize:11, color:T.sub, lineHeight:1.6}}>
+                        <strong style={{color:T.text}}>Analysis is based on this device's data.</strong> Once connected to Supabase, insights will include historical patterns, multi-device punch data, and real-time Square sales — making recommendations significantly more powerful.
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -5271,7 +4105,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             ];
 
             return (
-              <div style={{maxWidth:760, margin:"0 auto", paddingBottom:20}}>
+              <div style={{maxWidth:600, paddingBottom:20}}>
                 <div style={{marginBottom:20, display:"flex", alignItems:"center", gap:12}}>
                   {settingsSection && (
                     <button onClick={()=>setSettingsSection(null)}
@@ -5372,12 +4206,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                               style={{borderRadius:T.radius, overflow:"hidden", cursor:"pointer", border:`2px solid ${isActive?T.accent:T.border}`, boxShadow:isActive?`0 0 0 3px ${T.accent}28`:T.shadow, background:T.surface, transition:"all 0.15s"}}>
                               <div style={{background:theme.dark, padding:"9px 12px", display:"flex", alignItems:"center", gap:8}}>
                                 <div style={{width:18,height:18,background:theme.accent,borderRadius:4,fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>📅</div>
-                                <span style={{fontSize:11,fontWeight:800,color:theme.id==="commander"?theme.text:"white",display:"inline-flex",alignItems:"center",gap:0}}>
-                                  ShiftWise
-                                  <span style={{color:"#6B7280",margin:"0 4px",fontWeight:300}}>|</span>
-                                  Veredian
-                                  <span style={{fontSize:7,fontWeight:400,color:"#93c5fd",position:"relative",bottom:"4px",marginLeft:2,letterSpacing:"0.05em"}}>Beta</span>
-                                </span>
+                                <span style={{fontSize:11,fontWeight:800,color:theme.id==="commander"?theme.text:"white"}}>ShiftWise</span>
                                 <div style={{marginLeft:"auto",display:"flex",gap:3}}>
                                   {["Schedule","Team","Dashboard"].map(lbl=>(<div key={lbl} style={{background:lbl==="Schedule"?theme.accent:"transparent",color:"#888",borderRadius:3,padding:"2px 6px",fontSize:8,fontWeight:700}}>{lbl}</div>))}
                                 </div>
@@ -6114,16 +4943,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               const updates = {};
               flagged.forEach(p=>{ if(!punchReviews[p.id]) updates[p.id]="reviewed"; });
               setPunchReviews(prev=>({...prev,...updates}));
-              // Persist to Supabase
-              if (bizId) {
-                Object.entries(updates).forEach(([pid, status]) => {
-                  fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
-                    method: "POST",
-                    headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
-                    body: JSON.stringify({ business_id: bizId, punch_id: pid, status, reviewed_by: getSession()?.user?.id || null })
-                  }).catch(e=>console.warn("punch_reviews insert failed:", e));
-                });
-              }
               showToast("All alerts marked as reviewed ✓");
             }} style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer",width:"100%"}}>
               Mark All Reviewed
@@ -6162,16 +4981,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:1,borderTop:`1px solid ${T.border}`}}>
                     {[["Reviewed","reviewed","#3A9BE8"],["Approved","approved","#4CAF7D"],["Rejected","rejected","#C0392B"]].map(([lbl,val,color])=>(
-                      <button key={val} onClick={()=>{
-                        setPunchReviews(prev=>({...prev,[p.id]:val}));
-                        if (bizId) {
-                          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
-                            method: "POST",
-                            headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
-                            body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
-                          }).catch(e=>console.warn("punch_reviews insert failed:", e));
-                        }
-                      }}
+                      <button key={val} onClick={()=>setPunchReviews(p=>({...p,[p.id]:val}))}
                         style={{background:status===val?color+"22":T.surface,color:status===val?color:T.sub,border:"none",padding:"9px 0",fontSize:11,fontWeight:700,cursor:"pointer",transition:"all 0.12s"}}>
                         {lbl}
                       </button>
@@ -6213,8 +5023,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   const wkKeys=entry.weekMode==="2"?[entry.wk1Start,entry.wk2Start]:[entry.wk1Start];
                   const tH=entry.employeeSnapshot.reduce((s,emp)=>s+wkKeys.reduce((ws,wk)=>ws+DAYS.reduce((ds,_,di)=>ds+shiftHrs(entry.scheduleData?.[wk]?.[emp.id]?.[di]||null),0),0),0);
                   const tP=entry.employeeSnapshot.reduce((s,emp)=>s+wkKeys.reduce((ws,wk)=>{const h=DAYS.reduce((ds,_,di)=>ds+shiftHrs(entry.scheduleData?.[wk]?.[emp.id]?.[di]||null),0);return ws+h*(parseFloat(emp.hourlyRate)||0);},0),0);
-
-  return (
+                  return (
                     <Card T={T} key={entry.id}>
                       <div style={{padding:"14px 16px"}}>
                         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:12}}>

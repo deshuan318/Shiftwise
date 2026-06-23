@@ -7,7 +7,7 @@ const SQUARE_BASE = process.env.SQUARE_ENV === "sandbox"
   ? "https://connect.squareupsandbox.com"
   : "https://connect.squareup.com";
 
-const APP_BASE_URL = process.env.APP_BASE_URL || "https://shiftwise-mlcm.vercel.app";
+const APP_BASE_URL = process.env.APP_BASE_URL || "https://shiftwise-ten.vercel.app";
 
 export default async function handler(req, res) {
   const { business_id } = req.query;
