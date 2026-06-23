@@ -603,7 +603,7 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
 
         {step===0 && (
           <div className="sw-card">
-            <div className="sw-eyebrow">Welcome to ShiftWise | Veredian</div>
+            <div className="sw-eyebrow">Welcome to ShiftWise</div>
             <h2 className="sw-title">Tell us about your business</h2>
             <p className="sw-sub">Shows on your schedule and reports. Edit any time in Settings.</p>
             <div className="sw-fgroup">
@@ -2977,12 +2977,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           {/* Logo */}
           <div style={{textAlign:"center",marginBottom:32}}>
             <div style={{width:56,height:56,background:"#2D6A4F",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 16px"}}>📅</div>
-            <div style={{fontSize:26,fontWeight:900,color:"white",letterSpacing:"-0.01em",display:"inline-flex",alignItems:"center",gap:0}}>
-              ShiftWise
-              <span style={{color:"#6B7280",margin:"0 7px",fontWeight:300}}>|</span>
-              Veredian
-              <span style={{fontSize:11,fontWeight:400,color:"#93c5fd",position:"relative",bottom:"9px",marginLeft:3,letterSpacing:"0.06em"}}>Beta</span>
-            </div>
+            <div style={{fontSize:26,fontWeight:900,color:"white",letterSpacing:"-0.01em"}}>ShiftWise</div>
             <div style={{fontSize:13,color:"#4B5563",marginTop:4}}>Schedule smarter. Run better.</div>
           </div>
 
@@ -5372,12 +5367,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                               style={{borderRadius:T.radius, overflow:"hidden", cursor:"pointer", border:`2px solid ${isActive?T.accent:T.border}`, boxShadow:isActive?`0 0 0 3px ${T.accent}28`:T.shadow, background:T.surface, transition:"all 0.15s"}}>
                               <div style={{background:theme.dark, padding:"9px 12px", display:"flex", alignItems:"center", gap:8}}>
                                 <div style={{width:18,height:18,background:theme.accent,borderRadius:4,fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>📅</div>
-                                <span style={{fontSize:11,fontWeight:800,color:theme.id==="commander"?theme.text:"white",display:"inline-flex",alignItems:"center",gap:0}}>
-                                  ShiftWise
-                                  <span style={{color:"#6B7280",margin:"0 4px",fontWeight:300}}>|</span>
-                                  Veredian
-                                  <span style={{fontSize:7,fontWeight:400,color:"#93c5fd",position:"relative",bottom:"4px",marginLeft:2,letterSpacing:"0.05em"}}>Beta</span>
-                                </span>
+                                <span style={{fontSize:11,fontWeight:800,color:theme.id==="commander"?theme.text:"white"}}>ShiftWise</span>
                                 <div style={{marginLeft:"auto",display:"flex",gap:3}}>
                                   {["Schedule","Team","Dashboard"].map(lbl=>(<div key={lbl} style={{background:lbl==="Schedule"?theme.accent:"transparent",color:"#888",borderRadius:3,padding:"2px 6px",fontSize:8,fontWeight:700}}>{lbl}</div>))}
                                 </div>
@@ -6109,25 +6099,38 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const FLAG_COLORS = { LATE:"#E8A93A", EARLY:"#3A9BE8", EARLY_OUT:"#E8A93A", NO_SHIFT:"#C0392B" };
         return (
           <div style={{flex:1,overflowY:"auto",padding:14,display:"flex",flexDirection:"column",gap:10}}>
-            {/* Mark all reviewed button */}
-            <button onClick={()=>{
-              const updates = {};
-              flagged.forEach(p=>{ if(!punchReviews[p.id]) updates[p.id]="reviewed"; });
-              setPunchReviews(prev=>({...prev,...updates}));
-              // Persist to Supabase
-              if (bizId) {
-                Object.entries(updates).forEach(([pid, status]) => {
-                  fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
-                    method: "POST",
-                    headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
-                    body: JSON.stringify({ business_id: bizId, punch_id: pid, status, reviewed_by: getSession()?.user?.id || null })
-                  }).catch(e=>console.warn("punch_reviews insert failed:", e));
-                });
-              }
-              showToast("All alerts marked as reviewed ✓");
-            }} style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer",width:"100%"}}>
-              Mark All Reviewed
-            </button>
+            {/* Mark all reviewed + Clear actioned buttons */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+              <button onClick={()=>{
+                const updates = {};
+                flagged.forEach(p=>{ if(!punchReviews[p.id]) updates[p.id]="reviewed"; });
+                setPunchReviews(prev=>({...prev,...updates}));
+                if (bizId) {
+                  Object.entries(updates).forEach(([pid, status]) => {
+                    fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
+                      method: "POST",
+                      headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
+                      body: JSON.stringify({ business_id: bizId, punch_id: pid, status, reviewed_by: getSession()?.user?.id || null })
+                    }).catch(e=>console.warn("punch_reviews insert failed:", e));
+                  });
+                }
+                showToast("All alerts marked as reviewed ✓");
+              }} style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                Mark All Reviewed
+              </button>
+              <button onClick={()=>{
+                // Remove actioned punches from local flagged view by clearing their review status entries
+                // We keep the punchReviews map but filter flagged list — achieved by removing them from punches display
+                // Actually: clear punchReviews for all actioned punches so they disappear from alerts
+                const actionedIds = flagged.filter(p => punchReviews[p.id] && punchReviews[p.id] !== "pending").map(p=>p.id);
+                if (actionedIds.length === 0) { showToast("No actioned alerts to clear"); return; }
+                // Remove their flags locally so they no longer appear in flagged list
+                setPunches(prev => prev.map(p => actionedIds.includes(p.id) ? {...p, flags:[]} : p));
+                showToast(`Cleared ${actionedIds.length} actioned alert${actionedIds.length!==1?"s":""} ✓`);
+              }} style={{background:"#FDECEA",color:"#C0392B",border:"1px solid #C0392B22",borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                Clear Actioned
+              </button>
+            </div>
 
             {flagged.map(p=>{
               const emp = employees.find(e=>e.id===p.empId);
