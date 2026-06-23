@@ -859,85 +859,6 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
 }
 // ── END SetupFlow ────────────────────────────────────────────────────────────
 
-// ─── PunchRow: single punch log entry with inline per-row delete + reason ───
-function PunchRow({ p, i, total, emp, dateStr, bizId, setPunches, setPunchReviews, addAudit, showToast, T, ADJUSTMENT_REASONS }) {
-  const [delOpen, setDelOpen] = useState(false);
-  const [delReason, setDelReason] = useState("duplicate_punch");
-  const [delNote, setDelNote] = useState("");
-  const [deleting, setDeleting] = useState(false);
-
-  const typeLabel = p.type==="in"?"Clock in":p.type==="out"?"Clock out":p.type==="break_out"?"Break start":"Break end";
-  const typeColor = p.type==="in"||p.type==="break_in" ? "#2D6A4F" : "#C0392B";
-
-  async function confirmDelete() {
-    if (delReason==="other" && !delNote.trim()) { showToast("Enter a reason for deleting this punch"); return; }
-    setDeleting(true);
-    try {
-      const reasonLabel = ADJUSTMENT_REASONS.find(r=>r.value===delReason)?.label || "Manager Correction";
-      const reasonText  = delReason==="other" ? delNote.trim() : reasonLabel;
-      // Remove from local state
-      setPunches(prev => prev.filter(px => px.id !== p.id));
-      setPunchReviews(prev => { const n={...prev}; delete n[p.id]; return n; });
-      // Delete from Supabase
-      if (bizId) {
-        await fetch(`https://kyrjgfeowmflazywsuir.supabase.co/rest/v1/punches?id=eq.${p.id}`, {
-          method:"DELETE",
-          headers:{ apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cmpnZmVvd21mbGF6eXdzdWlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzMzMTQsImV4cCI6MjA5NTA0OTMxNH0.njuDREVF4oIgTYN6wLXKw6Hw_KsFzKPoMabkld_jy0E", Authorization:`Bearer ${(()=>{try{const s=JSON.parse(localStorage.getItem("sw_session")||"null");return s?.access_token||"";}catch{return "";}})()}` }
-        });
-      }
-      // Audit trail
-      addAudit("Punch Deleted", `${emp.name} — ${dateStr}: ${typeLabel} at ${new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})} removed (${reasonText})`, {empName:emp.name});
-      showToast("Punch deleted ✓");
-    } catch(e) { showToast("Could not delete: "+e.message); }
-    finally { setDeleting(false); }
-  }
-
-  return (
-    <div style={{borderBottom:i<total-1?`1px solid ${T.border}`:"none",paddingBottom:delOpen?8:0}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0"}}>
-        <span style={{fontSize:12,fontWeight:700,color:typeColor}}>{typeLabel}</span>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <span style={{fontSize:12,color:T.sub,fontFamily:"monospace"}}>{new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</span>
-          <button onClick={()=>setDelOpen(o=>!o)}
-            title="Delete this punch"
-            style={{background:delOpen?"#FDECEA":"transparent",border:`1px solid ${delOpen?"#C0392B44":T.border}`,borderRadius:6,width:24,height:24,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:delOpen?"#C0392B":T.sub,transition:"all 0.12s"}}>
-            🗑
-          </button>
-        </div>
-      </div>
-      {p.adjustmentReason && !delOpen && (
-        <div style={{fontSize:10,color:"#B7780F",marginBottom:4,fontStyle:"italic"}}>↳ {p.adjustmentReason}</div>
-      )}
-      {delOpen && (
-        <div style={{background:"#FDECEA",borderRadius:8,padding:"10px 10px",marginBottom:4,border:"1px solid #C0392B22"}}>
-          <div style={{fontSize:10,fontWeight:700,color:"#C0392B",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Delete reason</div>
-          <select value={delReason} onChange={e=>setDelReason(e.target.value)}
-            style={{width:"100%",border:"1.5px solid #C0392B33",borderRadius:6,padding:"6px 8px",fontSize:12,fontWeight:700,background:"white",color:"#C0392B",marginBottom:6,outline:"none"}}>
-            {ADJUSTMENT_REASONS.map(r=><option key={r.value} value={r.value}>{r.label}</option>)}
-          </select>
-          {delReason==="other" && (
-            <input value={delNote} onChange={e=>setDelNote(e.target.value)}
-              placeholder="Briefly describe why"
-              style={{width:"100%",border:"1.5px solid #C0392B33",borderRadius:6,padding:"6px 8px",fontSize:12,background:"white",color:"#333",marginBottom:6,outline:"none",boxSizing:"border-box"}}/>
-          )}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
-            <button onClick={()=>{setDelOpen(false);setDelNote("");}}
-              style={{background:"white",border:`1px solid ${T.border}`,borderRadius:6,padding:"6px 0",fontSize:12,fontWeight:700,cursor:"pointer",color:T.sub}}>
-              Cancel
-            </button>
-            <button onClick={confirmDelete} disabled={deleting}
-              style={{background:"#C0392B",border:"none",borderRadius:6,padding:"6px 0",fontSize:12,fontWeight:700,cursor:"pointer",color:"white",opacity:deleting?0.6:1}}>
-              {deleting?"Deleting…":"Confirm Delete"}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-// ─────────────────────────────────────────────────────────────────────────────
-
-
 export default function App() {
   const defaultSun = useMemo(() => getSunday(new Date().toISOString().split("T")[0]), []);
 
@@ -1000,6 +921,7 @@ export default function App() {
   const [squareSyncing,      setSquareSyncing]      = useState(false);
   const [squareLoading,      setSquareLoading]      = useState(true);
   const [showDailyBreakdown, setShowDailyBreakdown] = useState(false);
+  const [laborPctMode, setLaborPctMode] = useState("projected"); // "projected" | "actual"
   const [widgets,        setWidgets]        = useState([]);
   const [showAddWidget,  setShowAddWidget]  = useState(false);
   const [newWidget,      setNewWidget]      = useState({ data_source:"sales", time_range:"last7", display:"stat", color:null, show_axis:true, show_legend:true });
@@ -1164,7 +1086,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const [
         empRows, weekRows, shiftTypeRows, bizHourRows,
         salesRows, recRows, punchRows, openShiftRows,
-        templateRows, publishedRows, auditRows, reviewRows,
+        templateRows, publishedRows, auditRows,
       ] = await Promise.all([
         dbGet(`employees?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`),
         dbGet(`schedule_weeks?select=*&business_id=eq.${business.id}&order=week_start.asc`),
@@ -1177,7 +1099,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         dbGet(`templates?select=*&business_id=eq.${business.id}&order=created_at.desc`),
         dbGet(`published_schedules?select=*&business_id=eq.${business.id}&order=published_at.desc`),
         dbGet(`audit_log?select=*&business_id=eq.${business.id}&order=created_at.desc&limit=500`),
-        dbGet(`punch_reviews?select=*&business_id=eq.${business.id}`),
       ]);
 
       // 3. Load shifts for all weeks
@@ -1252,14 +1173,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       // 10. Other state
       setSalesData((salesRows||[]).map(r=>({ date:r.sale_date, revenue:parseFloat(r.revenue), transactions:r.transactions })));
       setRecognition((recRows||[]).map(r=>({ id:r.id, at:r.created_at, type:r.rec_type, emoji:r.emoji, message:r.message, fromName:r.from_name, toName:r.to_name, toId:r.to_id })));
-      setPunches((punchRows||[]).map(r=>({ id:r.id, empId:r.employee_id, empName:r.employee_name, type:r.punch_type, time:r.punched_at, scheduled:r.scheduled_start?{start:parseFloat(r.scheduled_start),end:parseFloat(r.scheduled_end)}:null, flags:r.flags||[], adjustmentReason:r.adjustment_reason||null })));
+      setPunches((punchRows||[]).map(r=>({ id:r.id, empId:r.employee_id, empName:r.employee_name, type:r.punch_type, time:r.punched_at, scheduled:r.scheduled_start?{start:parseFloat(r.scheduled_start),end:parseFloat(r.scheduled_end)}:null, flags:r.flags||[] })));
       setOpenShifts((openShiftRows||[]).map(r=>({ id:r.id, weekKey:wks.find(w=>w.id===r.week_id)?.week_start||r.week_id, empId:r.employee_id, dayIdx:r.day_index, originalShift:r.shift_start?{start:parseFloat(r.shift_start),end:parseFloat(r.shift_end)}:null, reason:r.reason, status:r.status, claimedBy:r.claimed_by, createdAt:r.created_at })));
       setTemplates((templateRows||[]).map(r=>({ id:r.id, name:r.name, savedAt:r.created_at, scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot })));
       setPublished((publishedRows||[]).map(r=>({ id:r.id, publishedAt:r.published_at, label:r.label, wk1Start:r.week_start, wk2Start:r.week_start, weekMode:"1", scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot, budget:r.budget })));
       setAuditLog((auditRows||[]).map(r=>({ id:r.id, at:r.created_at, action:r.action, detail:r.detail, empName:r.employee_name })));
-      const reviewMap = {};
-      (reviewRows||[]).forEach(r=>{ reviewMap[r.punch_id] = r.status; });
-      setPunchReviews(reviewMap);
 
       setAuthState("authenticated");
     } catch(err) {
@@ -1361,11 +1279,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const staffCount = employees.filter(e => schedule?.[wk.key]?.[e.id]?.[di]).length;
         const dayHours = employees.reduce((s, e) => s + shiftHrs(schedule?.[wk.key]?.[e.id]?.[di] || null), 0);
         const sale = wkSales.find(s => s.date === wkDates[di]);
-        const rplhDay = (sale?.revenue && dayHours > 0) ? parseFloat((sale.revenue / dayHours).toFixed(2)) : null;
-        return { day, date: wkDates[di], staffCount, totalHours: dayHours, revenue: sale?.revenue || null, revenuePerLaborHour: rplhDay };
+        return { day, date: wkDates[di], staffCount, totalHours: dayHours, revenue: sale?.revenue || null };
       });
-
-      const rplhWeek = (totalRevenue > 0 && totalHours > 0) ? parseFloat((totalRevenue / totalHours).toFixed(2)) : null;
 
       return {
         label: wk.label,
@@ -1375,7 +1290,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         totalEstimatedPay: parseFloat(totalPay.toFixed(2)),
         totalRevenue: totalRevenue > 0 ? parseFloat(totalRevenue.toFixed(2)) : null,
         laborCostPct: laborPct !== null ? parseFloat(laborPct.toFixed(1)) : null,
-        revenuePerLaborHour: rplhWeek,
         staffScheduled: staffed,
         totalStaff: employees.length,
         budget: parseFloat(weeklyBudget) || null,
@@ -1386,130 +1300,33 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     });
 
     // Recent punch flags
-    // ── Budget burn (mid-week pace → projected end) ──────────────────────────
-    const budget = parseFloat(weeklyBudget) || null;
-    let budgetBurn = null;
-    if (budget && weekSummaries[0]) {
-      const wk0 = weekSummaries[0];
-      const wkDates0 = weeks[0]?.dates.map(d => {
-        const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
-        return toLocalDateStr(dt);
-      }) || [];
-      const todayIdx0 = wkDates0.indexOf(todayStr);
-      const daysPassed = todayIdx0 >= 0 ? todayIdx0 + 1 : 7;
-      const dailyRate = daysPassed > 0 ? wk0.totalEstimatedPay / daysPassed : 0;
-      const projectedEnd = parseFloat((dailyRate * 7).toFixed(2));
-      const overBy = parseFloat((projectedEnd - budget).toFixed(2));
-      budgetBurn = {
-        spent: wk0.totalEstimatedPay,
-        budget,
-        projectedEnd,
-        projectedOver: projectedEnd > budget,
-        overBy: overBy > 0 ? overBy : 0,
-        pct: parseFloat(((wk0.totalEstimatedPay / budget) * 100).toFixed(1)),
-        daysPassed,
-      };
-    }
-
-    // ── Punch variance (scheduled vs actual clocked hours per employee) ───────
-    const wk0Dates = weeks[0]?.dates.map(d => {
-      const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
-      return toLocalDateStr(dt);
-    }) || [];
-    const punchVariance = employees.map(emp => {
-      const scheduled = weekSummaries[0]?.employeeBreakdown?.find(e => e.name === emp.name)?.scheduledHours || 0;
-      const actualPunches = punches.filter(p => {
-        const pd = toLocalDateStr(new Date(p.time));
-        return p.empId === emp.id && wk0Dates.includes(pd);
-      });
-      // pair in/out punches
-      let actual = 0, inT = null;
-      for (const p of [...actualPunches].sort((a,b)=>new Date(a.time)-new Date(b.time))) {
-        if (p.type === "in" || p.type === "break_in") inT = new Date(p.time);
-        else if ((p.type === "out") && inT) { actual += (new Date(p.time)-inT)/3600000; inT = null; }
-      }
-      actual = parseFloat(actual.toFixed(2));
-      const diff = parseFloat((actual - scheduled).toFixed(2));
-      return { name: emp.name, scheduled, actual, diff };
-    }).filter(e => e.scheduled > 0 || e.actual > 0);
-
-    // ── Attendance flags ──────────────────────────────────────────────────────
-    const recentPunches = punches.filter(p => {
-      const pd = new Date(p.time);
-      return (today - pd) / (1000*60*60*24) <= 30;
-    });
-
-    const todayDayIdx = today.getDay();
-    const todayWeekKey = weeks[0]?.key;
-
-    // Late arrivals — clocked in >10min after scheduled start this week
-    const lateArrivals = employees.map(emp => {
-      const lates = wk0Dates.map((dateStr, di) => {
-        const shift = schedule?.[todayWeekKey]?.[emp.id]?.[di] || null;
-        if (!shift) return null;
-        const scheduledStart = new Date(dateStr+"T00:00:00");
-        scheduledStart.setHours(Math.floor(shift.start), Math.round((shift.start % 1) * 60));
-        const clockIn = punches.find(p =>
-          p.empId === emp.id &&
-          p.type === "in" &&
-          toLocalDateStr(new Date(p.time)) === dateStr
-        );
-        if (!clockIn) return null;
-        const minsLate = (new Date(clockIn.time) - scheduledStart) / 60000;
-        return minsLate > 10 ? minsLate : null;
-      }).filter(Boolean);
-      return lates.length > 0 ? { name: emp.name, count: lates.length } : null;
-    }).filter(Boolean);
-
-    // Missed punches — has a shift today but no clock-in recorded
-    const missedPunches = employees.map(emp => {
-      const shift = schedule?.[todayWeekKey]?.[emp.id]?.[todayDayIdx] || null;
-      if (!shift) return null;
-      const scheduledStart = new Date(todayStr+"T00:00:00");
-      scheduledStart.setHours(Math.floor(shift.start), Math.round((shift.start % 1) * 60));
-      if (today < scheduledStart) return null; // shift hasn't started yet
-      const hasPunch = punches.some(p =>
-        p.empId === emp.id &&
-        p.type === "in" &&
-        toLocalDateStr(new Date(p.time)) === todayStr
-      );
-      return hasPunch ? null : { name: emp.name };
-    }).filter(Boolean);
-
-    // Reliability flags — employees with most punch flags in last 30 days
-    const reliabilityFlags = employees.map(emp => {
-      const flagCount = recentPunches.filter(p => p.empId === emp.id && p.flags?.length > 0).length;
-      return flagCount > 0 ? { name: emp.name, flags30Days: flagCount } : null;
-    }).filter(Boolean).sort((a,b) => b.flags30Days - a.flags30Days);
-
-    // ── Overtime ──────────────────────────────────────────────────────────────
-    const overtimeAlerts = employees
-      .filter(e => weeks.some(w => eWkH(w.key, e.id) > 40))
-      .map(e => ({ name: e.name, hours: Math.max(...weeks.map(w => eWkH(w.key, e.id))) }));
-
     const recentFlags = punches
       .filter(p => p.flags && p.flags.length > 0)
       .slice(-20)
       .map(p => ({ employee: p.empName, type: p.type, flags: p.flags, time: p.time }));
 
+    // Overtime employees
+    const overtimeAlerts = employees
+      .filter(e => weeks.some(w => eWkH(w.key, e.id) > 40))
+      .map(e => ({ name: e.name, hours: Math.max(...weeks.map(w => eWkH(w.key, e.id))) }));
+
     return {
+      // ── swap this section for Supabase queries ──
       businessName: biz,
       businessHours: Object.entries(businessHours).reduce((acc,[di,h])=>({...acc,[DAYS[parseInt(di)]]:h}),{}),
       today: todayStr,
       dayOfWeek: today.toLocaleDateString("en-US", { weekday: "long" }),
       totalEmployees: employees.length,
-      weeklyBudget: budget,
+      weeklyBudget: parseFloat(weeklyBudget) || null,
       hasSalesData: salesData.length > 0,
       salesDateRange: salesData.length > 0
         ? { from: salesData[0].date, to: salesData[salesData.length - 1].date }
         : null,
       weeks: weekSummaries,
-      budgetBurn,
-      punchVariance,
-      attendanceFlags: { lateArrivals, missedPunches, reliabilityFlags },
       overtimeAlerts,
       recentPunchFlags: recentFlags,
       publishedSchedulesCount: published.length,
+      // ─────────────────────────────────────────────
     };
   }
 
@@ -3202,7 +3019,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   function getDayPunches(empId, dateStr) {
     return punches.filter(p => {
-      const pd = toLocalDateStr(new Date(p.time));
+      const pd = new Date(p.time).toISOString().split("T")[0];
       return p.empId === empId && pd === dateStr;
     }).sort((a,b) => new Date(a.time)-new Date(b.time));
   }
@@ -3219,7 +3036,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   const pendingFlags = punches.filter(p =>
     p.flags?.length > 0 &&
-    tsWkDates.includes(toLocalDateStr(new Date(p.time))) &&
+    tsWkDates.includes(new Date(p.time).toISOString().split("T")[0]) &&
     !punchReviews[p.id]
   ).length;
 
@@ -3357,34 +3174,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const FLAG_LABELS = {LATE:"Late clock-in",EARLY:"Early clock-in",EARLY_OUT:"Early clock-out",NO_SHIFT:"No shift scheduled",ADJUSTMENT:"Manual adjustment"};
     const STATUS_COLOR = {reviewed:"#3A9BE8",approved:"#4CAF7D",rejected:"#C0392B",pending:"#E8A93A"};
 
-    async function setStatus(val) {
+    function setStatus(val) {
       if (!punchId) return;
-      dp.forEach(p => {
-        setPunchReviews(prev=>({...prev,[p.id]:val}));
-        // Upsert review status to Supabase
-        if (bizId) {
-          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?punch_id=eq.${p.id}`, {
-            method: "GET",
-            headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}` }
-          }).then(r=>r.json()).then(existing => {
-            if (existing && existing.length > 0) {
-              // Update existing row
-              fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?punch_id=eq.${p.id}`, {
-                method: "PATCH",
-                headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "return=minimal" },
-                body: JSON.stringify({ status: val, updated_at: new Date().toISOString() })
-              }).catch(e=>console.warn("punch_reviews update failed:", e));
-            } else {
-              // Insert new row
-              fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
-                method: "POST",
-                headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "return=minimal" },
-                body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
-              }).catch(e=>console.warn("punch_reviews insert failed:", e));
-            }
-          }).catch(e=>console.warn("punch_reviews fetch failed:", e));
-        }
-      });
+      dp.forEach(p => setPunchReviews(prev=>({...prev,[p.id]:val})));
       setTsOpenCell(null);
       showToast(`Marked as ${val} ✓`);
     }
@@ -3405,20 +3197,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         };
         const inTime  = makeISO(dateStr, editIn);
         const outTime = editOut ? makeISO(dateStr, editOut) : null;
-
-        // Remove existing local ADJUSTMENT punches for this employee/day before inserting fresh ones
-        setPunches(p => p.filter(px => {
-          const sameEmp = px.empId === empId;
-          const sameDay = toLocalDateStr(new Date(px.time)) === dateStr;
-          const isAdj   = px.flags?.includes("ADJUSTMENT");
-          return !(sameEmp && sameDay && isAdj);
-        }));
-        // Delete existing ADJUSTMENT punch rows from Supabase for this employee/day
-        if (bizId) {
-          const dayStart = new Date(dateStr+"T00:00:00").toISOString();
-          const dayEnd   = new Date(dateStr+"T23:59:59").toISOString();
-          await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}&adjustment_reason=not.is.null`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} });
-        }
 
         const inPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"in", time:inTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
         setPunches(p=>[...p, inPunch]);
@@ -3491,15 +3269,22 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               </div>
             )}
 
-            {/* Punch log — per-row delete with reason */}
+            {/* Punch log */}
             {dp.length>0&&(
               <div style={{background:T.muted,borderRadius:10,padding:"10px 12px"}}>
                 <div style={{fontSize:10,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Punch log</div>
                 {dp.map((p,i)=>(
-                  <PunchRow key={p.id||i} p={p} i={i} total={dp.length} emp={emp} dateStr={dateStr} bizId={bizId}
-                    setPunches={setPunches} setPunchReviews={setPunchReviews}
-                    addAudit={addAudit} showToast={showToast} T={T}
-                    ADJUSTMENT_REASONS={ADJUSTMENT_REASONS} />
+                  <div key={p.id||i} style={{padding:"4px 0",borderBottom:i<dp.length-1?`1px solid ${T.border}`:"none"}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <span style={{fontSize:12,fontWeight:700,color:p.type==="in"||p.type==="break_in"?"#2D6A4F":"#C0392B"}}>
+                        {p.type==="in"?"Clock in":p.type==="out"?"Clock out":p.type==="break_out"?"Break start":"Break end"}
+                      </span>
+                      <span style={{fontSize:12,color:T.sub,fontFamily:"monospace"}}>{new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</span>
+                    </div>
+                    {p.adjustmentReason && (
+                      <div style={{fontSize:10,color:"#B7780F",marginTop:2,fontStyle:"italic"}}>↳ {p.adjustmentReason}</div>
+                    )}
+                  </div>
                 ))}
               </div>
             )}
@@ -3541,7 +3326,27 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               <div style={{fontSize:10,color:T.sub,marginTop:6,textAlign:"center"}}>Creates an audit trail entry flagged as ADJUSTMENT</div>
             </div>
 
-
+{/* Delete punches */}
+{dp.length>0&&(
+  <div style={{borderTop:`1px solid ${T.border}`,paddingTop:12}}>
+    <button onClick={()=>{
+      if(!window.confirm(`Delete all ${dp.length} punch record${dp.length!==1?"s":""} for ${emp.name} on ${dateStr}?\n\nThis cannot be undone. An audit entry will be created.`)) return;
+      const idsToRemove = new Set(dp.map(p=>p.id));
+      setPunches(p=>p.filter(p=>!idsToRemove.has(p.id)));
+      setPunchReviews(prev=>{ const n={...prev}; dp.forEach(p=>delete n[p.id]); return n; });
+      if (bizId) {
+        dp.forEach(p=>{
+          dbDelete(`punches?id=eq.${p.id}`).catch(e=>console.warn("Punch delete failed:",e));
+        });
+      }
+      addAudit("Punches Deleted", `${emp.name} — ${dateStr}: ${dp.length} record${dp.length!==1?"s":""} removed`, {empName:emp.name});
+      showToast(`${dp.length} punch record${dp.length!==1?"s":""} deleted ✓`);
+      setTsOpenCell(null);
+    }} style={{width:"100%",background:"#FDECEA",color:"#C0392B",border:"1px solid #C0392B22",borderRadius:9,padding:"10px 0",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+      Delete {dp.length} punch record{dp.length!==1?"s":""}
+    </button>
+  </div>
+)}
 
             {/* Review buttons */}
             <div>
@@ -4736,7 +4541,36 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         {[
                           { l:"Total Revenue", v:totalRevenue>0?`$${totalRevenue.toFixed(0)}`:"-", c:"#3A9BE8", sub:"this week" },
                           { l:"Labor Cost", v:`$${payWeekLabor.toFixed(2)}`, c:T.accent, sub:"this week" },
-                          { l:"Labor Cost %", v:laborCostPct>0?`${laborCostPct.toFixed(1)}%`:"-", c:laborCostPct>35?"#C0392B":laborCostPct>25?"#E8A93A":"#4CAF7D", sub:"target: 25–35%" },
+                          (() => {
+                            const projPct = forecastThisWeek.hasEnoughData && forecastThisWeek.total > 0
+                              ? (payWeekLabor / forecastThisWeek.total) * 100 : null;
+                            const actPct  = totalRevenue > 0 ? laborCostPct : null;
+                            const dispPct = laborPctMode === "projected" ? projPct : actPct;
+                            const pctColor = dispPct == null ? T.sub : dispPct > 35 ? "#C0392B" : dispPct > 25 ? "#E8A93A" : "#4CAF7D";
+                            const pctSub = laborPctMode === "projected"
+                              ? (forecastThisWeek.hasEnoughData ? `vs $${forecastThisWeek.total.toFixed(0)} forecasted` : "need more history")
+                              : (totalRevenue > 0 ? `vs $${totalRevenue.toFixed(0)} actual` : "no revenue yet");
+                            return (
+                              <div style={{background:T.muted,borderRadius:10,padding:"12px 14px"}}>
+                                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                                  <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>Labor Cost %</div>
+                                  <div style={{display:"flex",background:T.border,borderRadius:20,padding:2,gap:2}}>
+                                    {["projected","actual"].map(m=>(
+                                      <button key={m} onClick={()=>setLaborPctMode(m)}
+                                        style={{background:laborPctMode===m?T.accent:"transparent",color:laborPctMode===m?"white":T.sub,border:"none",borderRadius:18,padding:"3px 8px",fontSize:9,fontWeight:700,cursor:"pointer",transition:"all 0.15s",textTransform:"capitalize",whiteSpace:"nowrap"}}>
+                                        {m}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                                <div style={{fontSize:20,fontWeight:800,color:pctColor,lineHeight:1}}>{dispPct!=null?`${dispPct.toFixed(1)}%`:"-"}</div>
+                                <div style={{fontSize:9,color:T.sub,marginTop:4}}>{pctSub}</div>
+                                <div style={{fontSize:9,color:T.sub,marginTop:6,padding:"4px 6px",background:laborPctMode==="projected"?"#EAF4EF":"#FEF3E2",borderRadius:5}}>
+                                  {dispPct!=null?(dispPct<25?"✓ Under target":dispPct<=35?"✓ On target":"⚠ Over target"):""} target: 25–35%
+                                </div>
+                              </div>
+                            );
+                          })(),
                           { l:"Total Hours", v:pwHrs+"h", c:"#3A9BE8", sub:"scheduled" },
                           { l:"Staff Scheduled", v:pwStaff+"/"+employees.length, c:"#4CAF7D", sub:"have shifts" },
                           { l:"Forecast (Next 7 Days)",
@@ -6099,38 +5933,15 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const FLAG_COLORS = { LATE:"#E8A93A", EARLY:"#3A9BE8", EARLY_OUT:"#E8A93A", NO_SHIFT:"#C0392B" };
         return (
           <div style={{flex:1,overflowY:"auto",padding:14,display:"flex",flexDirection:"column",gap:10}}>
-            {/* Mark all reviewed + Clear actioned buttons */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-              <button onClick={()=>{
-                const updates = {};
-                flagged.forEach(p=>{ if(!punchReviews[p.id]) updates[p.id]="reviewed"; });
-                setPunchReviews(prev=>({...prev,...updates}));
-                if (bizId) {
-                  Object.entries(updates).forEach(([pid, status]) => {
-                    fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
-                      method: "POST",
-                      headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
-                      body: JSON.stringify({ business_id: bizId, punch_id: pid, status, reviewed_by: getSession()?.user?.id || null })
-                    }).catch(e=>console.warn("punch_reviews insert failed:", e));
-                  });
-                }
-                showToast("All alerts marked as reviewed ✓");
-              }} style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer"}}>
-                Mark All Reviewed
-              </button>
-              <button onClick={()=>{
-                // Remove actioned punches from local flagged view by clearing their review status entries
-                // We keep the punchReviews map but filter flagged list — achieved by removing them from punches display
-                // Actually: clear punchReviews for all actioned punches so they disappear from alerts
-                const actionedIds = flagged.filter(p => punchReviews[p.id] && punchReviews[p.id] !== "pending").map(p=>p.id);
-                if (actionedIds.length === 0) { showToast("No actioned alerts to clear"); return; }
-                // Remove their flags locally so they no longer appear in flagged list
-                setPunches(prev => prev.map(p => actionedIds.includes(p.id) ? {...p, flags:[]} : p));
-                showToast(`Cleared ${actionedIds.length} actioned alert${actionedIds.length!==1?"s":""} ✓`);
-              }} style={{background:"#FDECEA",color:"#C0392B",border:"1px solid #C0392B22",borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer"}}>
-                Clear Actioned
-              </button>
-            </div>
+            {/* Mark all reviewed button */}
+            <button onClick={()=>{
+              const updates = {};
+              flagged.forEach(p=>{ if(!punchReviews[p.id]) updates[p.id]="reviewed"; });
+              setPunchReviews(prev=>({...prev,...updates}));
+              showToast("All alerts marked as reviewed ✓");
+            }} style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"8px 0",fontWeight:700,fontSize:12,cursor:"pointer",width:"100%"}}>
+              Mark All Reviewed
+            </button>
 
             {flagged.map(p=>{
               const emp = employees.find(e=>e.id===p.empId);
@@ -6165,16 +5976,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:1,borderTop:`1px solid ${T.border}`}}>
                     {[["Reviewed","reviewed","#3A9BE8"],["Approved","approved","#4CAF7D"],["Rejected","rejected","#C0392B"]].map(([lbl,val,color])=>(
-                      <button key={val} onClick={()=>{
-                        setPunchReviews(prev=>({...prev,[p.id]:val}));
-                        if (bizId) {
-                          fetch(`${SUPABASE_URL}/rest/v1/punch_reviews`, {
-                            method: "POST",
-                            headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
-                            body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
-                          }).catch(e=>console.warn("punch_reviews insert failed:", e));
-                        }
-                      }}
+                      <button key={val} onClick={()=>setPunchReviews(prev=>({...prev,[p.id]:val}))}
                         style={{background:status===val?color+"22":T.surface,color:status===val?color:T.sub,border:"none",padding:"9px 0",fontSize:11,fontWeight:700,cursor:"pointer",transition:"all 0.12s"}}>
                         {lbl}
                       </button>
