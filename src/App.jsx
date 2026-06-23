@@ -1317,8 +1317,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const staffCount = employees.filter(e => schedule?.[wk.key]?.[e.id]?.[di]).length;
         const dayHours = employees.reduce((s, e) => s + shiftHrs(schedule?.[wk.key]?.[e.id]?.[di] || null), 0);
         const sale = wkSales.find(s => s.date === wkDates[di]);
-        return { day, date: wkDates[di], staffCount, totalHours: dayHours, revenue: sale?.revenue || null };
+        const rplhDay = (sale?.revenue && dayHours > 0) ? parseFloat((sale.revenue / dayHours).toFixed(2)) : null;
+        return { day, date: wkDates[di], staffCount, totalHours: dayHours, revenue: sale?.revenue || null, revenuePerLaborHour: rplhDay };
       });
+
+      const rplhWeek = (totalRevenue > 0 && totalHours > 0) ? parseFloat((totalRevenue / totalHours).toFixed(2)) : null;
 
       return {
         label: wk.label,
@@ -1328,6 +1331,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         totalEstimatedPay: parseFloat(totalPay.toFixed(2)),
         totalRevenue: totalRevenue > 0 ? parseFloat(totalRevenue.toFixed(2)) : null,
         laborCostPct: laborPct !== null ? parseFloat(laborPct.toFixed(1)) : null,
+        revenuePerLaborHour: rplhWeek,
         staffScheduled: staffed,
         totalStaff: employees.length,
         budget: parseFloat(weeklyBudget) || null,
@@ -1337,34 +1341,112 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       };
     });
 
-    // Recent punch flags
     const recentFlags = punches
       .filter(p => p.flags && p.flags.length > 0)
       .slice(-20)
       .map(p => ({ employee: p.empName, type: p.type, flags: p.flags, time: p.time }));
 
-    // Overtime employees
     const overtimeAlerts = employees
       .filter(e => weeks.some(w => eWkH(w.key, e.id) > 40))
       .map(e => ({ name: e.name, hours: Math.max(...weeks.map(w => eWkH(w.key, e.id))) }));
 
+    // ── Budget burn (mid-week pace → projected end) ──────────────────────────
+    const budget = parseFloat(weeklyBudget) || null;
+    let budgetBurn = null;
+    if (budget && weekSummaries[0]) {
+      const wk0 = weekSummaries[0];
+      const wkDates0 = weeks[0]?.dates.map(d => {
+        const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
+        return toLocalDateStr(dt);
+      }) || [];
+      const todayIdx0 = wkDates0.indexOf(todayStr);
+      const daysPassed = todayIdx0 >= 0 ? todayIdx0 + 1 : 7;
+      const dailyRate = daysPassed > 0 ? wk0.totalEstimatedPay / daysPassed : 0;
+      const projectedEnd = parseFloat((dailyRate * 7).toFixed(2));
+      const overBy = parseFloat((projectedEnd - budget).toFixed(2));
+      budgetBurn = {
+        spent: wk0.totalEstimatedPay,
+        budget,
+        projectedEnd,
+        projectedOver: projectedEnd > budget,
+        overBy: overBy > 0 ? overBy : 0,
+        pct: parseFloat(((wk0.totalEstimatedPay / budget) * 100).toFixed(1)),
+        daysPassed,
+      };
+    }
+
+    // ── Punch variance (scheduled vs actual per employee) ────────────────────
+    const wk0Dates = weeks[0]?.dates.map(d => {
+      const dt = typeof d === "string" ? new Date(d+"T00:00:00") : d;
+      return toLocalDateStr(dt);
+    }) || [];
+    const punchVariance = employees.map(emp => {
+      const scheduled = weekSummaries[0]?.employeeBreakdown?.find(e => e.name === emp.name)?.scheduledHours || 0;
+      const actualPunches = punches.filter(p => {
+        const pd = toLocalDateStr(new Date(p.time));
+        return p.empId === emp.id && wk0Dates.includes(pd);
+      });
+      let actual = 0, inT = null;
+      for (const p of [...actualPunches].sort((a,b)=>new Date(a.time)-new Date(b.time))) {
+        if (p.type === "in" || p.type === "break_in") inT = new Date(p.time);
+        else if (p.type === "out" && inT) { actual += (new Date(p.time)-inT)/3600000; inT = null; }
+      }
+      actual = parseFloat(actual.toFixed(2));
+      return { name: emp.name, scheduled, actual, diff: parseFloat((actual - scheduled).toFixed(2)) };
+    }).filter(e => e.scheduled > 0 || e.actual > 0);
+
+    // ── Attendance flags ──────────────────────────────────────────────────────
+    const recentPunches = punches.filter(p => (today - new Date(p.time)) / (1000*60*60*24) <= 30);
+    const todayDayIdx = today.getDay();
+    const todayWeekKey = weeks[0]?.key;
+
+    const lateArrivals = employees.map(emp => {
+      const lates = wk0Dates.map((dateStr, di) => {
+        const shift = schedule?.[todayWeekKey]?.[emp.id]?.[di] || null;
+        if (!shift) return null;
+        const scheduledStart = new Date(dateStr+"T00:00:00");
+        scheduledStart.setHours(Math.floor(shift.start), Math.round((shift.start % 1) * 60));
+        const clockIn = punches.find(p => p.empId === emp.id && p.type === "in" && toLocalDateStr(new Date(p.time)) === dateStr);
+        if (!clockIn) return null;
+        const minsLate = (new Date(clockIn.time) - scheduledStart) / 60000;
+        return minsLate > 10 ? minsLate : null;
+      }).filter(Boolean);
+      return lates.length > 0 ? { name: emp.name, count: lates.length } : null;
+    }).filter(Boolean);
+
+    const missedPunches = employees.map(emp => {
+      const shift = schedule?.[todayWeekKey]?.[emp.id]?.[todayDayIdx] || null;
+      if (!shift) return null;
+      const scheduledStart = new Date(todayStr+"T00:00:00");
+      scheduledStart.setHours(Math.floor(shift.start), Math.round((shift.start % 1) * 60));
+      if (today < scheduledStart) return null;
+      const hasPunch = punches.some(p => p.empId === emp.id && p.type === "in" && toLocalDateStr(new Date(p.time)) === todayStr);
+      return hasPunch ? null : { name: emp.name };
+    }).filter(Boolean);
+
+    const reliabilityFlags = employees.map(emp => {
+      const flagCount = recentPunches.filter(p => p.empId === emp.id && p.flags?.length > 0).length;
+      return flagCount > 0 ? { name: emp.name, flags30Days: flagCount } : null;
+    }).filter(Boolean).sort((a,b) => b.flags30Days - a.flags30Days);
+
     return {
-      // ── swap this section for Supabase queries ──
       businessName: biz,
       businessHours: Object.entries(businessHours).reduce((acc,[di,h])=>({...acc,[DAYS[parseInt(di)]]:h}),{}),
       today: todayStr,
       dayOfWeek: today.toLocaleDateString("en-US", { weekday: "long" }),
       totalEmployees: employees.length,
-      weeklyBudget: parseFloat(weeklyBudget) || null,
+      weeklyBudget: budget,
       hasSalesData: salesData.length > 0,
       salesDateRange: salesData.length > 0
         ? { from: salesData[0].date, to: salesData[salesData.length - 1].date }
         : null,
       weeks: weekSummaries,
+      budgetBurn,
+      punchVariance,
+      attendanceFlags: { lateArrivals, missedPunches, reliabilityFlags },
       overtimeAlerts,
       recentPunchFlags: recentFlags,
       publishedSchedulesCount: published.length,
-      // ─────────────────────────────────────────────
     };
   }
 
