@@ -1172,7 +1172,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       // 10. Other state
       setSalesData((salesRows||[]).map(r=>({ date:r.sale_date, revenue:parseFloat(r.revenue), transactions:r.transactions })));
       setRecognition((recRows||[]).map(r=>({ id:r.id, at:r.created_at, type:r.rec_type, emoji:r.emoji, message:r.message, fromName:r.from_name, toName:r.to_name, toId:r.to_id })));
-      setPunches((punchRows||[]).map(r=>({ id:r.id, empId:r.employee_id, empName:r.employee_name, type:r.punch_type, time:r.punched_at, scheduled:r.scheduled_start?{start:parseFloat(r.scheduled_start),end:parseFloat(r.scheduled_end)}:null, flags:r.flags||[] })));
+      setPunches((punchRows||[]).map(r=>({ id:r.id, empId:r.employee_id, empName:r.employee_name, type:r.punch_type, time:r.punched_at, scheduled:r.scheduled_start?{start:parseFloat(r.scheduled_start),end:parseFloat(r.scheduled_end)}:null, flags:r.flags||[], adjustmentReason:r.adjustment_reason||null })));
       setOpenShifts((openShiftRows||[]).map(r=>({ id:r.id, weekKey:wks.find(w=>w.id===r.week_id)?.week_start||r.week_id, empId:r.employee_id, dayIdx:r.day_index, originalShift:r.shift_start?{start:parseFloat(r.shift_start),end:parseFloat(r.shift_end)}:null, reason:r.reason, status:r.status, claimedBy:r.claimed_by, createdAt:r.created_at })));
       setTemplates((templateRows||[]).map(r=>({ id:r.id, name:r.name, savedAt:r.created_at, scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot })));
       setPublished((publishedRows||[]).map(r=>({ id:r.id, publishedAt:r.published_at, label:r.label, wk1Start:r.week_start, wk2Start:r.week_start, weekMode:"1", scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot, budget:r.budget })));
@@ -3018,7 +3018,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   function getDayPunches(empId, dateStr) {
     return punches.filter(p => {
-      const pd = new Date(p.time).toISOString().split("T")[0];
+      const pd = toLocalDateStr(new Date(p.time));
       return p.empId === empId && pd === dateStr;
     }).sort((a,b) => new Date(a.time)-new Date(b.time));
   }
@@ -3035,7 +3035,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   const pendingFlags = punches.filter(p =>
     p.flags?.length > 0 &&
-    tsWkDates.includes(new Date(p.time).toISOString().split("T")[0]) &&
+    tsWkDates.includes(toLocalDateStr(new Date(p.time))) &&
     !punchReviews[p.id]
   ).length;
 
@@ -3196,6 +3196,20 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         };
         const inTime  = makeISO(dateStr, editIn);
         const outTime = editOut ? makeISO(dateStr, editOut) : null;
+
+        // Remove existing local ADJUSTMENT punches for this employee/day before inserting fresh ones
+        setPunches(p => p.filter(px => {
+          const sameEmp = px.empId === empId;
+          const sameDay = toLocalDateStr(new Date(px.time)) === dateStr;
+          const isAdj   = px.flags?.includes("ADJUSTMENT");
+          return !(sameEmp && sameDay && isAdj);
+        }));
+        // Delete existing ADJUSTMENT punch rows from Supabase for this employee/day
+        if (bizId) {
+          const dayStart = new Date(dateStr+"T00:00:00").toISOString();
+          const dayEnd   = new Date(dateStr+"T23:59:59").toISOString();
+          await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}&adjustment_reason=not.is.null`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} });
+        }
 
         const inPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"in", time:inTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
         setPunches(p=>[...p, inPunch]);
