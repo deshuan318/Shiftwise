@@ -972,6 +972,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const [insight,        setInsight]        = useState(null);
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightError,   setInsightError]   = useState(null);
+  const [notifPanelOpen, setNotifPanelOpen] = useState(false);
+  const [notifFreq,      setNotifFreq]      = useState(() => { try { return localStorage.getItem("sw_notif_freq")||"login"; } catch { return "login"; } });
+  const [notifDay,       setNotifDay]       = useState(() => { try { return localStorage.getItem("sw_notif_day")||"Monday"; } catch { return "Monday"; } });
 
   const printRef = useRef();
 
@@ -1201,6 +1204,37 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   useEffect(() => {
     if (authState === "loading") { loadAllData(); }
   }, []);
+
+  // Check if a Pulse reminder is due on load
+  useEffect(() => {
+    if (authState !== "authenticated") return;
+    try {
+      const freq = localStorage.getItem("sw_notif_freq") || "login";
+      if (freq === "off") return;
+      const lastRun = localStorage.getItem("sw_notif_last_run");
+      const now = new Date();
+      let isDue = false;
+      if (freq === "login") {
+        isDue = true;
+      } else if (freq === "daily") {
+        if (!lastRun) { isDue = true; }
+        else { const last = new Date(lastRun); isDue = now.toDateString() !== last.toDateString(); }
+      } else if (freq === "weekly") {
+        const day = localStorage.getItem("sw_notif_day") || "Monday";
+        const DAYS_MAP = {Sunday:0,Monday:1,Tuesday:2,Wednesday:3,Thursday:4,Friday:5,Saturday:6};
+        if (now.getDay() === DAYS_MAP[day]) {
+          if (!lastRun) { isDue = true; }
+          else { const last = new Date(lastRun); isDue = now.toDateString() !== last.toDateString(); }
+        }
+      }
+      if (isDue) {
+        setTimeout(() => {
+          showToast("🧠 Time for your Weekly Pulse — head to Business Insights", 6000);
+          localStorage.setItem("sw_notif_last_run", now.toISOString());
+        }, 2000);
+      }
+    } catch {}
+  }, [authState]);
 
   // Handle redirect back from Square OAuth (?square=connected | error)
   useEffect(() => {
@@ -4813,22 +4847,86 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       {insight && <span style={{marginLeft:6, color:T.sub}}>Last updated {new Date(insight.generatedAt).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</span>}
                     </p>
                   </div>
-                  <button onClick={generateInsight} disabled={insightLoading}
-                    style={{
-                      background: insightLoading ? T.muted : T.accent,
-                      color: insightLoading ? T.sub : "white",
-                      border:"none", borderRadius:10, padding:"10px 20px",
-                      fontWeight:700, fontSize:13, cursor: insightLoading ? "not-allowed" : "pointer",
-                      display:"flex", alignItems:"center", gap:8, flexShrink:0,
-                      transition:"all 0.15s"
-                    }}>
-                    {insightLoading ? (
-                      <><span style={{display:"inline-block", animation:"spin 1s linear infinite"}}>⟳</span> Analyzing...</>
-                    ) : (
-                      <><span>🧠</span> {insight ? "Refresh Analysis" : "Generate Insights"}</>
-                    )}
-                  </button>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+                    <button onClick={()=>setNotifPanelOpen(p=>!p)}
+                      title="Notification preferences"
+                      style={{background:notifPanelOpen?T.accent:T.muted,border:`1px solid ${notifPanelOpen?T.accent:T.border}`,borderRadius:9,width:38,height:38,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,cursor:"pointer",transition:"all 0.15s",position:"relative"}}>
+                      🔔
+                      {notifFreq!=="off"&&<span style={{position:"absolute",top:4,right:4,width:7,height:7,borderRadius:"50%",background:T.accent,border:`1.5px solid ${T.bg}`}}/>}
+                    </button>
+                    <button onClick={generateInsight} disabled={insightLoading}
+                      style={{
+                        background: insightLoading ? T.muted : T.accent,
+                        color: insightLoading ? T.sub : "white",
+                        border:"none", borderRadius:10, padding:"10px 20px",
+                        fontWeight:700, fontSize:13, cursor: insightLoading ? "not-allowed" : "pointer",
+                        display:"flex", alignItems:"center", gap:8,
+                        transition:"all 0.15s"
+                      }}>
+                      {insightLoading ? (
+                        <><span style={{display:"inline-block", animation:"spin 1s linear infinite"}}>⟳</span> Analyzing...</>
+                      ) : (
+                        <><span>🧠</span> {insight ? "Refresh Analysis" : "Generate Insights"}</>
+                      )}
+                    </button>
+                  </div>
                 </div>
+
+                {/* Notification preferences panel */}
+                {notifPanelOpen && (
+                  <Card T={T} style={{padding:"18px 20px",border:`1.5px solid ${T.accent}28`,background:T.accent+"08"}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+                      <div>
+                        <div style={{fontWeight:800,fontSize:14,color:T.text}}>🔔 Pulse Notifications</div>
+                        <div style={{fontSize:11,color:T.sub,marginTop:2}}>When should ShiftWise remind you to run your weekly analysis?</div>
+                      </div>
+                      <button onClick={()=>setNotifPanelOpen(false)} style={{background:T.muted,border:"none",borderRadius:"50%",width:28,height:28,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+                    </div>
+                    <div style={{marginBottom:14}}>
+                      <div style={{fontSize:10,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Frequency</div>
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                        {[
+                          {k:"login",  l:"On Login",   d:"Every time you open ShiftWise"},
+                          {k:"daily",  l:"Daily",      d:"Once per day"},
+                          {k:"weekly", l:"Weekly",     d:"Pick a day below"},
+                          {k:"off",    l:"Off",        d:"No reminders"},
+                        ].map(opt=>(
+                          <button key={opt.k} onClick={()=>{ setNotifFreq(opt.k); try{localStorage.setItem("sw_notif_freq",opt.k);}catch{} }}
+                            title={opt.d}
+                            style={{background:notifFreq===opt.k?T.accent:T.muted,color:notifFreq===opt.k?"white":T.sub,border:`1.5px solid ${notifFreq===opt.k?T.accent:T.border}`,borderRadius:8,padding:"7px 14px",fontWeight:700,fontSize:12,cursor:"pointer",transition:"all 0.15s"}}>
+                            {opt.l}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {notifFreq==="weekly" && (
+                      <div style={{marginBottom:14}}>
+                        <div style={{fontSize:10,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Day of week</div>
+                        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                          {["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].map(day=>(
+                            <button key={day} onClick={()=>{ setNotifDay(day); try{localStorage.setItem("sw_notif_day",day);}catch{} }}
+                              style={{background:notifDay===day?T.accent:T.muted,color:notifDay===day?"white":T.sub,border:`1.5px solid ${notifDay===day?T.accent:T.border}`,borderRadius:8,padding:"6px 12px",fontWeight:700,fontSize:11,cursor:"pointer",transition:"all 0.15s"}}>
+                              {day.slice(0,3)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <div style={{background:T.muted,borderRadius:9,padding:"10px 14px",fontSize:12,color:T.text,display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+                      <span style={{fontSize:16}}>{notifFreq==="off"?"🔕":"🔔"}</span>
+                      <span>
+                        {notifFreq==="off" && "Pulse reminders are off — you'll need to run it manually."}
+                        {notifFreq==="login" && "You'll see a Pulse reminder each time you open ShiftWise."}
+                        {notifFreq==="daily" && "You'll see a Pulse reminder once per day when you open the app."}
+                        {notifFreq==="weekly" && `You'll see a Pulse reminder every ${notifDay} when you open the app.`}
+                      </span>
+                    </div>
+                    <div style={{background:"#F5EEFF",borderRadius:9,padding:"10px 14px",border:"1px solid #9B59B630"}}>
+                      <div style={{fontSize:11,fontWeight:700,color:"#9B59B6",marginBottom:3}}>📧 Email & SMS Digest — Coming Soon</div>
+                      <div style={{fontSize:11,color:"#7D4B9E",lineHeight:1.5}}>Get your Weekly Pulse delivered to your inbox or phone every Monday morning. Available on the Pro plan.</div>
+                    </div>
+                  </Card>
+                )}
 
                 {/* Error */}
                 {insightError && (
