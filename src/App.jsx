@@ -1086,7 +1086,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const [
         empRows, weekRows, shiftTypeRows, bizHourRows,
         salesRows, recRows, punchRows, openShiftRows,
-        templateRows, publishedRows, auditRows,
+        templateRows, publishedRows, auditRows, reviewRows,
       ] = await Promise.all([
         dbGet(`employees?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`),
         dbGet(`schedule_weeks?select=*&business_id=eq.${business.id}&order=week_start.asc`),
@@ -1099,6 +1099,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         dbGet(`templates?select=*&business_id=eq.${business.id}&order=created_at.desc`),
         dbGet(`published_schedules?select=*&business_id=eq.${business.id}&order=published_at.desc`),
         dbGet(`audit_log?select=*&business_id=eq.${business.id}&order=created_at.desc&limit=500`),
+        dbGet(`punch_reviews?select=*&business_id=eq.${business.id}`),
       ]);
 
       // 3. Load shifts for all weeks
@@ -1178,6 +1179,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setTemplates((templateRows||[]).map(r=>({ id:r.id, name:r.name, savedAt:r.created_at, scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot })));
       setPublished((publishedRows||[]).map(r=>({ id:r.id, publishedAt:r.published_at, label:r.label, wk1Start:r.week_start, wk2Start:r.week_start, weekMode:"1", scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot, budget:r.budget })));
       setAuditLog((auditRows||[]).map(r=>({ id:r.id, at:r.created_at, action:r.action, detail:r.detail, empName:r.employee_name })));
+      const reviewMap = {};
+      (reviewRows||[]).forEach(r=>{ reviewMap[r.punch_id] = r.status; });
+      setPunchReviews(reviewMap);
 
       setAuthState("authenticated");
     } catch(err) {
@@ -3176,20 +3180,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
     async function setStatus(val) {
       if (!punchId) return;
-      console.log("setStatus fired", {val, punchId, bizId, dpCount: dp.length});
       dp.forEach(p => {
         setPunchReviews(prev=>({...prev,[p.id]:val}));
-        console.log("attempting fetch for punch", p.id, "bizId:", bizId);
         if (bizId) {
           fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?on_conflict=punch_id`, {
             method: "POST",
             headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
             body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
-          }).then(r=>{ console.log("punch_reviews response:", r.status); return r.text(); })
-            .then(t=>console.log("punch_reviews body:", t))
-            .catch(e=>console.warn("punch_reviews upsert failed:", e));
-        } else {
-          console.warn("bizId is null/undefined — skipping fetch");
+          }).catch(e=>console.warn("punch_reviews upsert failed:", e));
         }
       });
       setTsOpenCell(null);
