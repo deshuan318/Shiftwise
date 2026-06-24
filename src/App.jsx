@@ -2944,7 +2944,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 const v = e.target.value.replace(/\D/g,"").slice(0,2);
                 if (v === "") return;
                 let n = parseInt(v); if (n > 59) n = 59;
-                const snapped = [0,15,30,45].reduce((a,b) => Math.abs(b-n) < Math.abs(a-n) ? b : a);
+                setMinTP(n);
+              }
+              function handleMinBlur() {
+                const m = getMinTP(draft[field]);
+                if (m == null) return;
+                const snapped = [0,15,30,45].reduce((a,b) => Math.abs(b-m) < Math.abs(a-m) ? b : a);
                 setMinTP(snapped);
               }
               function handleHrKeyDown(e) {
@@ -2964,15 +2969,17 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   <div onClick={openPanel} style={{
                     display:"flex",alignItems:"center",
                     border:`2px solid ${isOpen||filled?emp.color:T.border}`,borderRadius:999,
-                    background:T.surface,transition:"border-color 0.15s",padding:"4px 6px",cursor:"pointer"
+                    background:T.surface,transition:"border-color 0.15s",padding:"4px 6px"
                   }}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:1}}>
                       <input id={`tp-hr-${field}`} inputMode="numeric" placeholder="9" value={hr ?? ""}
                         onChange={handleHrChange} onFocus={openPanel} onKeyDown={handleHrKeyDown}
+                        onClick={e=>e.stopPropagation()}
                         style={{width:22,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
                       <span style={{fontSize:17,fontWeight:800,color:T.sub}}>:</span>
                       <input id={`tp-min-${field}`} inputMode="numeric" placeholder="00" value={min!=null?String(min).padStart(2,"0"):""}
                         onChange={handleMinChange} onFocus={openPanel} onKeyDown={handleMinKeyDown}
+                        onClick={e=>e.stopPropagation()} onBlur={handleMinBlur}
                         style={{width:30,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
                     </div>
                     <button type="button" onClick={()=>setApTP(ap==="AM"?"PM":"AM")}
