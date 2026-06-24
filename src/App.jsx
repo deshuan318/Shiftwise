@@ -1070,6 +1070,8 @@ export default function App() {
   const [dragOverWidgetId, setDragOverWidgetId] = useState(null);
   const [punches,        setPunches]        = useState([]);
 const [tsWeekStart, setTsWeekStart] = useState(()=>getSunday(new Date().toISOString().split("T")[0]));
+const [coverageWeek, setCoverageWeek] = useState(()=>getSunday(toLocalDateStr(new Date())));
+const [coverageDay,  setCoverageDay]  = useState(()=>toLocalDateStr(new Date()));
 const [tsOpenCell, setTsOpenCell] = useState(null);
 const [timesheetHistory, setTimesheetHistory] = useState([]);
 const [punchReviews,   setPunchReviews]   = useState({}); // { punchId: "pending"|"reviewed"|"approved"|"rejected" }
@@ -4500,12 +4502,30 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           {/* COVERAGE */}
           {tab==="coverage" && (()=>{
             const today = new Date();
-            const todayIdx = today.getDay();
             const todayStr = toLocalDateStr(today);
             const nowDec = today.getHours() + today.getMinutes()/60;
 
+            // Derive week dates from coverageWeek
+            const covWkDates = Array.from({length:7},(_,i)=>{
+              const d = new Date(coverageWeek+"T00:00:00");
+              d.setDate(d.getDate()+i);
+              return toLocalDateStr(d);
+            });
+            const covWkLabel = (() => {
+              const s = new Date(coverageWeek+"T00:00:00");
+              const e = new Date(coverageWeek+"T00:00:00"); e.setDate(e.getDate()+6);
+              const fmt = d => d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+              return `${fmt(s)} – ${fmt(e)}`;
+            })();
+            const isCurrentWeek = coverageWeek === getSunday(todayStr);
+
+            // Selected day within coverage week (default today if in week, else first day)
+            const covDayStr = covWkDates.includes(coverageDay) ? coverageDay : covWkDates[0];
+            const covDayIdx = covWkDates.indexOf(covDayStr);
+            const covDate   = new Date(covDayStr+"T00:00:00");
+            const isToday   = covDayStr === todayStr;
+
             // ── Helpers ──────────────────────────────────────────────────────
-            // Find which week key contains a given date
             function weekKeyForDate(dateStr) {
               for (const wk of weeks) {
                 const dates = wk.dates.map(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt); });
@@ -4514,27 +4534,24 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               return null;
             }
 
-            const todayWk = weekKeyForDate(todayStr);
-            // Only look up shifts if today is actually within a configured week
-            const todayWeekKey = todayWk?.weekKey ?? null;
-            const todayDayIdx  = todayWk?.dayIdx  ?? todayIdx;
-            const todayInSchedule = todayWk !== null;
+            const covWk = weekKeyForDate(covDayStr);
+            const todayWeekKey = covWk?.weekKey ?? null;
+            const todayDayIdx  = covWk?.dayIdx  ?? covDayIdx;
+            const todayInSchedule = covWk !== null;
 
-            // Build today's full shift status list
+            // Build selected day's full shift status list
             const todayShifts = employees.map(emp => {
-              if (!todayInSchedule) return null; // today not in any scheduled week
+              if (!todayInSchedule) return null;
               const shift = schedule?.[todayWeekKey]?.[emp.id]?.[todayDayIdx] || null;
               if (!shift) return null;
 
-              // Check if this shift is marked open
               const openEntry = openShifts.find(o =>
                 o.weekKey === todayWeekKey && o.empId === emp.id && o.dayIdx === todayDayIdx && o.status !== "cancelled"
               );
 
-              // Find punch activity for this employee today — sorted by time
               const empPunches = punches.filter(p => {
                 const pd = new Date(p.time);
-                return p.empId === emp.id && pd.toDateString() === today.toDateString();
+                return p.empId === emp.id && pd.toDateString() === covDate.toDateString();
               }).sort((a,b) => new Date(a.time) - new Date(b.time));
               const lastPunchEntry = empPunches.length ? empPunches[empPunches.length-1] : null;
               const clockedIn = lastPunchEntry?.type === "in" || lastPunchEntry?.type === "break_in";
@@ -4662,6 +4679,45 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   <p style={{margin:0, fontSize:12, color:T.sub}}>Live schedule vs reality — manage callouts, open shifts, and replacements.</p>
                 </div>
 
+                {/* Week selector */}
+                <div style={{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
+                  <button onClick={()=>{ const w=getSunday(addDays(coverageWeek,-7)); setCoverageWeek(w); setCoverageDay(covWkDates[0]); }}
+                    style={{background:T.muted, border:`1px solid ${T.border}`, borderRadius:8, width:34, height:36, fontSize:16, cursor:"pointer", color:T.sub, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, flexShrink:0}}>‹</button>
+                  <div style={{display:"flex", alignItems:"center", borderRadius:9, overflow:"hidden", border:`2px solid ${T.accent}`, boxShadow:`0 0 0 2px ${T.accent}28`}}>
+                    <div style={{background:T.accent, color:"white", padding:"8px 16px", fontWeight:700, fontSize:12, whiteSpace:"nowrap", display:"flex", alignItems:"center", gap:6}}>
+                      {isCurrentWeek && <span style={{fontSize:10}}>●</span>}
+                      {covWkLabel}
+                    </div>
+                    <div style={{position:"relative", flexShrink:0, borderLeft:`1px solid ${T.accent}40`}}>
+                      <input type="date" value={coverageWeek} onChange={e=>{ const w=getSunday(e.target.value); setCoverageWeek(w); setCoverageDay(w); }}
+                        style={{opacity:0, position:"absolute", inset:0, cursor:"pointer", width:"100%", height:"100%"}}/>
+                      <div style={{background:T.accent+"18", padding:"8px 10px", fontSize:13, cursor:"pointer", userSelect:"none", color:T.accent}}>📅</div>
+                    </div>
+                  </div>
+                  <button onClick={()=>{ const w=getSunday(addDays(coverageWeek,7)); setCoverageWeek(w); setCoverageDay(w); }}
+                    style={{background:T.muted, border:`1px solid ${T.border}`, borderRadius:8, width:34, height:36, fontSize:16, cursor:"pointer", color:T.sub, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, flexShrink:0}}>›</button>
+                  {!isCurrentWeek && (
+                    <button onClick={()=>{ setCoverageWeek(getSunday(todayStr)); setCoverageDay(todayStr); }}
+                      style={{background:T.muted, border:`1px solid ${T.border}`, borderRadius:8, padding:"0 12px", height:36, fontSize:11, fontWeight:700, color:T.sub, cursor:"pointer"}}>Today</button>
+                  )}
+                </div>
+
+                {/* Day pills */}
+                <div style={{display:"flex", gap:6, flexWrap:"wrap"}}>
+                  {covWkDates.map((d,i) => {
+                    const isSelected = d === covDayStr;
+                    const isTod = d === todayStr;
+                    const dayDate = new Date(d+"T00:00:00");
+                    return (
+                      <button key={d} onClick={()=>setCoverageDay(d)}
+                        style={{padding:"6px 12px", borderRadius:20, border:`1.5px solid ${isSelected?T.accent:T.border}`, background:isSelected?T.accent:T.surface, color:isSelected?"white":isTod?T.accent:T.sub, fontWeight:isSelected||isTod?700:400, fontSize:12, cursor:"pointer", transition:"all 0.12s"}}>
+                        {DAYS[i]} {dayDate.getDate()}
+                        {isTod && !isSelected && <span style={{fontSize:9, marginLeft:3}}>●</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+
                 {/* Status bar */}
                 <div style={{display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:10}}>
                   {[
@@ -4676,13 +4732,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   ))}
                 </div>
 
-                {/* TODAY'S COVERAGE BOARD */}
+                {/* COVERAGE BOARD */}
                 <div style={{background:T.surface, borderRadius:T.radius, boxShadow:T.shadow, overflow:"hidden"}}>
                   <div style={{background:T.dark, padding:"11px 18px", display:"flex", alignItems:"center", justifyContent:"space-between"}}>
                     <div>
-                      <span style={{color:"white", fontWeight:800, fontSize:14}}>Today's Shifts</span>
+                      <span style={{color:"white", fontWeight:800, fontSize:14}}>{isToday ? "Today's Shifts" : `${covDate.toLocaleDateString("en-US",{weekday:"long"})} Shifts`}</span>
                       <span style={{color:"#666", fontSize:11, marginLeft:10}}>
-                        {today.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}
+                        {covDate.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}
                       </span>
                     </div>
                     <span style={{color:T.accent, fontSize:11, fontWeight:700}}>
@@ -4693,8 +4749,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   {todayShifts.length === 0 && (
                     <div style={{padding:"40px 24px", textAlign:"center", color:T.sub}}>
                       <div style={{fontSize:32, marginBottom:10}}>📅</div>
-                      <div style={{fontWeight:700, fontSize:14, marginBottom:6}}>No shifts scheduled today</div>
-                      <div style={{fontSize:12}}>Head to the Schedule tab to add shifts for {DAY_FULL[todayIdx]}.</div>
+                      <div style={{fontWeight:700, fontSize:14, marginBottom:6}}>No shifts scheduled {isToday?"today":"on this day"}</div>
+                      <div style={{fontSize:12}}>Head to the Schedule tab to add shifts for {covDate.toLocaleDateString("en-US",{weekday:"long"})}.</div>
                     </div>
                   )}
 
