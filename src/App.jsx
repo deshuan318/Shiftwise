@@ -3624,12 +3624,47 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           </div>
         </div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          {/* Approved summary pill */}
           {totalApprovedHrs>0&&(
             <div style={{background:T.surface,borderRadius:T.radius,padding:"8px 14px",fontSize:12,border:`1px solid ${T.border}`,display:"flex",gap:12,alignItems:"center"}}>
               <span><span style={{color:"#4CAF7D",fontWeight:700}}>{totalApprovedHrs.toFixed(1)}h</span> <span style={{color:T.sub}}>approved</span></span>
               <span><span style={{color:T.accent,fontWeight:700}}>${totalApprovedPay.toFixed(0)}</span> <span style={{color:T.sub}}>est.</span></span>
             </div>
           )}
+          {/* Approve All — bulk approves clean punches (both clock-in and clock-out, no flags) */}
+          <button onClick={async ()=>{
+            const updates = {};
+            employees.forEach(emp => {
+              tsWkDates.forEach(dateStr => {
+                const dp = getDayPunches(emp.id, dateStr);
+                const hasIn  = dp.some(p=>p.type==="in");
+                const hasOut = dp.some(p=>p.type==="out");
+                const hasFlags = dp.some(p=>p.flags?.filter(f=>f!=="ADJUSTMENT").length>0);
+                const punchId = dp[0]?.id;
+                // Only approve if: has both in+out, no flags, not already actioned
+                if (hasIn && hasOut && !hasFlags && punchId && !punchReviews[punchId]) {
+                  dp.forEach(p=>{ updates[p.id] = "approved"; });
+                }
+              });
+            });
+            if (Object.keys(updates).length === 0) { showToast("No clean punches to approve — review flagged entries individually"); return; }
+            setPunchReviews(prev=>({...prev,...updates}));
+            if (bizId) {
+              try {
+                await Promise.all(Object.entries(updates).map(([pid, status]) =>
+                  fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?on_conflict=punch_id`, {
+                    method:"POST",
+                    headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`, Prefer:"resolution=merge-duplicates,return=minimal"},
+                    body:JSON.stringify({business_id:bizId, punch_id:pid, status, reviewed_by:getSession()?.user?.id||null})
+                  })
+                ));
+              } catch(e) { console.warn("Approve all failed:", e); }
+            }
+            addAudit("Bulk Approved", `${Object.keys(updates).length} clean punches approved for week of ${tsWkLabel}`);
+            showToast(`${Object.keys(updates).length} punches approved ✓`);
+          }} style={{background:"#EAF4EF",color:"#2D6A4F",border:"1px solid #2D6A4F30",borderRadius:9,padding:"8px 14px",fontWeight:700,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>
+            ✓ Approve All Clean
+          </button>
           <button onClick={()=>exportTimesheetCSV(tsWkDates, tsWkLabel)}
             style={{background:T.muted,color:T.text,border:`1px solid ${T.border}`,borderRadius:9,padding:"8px 14px",fontWeight:700,fontSize:12,cursor:"pointer"}}>
             Export CSV ↓
@@ -3722,8 +3757,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           onClick={()=>(hasPunch||shift)&&setTsOpenCell({empId:emp.id,dateStr,dayIdx:di})}
                           style={{
                             borderRadius:8, padding:"5px 4px", minHeight:54,
-                            border:`1.5px solid ${hasFlag?"#E8A93A":status==="approved"?"#4CAF7D40":status==="rejected"?"#C0392B40":hasPunch?T.border:"transparent"}`,
-                            background:hasFlag?"#FEF3E215":status==="approved"?"#F0FFF420":status==="rejected"?"#FDECEA15":hasPunch?T.surface:"transparent",
+                            border:`1.5px solid ${hasFlag?"#E8A93A":status==="approved"?"#4CAF7D40":status==="rejected"?"#C0392B40":(!hasPunch&&shift)?"#E8A93A50":hasPunch?T.border:"transparent"}`,
+                            background:hasFlag?"#FEF3E215":status==="approved"?"#F0FFF420":status==="rejected"?"#FDECEA15":(!hasPunch&&shift)?"#FEF3E210":hasPunch?T.surface:"transparent",
                             cursor:(hasPunch||shift)?"pointer":"default",
                             display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
                             transition:"all 0.12s",
@@ -3731,10 +3766,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           {!hasPunch&&!shift ? (
                             <span style={{color:T.border,fontSize:11}}>—</span>
                           ) : !hasPunch&&shift ? (
-                            <div style={{opacity:0.6}}>
-                              <div style={{fontSize:9,color:T.sub,fontWeight:700}}>No punch</div>
-                              <div style={{fontSize:8,color:T.sub}}>{fmt(shift.start)}</div>
-                              <div style={{fontSize:8,color:T.sub}}>{fmt(shift.end)}</div>
+                            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                              <span style={{fontSize:13}}>⚠️</span>
+                              <div style={{fontSize:8,fontWeight:800,color:"#E8A93A",letterSpacing:"0.03em"}}>CORRECTION</div>
+                              <div style={{fontSize:8,fontWeight:700,color:"#E8A93A"}}>NEEDED</div>
+                              <div style={{fontSize:7,color:T.sub,marginTop:1}}>{fmt(shift.start)}–{fmt(shift.end)}</div>
                             </div>
                           ) : (
                             <>
