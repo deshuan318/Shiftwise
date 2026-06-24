@@ -5018,7 +5018,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           )}
           {tab==="insights" && (()=>{
             function ScoreCard({ score, scoreColor, scoreBg, history }) {
-              const [open, setOpen] = React.useState(false);
+              const [open, setOpen] = useState(false);
 
               // 4-week rolling average (excluding current week)
               const prior = history.slice(1, 5); // skip index 0 = current week
