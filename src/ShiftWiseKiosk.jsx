@@ -116,7 +116,7 @@ const CSS = `
   .fade-in{animation:fadeIn 0.3s ease both;}
   .spin{animation:spin 1s linear infinite;}
   .ticker-outer{overflow:hidden;width:100%;}
-  .ticker-track{display:inline-flex;gap:64px;white-space:nowrap;animation:ticker 30s linear infinite;will-change:transform;backface-visibility:hidden;-webkit-backface-visibility:hidden;}
+  .ticker-track{display:inline-flex;gap:48px;white-space:nowrap;animation:ticker 16s linear infinite;will-change:transform;backface-visibility:hidden;-webkit-backface-visibility:hidden;}
   .ticker-track:hover{animation-play-state:paused;}
   .pin-input{width:100%;height:72px;background:#161B22;border:2px solid #21262D;border-radius:14px;color:white;font-size:32px;font-family:'DM Mono',monospace;font-weight:500;letter-spacing:0.3em;text-align:center;outline:none;transition:border-color 0.15s;animation:blink 1.2s ease-in-out infinite;}
   .pin-input:focus{border-color:#2D6A4F;animation:none;}
@@ -147,7 +147,9 @@ function LiveClock() {
 function RecTicker({ items }) {
   if (!items || items.length===0) return null;
   // Duplicate for seamless infinite loop — animation moves -50% so both halves cycle
-  const looped = [...items, ...items];
+  // Repeat enough times to fill screen width so loop never looks empty
+  const repeated = items.length < 3 ? [...items,...items,...items,...items] : [...items,...items];
+  const looped = repeated;
   const Item = ({r,i}) => (
     <span key={i} style={{color:"#8B949E",fontSize:13,fontWeight:500,display:"inline-flex",alignItems:"center",gap:8,flexShrink:0}}>
       <span style={{fontSize:16}}>{r.emoji}</span>
