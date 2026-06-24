@@ -4289,11 +4289,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 o.weekKey === todayWeekKey && o.empId === emp.id && o.dayIdx === todayDayIdx && o.status !== "cancelled"
               );
 
-              // Find punch activity for this employee today
+              // Find punch activity for this employee today — sorted by time
               const empPunches = punches.filter(p => {
                 const pd = new Date(p.time);
                 return p.empId === emp.id && pd.toDateString() === today.toDateString();
-              });
+              }).sort((a,b) => new Date(a.time) - new Date(b.time));
               const lastPunchEntry = empPunches.length ? empPunches[empPunches.length-1] : null;
               const clockedIn = lastPunchEntry?.type === "in" || lastPunchEntry?.type === "break_in";
               const clockedOut = lastPunchEntry?.type === "out";
@@ -4645,12 +4645,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       // Calculate actual hours from punches for the active week
                       const wkKey = activeWeek || wk1Start;
                       const wkDates = (weeks.find(w=>w.key===wkKey)?.dates || []).map(d=>{
-                        const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toISOString().split("T")[0];
+                        const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt);
                       });
                       const empPunches = punches.filter(p => {
-                        const pd = new Date(p.time).toISOString().split("T")[0];
+                        const pd = toLocalDateStr(new Date(p.time));
                         return p.empId === emp.id && wkDates.includes(pd);
-                      });
+                      }).sort((a,b) => new Date(a.time) - new Date(b.time));
                       let actualHrs = 0, inT = null;
                       for (const p of empPunches) {
                         if (p.type==="in"||p.type==="break_in") inT = new Date(p.time);
