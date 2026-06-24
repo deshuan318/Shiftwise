@@ -873,13 +873,14 @@ function FeedbackTab({ bizId, T, Card, showToast, addAudit, getSession, dbPost }
     {k:"general", l:"💬 General Feedback", d:"Thoughts, suggestions, impressions"},
   ];
 
-  const [fbArea,    setFbArea]    = useState(FEEDBACK_AREAS[10]);
+  const [fbArea,    setFbArea]    = useState("");
   const [fbType,    setFbType]    = useState("general");
   const [fbMessage, setFbMessage] = useState("");
   const [fbSaving,  setFbSaving]  = useState(false);
   const [fbSent,    setFbSent]    = useState(false);
 
   async function submitFeedback() {
+    if (!fbArea) { showToast("Select an area first"); return; }
     if (!fbMessage.trim()) { showToast("Write something before submitting"); return; }
     setFbSaving(true);
     try {
@@ -926,7 +927,8 @@ function FeedbackTab({ bizId, T, Card, showToast, addAudit, getSession, dbPost }
           <div>
             <label style={{fontSize:11, fontWeight:700, color:T.sub, display:"block", marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em"}}>Area</label>
             <select value={fbArea} onChange={e=>setFbArea(e.target.value)}
-              style={{width:"100%", border:`1.5px solid ${T.border}`, borderRadius:9, padding:"10px 12px", fontSize:14, fontWeight:600, outline:"none", background:T.surface, color:T.text, cursor:"pointer"}}>
+              style={{width:"100%", border:`1.5px solid ${fbArea?T.accent:T.border}`, borderRadius:9, padding:"10px 12px", fontSize:14, fontWeight:600, outline:"none", background:T.surface, color:fbArea?T.text:T.sub, cursor:"pointer"}}>
+              <option value="" disabled>Select an area…</option>
               {FEEDBACK_AREAS.map(a=><option key={a} value={a}>{a}</option>)}
             </select>
           </div>
