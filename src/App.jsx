@@ -5497,7 +5497,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             const typeInfo = REC_TYPES.find(t=>t.id===recType);
 
             return (
-              <div style={{maxWidth:640,paddingBottom:20}}>
+              <div style={{maxWidth:900,margin:"0 auto",paddingBottom:20}}>
                 <div style={{marginBottom:20}}>
                   <h2 style={{margin:"0 0 4px",fontSize:20,fontWeight:800,color:T.text}}>Team Feed</h2>
                   <p style={{margin:0,fontSize:12,color:T.sub}}>Recognize great work, hype an upcoming shift, celebrate milestones.</p>
