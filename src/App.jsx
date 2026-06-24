@@ -1059,6 +1059,8 @@ export default function App() {
   const [squareSyncing,      setSquareSyncing]      = useState(false);
   const [squareLoading,      setSquareLoading]      = useState(true);
   const [showDailyBreakdown, setShowDailyBreakdown] = useState(false);
+  const [cashMode,    setCashMode]    = useState(false);
+  const [cashEntries, setCashEntries] = useState({}); // { "YYYY-MM-DD": amount }
   const [laborPctMode, setLaborPctMode] = useState("projected"); // "projected" | "actual"
   const [widgets,        setWidgets]        = useState([]);
   const [showAddWidget,  setShowAddWidget]  = useState(false);
@@ -1214,6 +1216,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setSetupComplete(business.setup_complete ?? true);
       setDaysOpen(business.days_open ?? [0,1,2,3,4,5,6]);
       setWeeklyBudget(business.weekly_budget ?? null);
+      if (business.cash_mode) setCashMode(true);
       checkSquareStatus(business.id);
       try {
         const w = await dbGet(`dashboard_widgets?business_id=eq.${business.id}&order=sort_order.asc`);
@@ -1317,6 +1320,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
       // 10. Other state
       setSalesData((salesRows||[]).map(r=>({ date:r.sale_date, revenue:parseFloat(r.revenue), transactions:r.transactions })));
+      // Load cash entries (source='cash') separately into cashEntries map
+      const cashRows = (salesRows||[]).filter(r=>r.source==='cash');
+      if (cashRows.length > 0) {
+        const map = {};
+        cashRows.forEach(r=>{ map[r.sale_date] = parseFloat(r.revenue); });
+        setCashEntries(map);
+      }
       setRecognition((recRows||[]).map(r=>({ id:r.id, at:r.created_at, type:r.rec_type, emoji:r.emoji, message:r.message, fromName:r.from_name, toName:r.to_name, toId:r.to_id })));
       setPunches((punchRows||[]).map(r=>({ id:r.id, empId:r.employee_id, empName:r.employee_name, type:r.punch_type, time:r.punched_at, scheduled:r.scheduled_start?{start:parseFloat(r.scheduled_start),end:parseFloat(r.scheduled_end)}:null, flags:r.flags||[] })));
       setOpenShifts((openShiftRows||[]).map(r=>({ id:r.id, weekKey:wks.find(w=>w.id===r.week_id)?.week_start||r.week_id, empId:r.employee_id, dayIdx:r.day_index, originalShift:r.shift_start?{start:parseFloat(r.shift_start),end:parseFloat(r.shift_end)}:null, reason:r.reason, status:r.status, claimedBy:r.claimed_by, createdAt:r.created_at })));
@@ -2467,6 +2477,36 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         {body}
       </div>
     );
+  }
+
+  // ── Cash entry helpers ────────────────────────────────────────────────
+  function toggleCashMode() {
+    const next = !cashMode;
+    setCashMode(next);
+    if (bizId) {
+      dbPatch(`businesses?id=eq.${bizId}`, { cash_mode: next })
+        .catch(()=>{});
+    }
+  }
+
+  function saveCashEntry(date, amount) {
+    const num = parseFloat(amount);
+    setCashEntries(prev => ({ ...prev, [date]: isNaN(num) ? 0 : num }));
+    setSalesData(prev => {
+      const map = {};
+      prev.forEach(d => map[d.date] = d);
+      if (!isNaN(num) && num > 0) {
+        map[date] = { date, revenue: num, transactions: 0, source: 'cash' };
+      } else {
+        delete map[date];
+      }
+      const merged = Object.values(map).sort((a,b)=>a.date.localeCompare(b.date));
+      if (bizId) {
+        const row = { business_id: bizId, sale_date: date, revenue: isNaN(num)?0:num, transactions: 0, source: 'cash' };
+        dbUpsert('sales_data', [row]).catch(()=>{});
+      }
+      return merged;
+    });
   }
 
   async function saveBizSettings(fields) {
@@ -5099,15 +5139,42 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       </div>
 
                       <div>
-                        <button onClick={()=>setShowDailyBreakdown(v=>!v)}
-                          style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",background:"transparent",border:"none",padding:"4px 0",cursor:"pointer"}}>
-                          <span style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.04em"}}>Daily breakdown</span>
-                          <span style={{fontSize:11,color:T.accent,fontWeight:700}}>{showDailyBreakdown ? "Hide ▲" : "Show ▼"}</span>
-                        </button>
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 0"}}>
+                          <button onClick={()=>setShowDailyBreakdown(v=>!v)}
+                            style={{background:"transparent",border:"none",padding:0,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
+                            <span style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.04em"}}>Daily breakdown</span>
+                          </button>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <button onClick={toggleCashMode}
+                              style={{display:"flex",alignItems:"center",gap:5,background:cashMode?"#f0faf5":T.muted,border:`1.5px solid ${cashMode?"#4CAF7D":T.border}`,borderRadius:20,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:700,color:cashMode?"#2D6A4F":T.sub,transition:"all 0.15s"}}>
+                              <div style={{width:8,height:8,borderRadius:"50%",background:cashMode?"#4CAF7D":"#ccc",transition:"background 0.15s"}}></div>
+                              💵 Cash entry
+                            </button>
+                            <button onClick={()=>setShowDailyBreakdown(v=>!v)}
+                              style={{background:"transparent",border:"none",padding:0,cursor:"pointer",fontSize:11,color:T.accent,fontWeight:700}}>
+                              {showDailyBreakdown ? "Hide ▲" : "Show ▼"}
+                            </button>
+                          </div>
+                        </div>
                         {showDailyBreakdown && dayData.map((d,i)=>(
-                          <div key={d.date} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 0",borderBottom:i<dayData.length-1?`1px solid ${T.border}`:"none",fontSize:12}}>
+                          <div key={d.date} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:i<dayData.length-1?`1px solid ${T.border}`:"none",fontSize:12}}>
                             <span style={{color:T.text,fontWeight:700,width:36,flexShrink:0}}>{d.day}</span>
-                            <span style={{color:T.sub,flex:1}}>{d.revenue>0?`$${d.revenue.toFixed(0)} sales`:"no sales data"}</span>
+                            {cashMode ? (
+                              <div style={{display:"flex",alignItems:"center",gap:4,background:T.surface,border:`1.5px solid ${cashEntries[d.date]>0?"#4CAF7D":T.border}`,borderRadius:8,padding:"3px 8px",width:96,flexShrink:0}}>
+                                <span style={{fontSize:12,fontWeight:700,color:cashEntries[d.date]>0?"#4CAF7D":T.sub}}>$</span>
+                                <input
+                                  type="number"
+                                  placeholder="0.00"
+                                  defaultValue={cashEntries[d.date]>0?cashEntries[d.date]:""}
+                                  key={`cash-${d.date}-${cashEntries[d.date]}`}
+                                  onBlur={e=>saveCashEntry(d.date, e.target.value)}
+                                  onKeyDown={e=>{if(e.key==="Enter")e.target.blur();}}
+                                  style={{width:60,border:"none",outline:"none",fontSize:12,fontWeight:700,color:T.text,background:"transparent"}}
+                                />
+                              </div>
+                            ) : (
+                              <span style={{color:T.sub,flex:1}}>{d.revenue>0?`$${d.revenue.toFixed(0)} sales`:"no sales data"}</span>
+                            )}
                             <span style={{color:T.sub,flex:1,textAlign:"right"}}>{d.labor>0?`$${d.labor.toFixed(0)} labor`:"-"}</span>
                             <span style={{width:44,textAlign:"right",fontWeight:700,color:d.pct==null?T.sub:d.pct>35?"#C0392B":d.pct>25?"#E8A93A":"#4CAF7D"}}>{d.pct!=null?`${d.pct.toFixed(0)}%`:"-"}</span>
                           </div>
