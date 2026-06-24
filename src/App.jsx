@@ -972,6 +972,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const [insight,        setInsight]        = useState(null);
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightError,   setInsightError]   = useState(null);
+  const [scoreOpen,      setScoreOpen]      = useState(false);
   const [pulseHistory,   setPulseHistory]   = useState([]); // saved scores from pulse_history table
   const [notifPanelOpen, setNotifPanelOpen] = useState(false);
   const [notifFreq,      setNotifFreq]      = useState(() => { try { return localStorage.getItem("sw_notif_freq")||"login"; } catch { return "login"; } });
@@ -5017,8 +5018,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             </div>
           )}
           {tab==="insights" && (()=>{
-            function ScoreCard({ score, scoreColor, scoreBg, history }) {
-              const [open, setOpen] = useState(false);
+            function ScoreCard({ score, scoreColor, scoreBg, history, isOpen, onToggle }) {
+              const [open, setOpen] = [isOpen, onToggle];
 
               // 4-week rolling average (excluding current week)
               const prior = history.slice(1, 5); // skip index 0 = current week
@@ -5073,44 +5074,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     )}
                   </div>
                   <button onClick={()=>setOpen(o=>!o)}
-                    style={{width:"100%", background:"transparent", border:`1px solid ${T.border}`, borderRadius:8, padding:"5px 8px", fontSize:10, fontWeight:700, color:T.sub, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:4}}>
+                    style={{width:"100%", background:open?T.accent+"18":"transparent", border:`1px solid ${open?T.accent:T.border}`, borderRadius:8, padding:"5px 8px", fontSize:10, fontWeight:700, color:open?T.accent:T.sub, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:4, marginTop:6}}>
                     <span>📖</span> How is this scored? {open?"▲":"▼"}
                   </button>
-                  {open && (
-                    <div style={{background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 14px", marginTop:6, fontSize:11, color:T.text}}>
-                      <div style={{fontWeight:800, marginBottom:8, color:T.text}}>Score ranges</div>
-                      {[
-                        {range:"75–100", label:"Healthy",  color:"#4CAF7D"},
-                        {range:"50–74",  label:"Caution",  color:"#E8A93A"},
-                        {range:"30–49",  label:"Warning",  color:"#C0392B"},
-                        {range:"0–29",   label:"Critical", color:"#7B0000"},
-                      ].map(s=>(
-                        <div key={s.label} style={{display:"flex", alignItems:"center", gap:6, marginBottom:4,
-                          fontWeight: score.label===s.label ? 800 : 400,
-                          color: score.label===s.label ? s.color : T.sub}}>
-                          <div style={{width:8, height:8, borderRadius:"50%", background:s.color, flexShrink:0}}/>
-                          {s.range} — {s.label}
-                        </div>
-                      ))}
-                      <div style={{borderTop:`1px solid ${T.border}`, marginTop:10, paddingTop:10, fontWeight:700, color:T.text, marginBottom:6}}>Points deducted for</div>
-                      {[
-                        ["−20", "Overtime scheduled (40h+)"],
-                        ["−8",  "Near overtime (36–40h)"],
-                        ["−15", "Labor over weekly budget"],
-                        ["−10", "Budget projected over at week end"],
-                        ["−12", "Punch variance over 8h total"],
-                        ["−10", "Missed punch-in today"],
-                        ["−8",  "Attendance reliability concern"],
-                        ["−5/day", "Open days with no staff"],
-                        ["−3",  "No sales data loaded"],
-                      ].map(([pts, desc])=>(
-                        <div key={desc} style={{display:"flex", gap:8, marginBottom:4, alignItems:"flex-start"}}>
-                          <span style={{fontWeight:800, color:"#C0392B", minWidth:44, flexShrink:0}}>{pts}</span>
-                          <span style={{color:T.sub, lineHeight:1.4}}>{desc}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
                 </div>
               );
             }
@@ -5276,9 +5242,59 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           <div style={{fontSize:17, fontWeight:800, color:"white", lineHeight:1.4}}>{insight.headline}</div>
                         </div>
                         {insight.score && (
-                          <ScoreCard score={insight.score} scoreColor={scoreColor} scoreBg={scoreBg} history={pulseHistory} />
+                          <ScoreCard score={insight.score} scoreColor={scoreColor} scoreBg={scoreBg} history={pulseHistory} isOpen={scoreOpen} onToggle={setScoreOpen} />
                         )}
                       </div>
+
+                      {/* Scoring legend — full width */}
+                      {scoreOpen && insight.score && (
+                        <div style={{padding:"16px 20px", borderBottom:`1px solid ${T.border}`, background:T.surface}}>
+                          <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:24}}>
+                            <div>
+                              <div style={{fontWeight:800, fontSize:13, color:T.text, marginBottom:10}}>Score ranges</div>
+                              {[
+                                {range:"75–100", label:"Healthy",  color:"#4CAF7D", bg:"#F0FFF4", desc:"Schedule is running clean — no major issues detected."},
+                                {range:"50–74",  label:"Caution",  color:"#E8A93A", bg:"#FEF3E2", desc:"One or more issues need attention before they compound."},
+                                {range:"30–49",  label:"Warning",  color:"#C0392B", bg:"#FDECEA", desc:"Multiple problems affecting scheduling health."},
+                                {range:"0–29",   label:"Critical", color:"#7B0000", bg:"#FDECEA", desc:"Significant issues requiring immediate action."},
+                              ].map(s=>(
+                                <div key={s.label} style={{display:"flex", alignItems:"flex-start", gap:10, marginBottom:10,
+                                  padding:"8px 10px", borderRadius:8,
+                                  background: insight.score.label===s.label ? s.bg : "transparent",
+                                  border: insight.score.label===s.label ? `1px solid ${s.color}30` : "1px solid transparent"}}>
+                                  <div style={{width:10, height:10, borderRadius:"50%", background:s.color, flexShrink:0, marginTop:2}}/>
+                                  <div>
+                                    <div style={{fontWeight:insight.score.label===s.label?800:600, fontSize:12, color:insight.score.label===s.label?s.color:T.text}}>{s.range} — {s.label}</div>
+                                    <div style={{fontSize:11, color:T.sub, marginTop:2, lineHeight:1.4}}>{s.desc}</div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            <div>
+                              <div style={{fontWeight:800, fontSize:13, color:T.text, marginBottom:10}}>Points deducted for</div>
+                              {[
+                                ["−20", "Overtime scheduled (40h+)", "Any employee scheduled over 40 hours triggers overtime pay rules."],
+                                ["−8",  "Near overtime (36–40h)", "Close enough to overtime that punch variance could push them over."],
+                                ["−15", "Labor over weekly budget", "Scheduled labor exceeds your set weekly target."],
+                                ["−10", "Budget pace projects over", "Mid-week rate puts you on track to finish over budget."],
+                                ["−12", "Punch variance over 8h", "Employees are clocking significantly more than scheduled."],
+                                ["−10", "Missed punch-in today", "An employee has a shift today with no clock-in recorded."],
+                                ["−8",  "Attendance reliability", "An employee has 7+ flagged punches in the last 30 days."],
+                                ["−5/day", "Open days with no staff", "Business hours show you're open but no one is scheduled."],
+                                ["−3",  "No sales data loaded", "Can't calculate revenue efficiency without sales data."],
+                              ].map(([pts, title, desc])=>(
+                                <div key={title} style={{display:"flex", gap:10, marginBottom:8, alignItems:"flex-start"}}>
+                                  <span style={{fontWeight:800, color:"#C0392B", minWidth:52, flexShrink:0, fontSize:12}}>{pts}</span>
+                                  <div>
+                                    <div style={{fontWeight:600, fontSize:12, color:T.text}}>{title}</div>
+                                    <div style={{fontSize:10, color:T.sub, marginTop:1, lineHeight:1.4}}>{desc}</div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Positives strip */}
                       {insight.positives?.length > 0 && (
