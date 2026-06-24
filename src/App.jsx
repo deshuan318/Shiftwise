@@ -2857,12 +2857,30 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   function TimePickerModal() {
     const [draft,setDraft] = useState(null);
+    const [localHrStart,  setLocalHrStart]  = useState("");
+    const [localMinStart, setLocalMinStart] = useState("");
+    const [localHrEnd,    setLocalHrEnd]    = useState("");
+    const [localMinEnd,   setLocalMinEnd]   = useState("");
+    const setLocalHr  = f => f==="start" ? setLocalHrStart  : setLocalHrEnd;
+    const setLocalMin = f => f==="start" ? setLocalMinStart : setLocalMinEnd;
+    const getLocalHr  = f => f==="start" ? localHrStart     : localHrEnd;
+    const getLocalMin = f => f==="start" ? localMinStart    : localMinEnd;
     useEffect(()=>{
       if(!openCell){setDraft(null);return;}
       const {empId,weekKey,dayIdx,isNew}=openCell;
       const ex=getShift(weekKey,empId,dayIdx);
-      if(ex) setDraft({start:decToTime(ex.start),end:decToTime(ex.end),type:toTypeArr(ex.type),notes:ex.notes||""});
-      else if(isNew) setDraft({start:"",end:"",type:["regular"],notes:""});
+      if(ex) {
+        const s=decToTime(ex.start), e=decToTime(ex.end);
+        setDraft({start:s,end:e,type:toTypeArr(ex.type),notes:ex.notes||""});
+        const gh=v=>{if(!v)return"";const[h]=v.split(":").map(Number);const r=h%12===0?12:h%12;return String(r);};
+        const gm=v=>{if(!v)return"";const[,m]=v.split(":").map(Number);return String(m).padStart(2,"0");};
+        setLocalHrStart(gh(s)); setLocalMinStart(gm(s));
+        setLocalHrEnd(gh(e));   setLocalMinEnd(gm(e));
+      } else if(isNew) {
+        setDraft({start:"",end:"",type:["regular"],notes:""});
+        setLocalHrStart(""); setLocalMinStart("");
+        setLocalHrEnd("");   setLocalMinEnd("");
+      }
     },[openCell?.empId,openCell?.weekKey,openCell?.dayIdx]);
 
     if(!openCell||!draft) return null;
@@ -2900,7 +2918,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
     return (
       <div onClick={()=>setOpenCell(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
-        <div onClick={e=>e.stopPropagation()} style={{background:"white",borderRadius:"20px 20px 0 0",padding:"20px 20px calc(20px + env(safe-area-inset-bottom,0px))",width:"100%",maxWidth:500,boxShadow:"0 -12px 48px rgba(0,0,0,0.2)",borderTop:`4px solid ${emp.color}`}}>
+        <div onClick={e=>{e.stopPropagation(); if(draft._openPanel) setDraft(d=>({...d,_openPanel:null}));}} style={{background:"white",borderRadius:"20px 20px 0 0",padding:"20px 20px calc(20px + env(safe-area-inset-bottom,0px))",width:"100%",maxWidth:500,boxShadow:"0 -12px 48px rgba(0,0,0,0.2)",borderTop:`4px solid ${emp.color}`}}>
           <div style={{width:36,height:4,borderRadius:2,background:"#E0DAD2",margin:"0 auto 16px"}}/>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -2916,80 +2934,126 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           </div>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14,position:"relative"}}>
             {[["Start Time","start"],["End Time","end"]].map(([lbl,field])=>{
+              const HOURS_TP = [1,2,3,4,5,6,7,8,9,10,11,12];
+              const MINS_TP  = [0,15,30,45];
               const val = draft[field];
-              const getHr  = v => { if(!v) return ""; const [h]=v.split(":").map(Number); const r=h%12===0?12:h%12; return String(r); };
-              const getMin = v => { if(!v) return ""; const [,m]=v.split(":").map(Number); return String(m).padStart(2,"0"); };
-              const getAp  = (v,fb) => { if(!v) return fb; const [h]=v.split(":").map(Number); return h<12?"AM":"PM"; };
-              const build  = (hr,min,ap) => { let h=parseInt(hr||0)%12; if(ap==="PM") h+=12; return String(h).padStart(2,"0")+":"+String(min).padStart(2,"0"); };
-              const fallbackAP = field==="start"?"AM":"PM";
-              const ap = getAp(val,fallbackAP);
+              const getHrTP  = v => { if(!v) return null; const [h]=v.split(":").map(Number); return h%12===0?12:h%12; };
+              const getMinTP = v => { if(!v) return null; const [,m]=v.split(":").map(Number); return m; };
+              const getApTP  = (v, fb) => { if(!v) return fb; const [h]=v.split(":").map(Number); return h<12?"AM":"PM"; };
+              const buildValTP = (hr,min,ap) => { let h=hr%12; if(ap==="PM") h+=12; return String(h).padStart(2,"0")+":"+String(min).padStart(2,"0"); };
+              const fallbackAP = field==="start" ? "AM" : "PM";
+              const ap  = getApTP(val, fallbackAP);
+              const isOpen = draft._openPanel === field;
               const filled = !!val;
+              const lhr = getLocalHr(field);
+              const lmin = getLocalMin(field);
+
+              function setHrTP(h) {
+                setLocalHr(field)(String(h));
+                setDraft(d=>({...d, [field]: buildValTP(h, getMinTP(d[field]) ?? 0, getApTP(d[field], fallbackAP))}));
+              }
+              function setMinTP(m) {
+                setLocalMin(field)(String(m).padStart(2,"0"));
+                setDraft(d=>({...d, [field]: buildValTP(getHrTP(d[field]) ?? 9, m, getApTP(d[field], fallbackAP))}));
+              }
+              function setApTP(a) { setDraft(d=>({...d, [field]: buildValTP(getHrTP(d[field]) ?? 9, getMinTP(d[field]) ?? 0, a)})); }
+              function openPanel() { setDraft(d=>({...d, _openPanel: field})); }
+              function closePanel() { setDraft(d=>({...d, _openPanel: null})); }
 
               return (
-                <div key={field}>
+                <div key={field} style={{position:"relative"}}>
                   <label style={{fontSize:11,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>{lbl}</label>
-                  <div style={{display:"flex",alignItems:"center",border:`2px solid ${filled?emp.color:T.border}`,borderRadius:999,background:T.surface,padding:"4px 6px"}}>
+
+                  <div style={{
+                    display:"flex",alignItems:"center",
+                    border:`2px solid ${isOpen||filled?emp.color:T.border}`,borderRadius:999,
+                    background:T.surface,transition:"border-color 0.15s",padding:"4px 6px"
+                  }}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:1}}>
-                      <input
-                        id={`tp-hr-${field}`}
-                        inputMode="numeric"
-                        placeholder="9"
-                        defaultValue={getHr(val)}
-                        key={`hr-${field}-${val}`}
-                        onFocus={e=>e.target.select()}
+                      <input id={`tp-hr-${field}`} inputMode="numeric" placeholder="9"
+                        value={lhr}
+                        onFocus={e=>{ openPanel(); e.target.select(); }}
+                        onClick={e=>e.stopPropagation()}
                         onChange={e=>{
-                          const v=e.target.value.replace(/[^0-9]/g,"").slice(0,2);
-                          e.target.value=v;
+                          const v = e.target.value.replace(/\D/g,"").slice(0,2);
+                          setLocalHr(field)(v);
                           if(!v) return;
                           let n=parseInt(v); if(n>12) n=12;
-                          const curMin=parseInt(getMin(draft[field])||"0");
-                          const curAp=getAp(draft[field],fallbackAP);
-                          setDraft(d=>({...d,[field]:build(n,curMin,curAp)}));
+                          setDraft(d=>({...d,[field]:buildValTP(n,getMinTP(d[field])??0,getApTP(d[field],fallbackAP))}));
                         }}
                         onKeyDown={e=>{
                           if(e.key==="Enter"||(e.key==="Tab"&&!e.shiftKey)){e.preventDefault();document.getElementById(`tp-min-${field}`)?.focus();}
                         }}
-                        style={{width:28,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}
-                      />
+                        style={{width:22,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
                       <span style={{fontSize:17,fontWeight:800,color:T.sub}}>:</span>
-                      <input
-                        id={`tp-min-${field}`}
-                        inputMode="numeric"
-                        placeholder="00"
-                        defaultValue={getMin(val)}
-                        key={`min-${field}-${val}`}
-                        onFocus={e=>e.target.select()}
+                      <input id={`tp-min-${field}`} inputMode="numeric" placeholder="00"
+                        value={lmin}
+                        onFocus={e=>{ openPanel(); e.target.select(); }}
+                        onClick={e=>e.stopPropagation()}
                         onChange={e=>{
-                          const v=e.target.value.replace(/[^0-9]/g,"").slice(0,2);
-                          e.target.value=v;
+                          const v = e.target.value.replace(/\D/g,"").slice(0,2);
+                          setLocalMin(field)(v);
                         }}
                         onBlur={e=>{
-                          const v=e.target.value.replace(/[^0-9]/g,"");
-                          if(!v) return;
+                          const v = e.target.value.replace(/\D/g,"");
+                          if(!v){ setLocalMin(field)(""); return; }
                           let n=parseInt(v); if(n>59) n=59;
-                          e.target.value=String(n).padStart(2,"0");
-                          const curHr=parseInt(getHr(draft[field])||"9");
-                          const curAp=getAp(draft[field],fallbackAP);
-                          setDraft(d=>({...d,[field]:build(curHr,n,curAp)}));
+                          const snapped=[0,15,30,45].reduce((a,b)=>Math.abs(b-n)<Math.abs(a-n)?b:a);
+                          setLocalMin(field)(String(snapped).padStart(2,"0"));
+                          setDraft(d=>({...d,[field]:buildValTP(getHrTP(d[field])??9,snapped,getApTP(d[field],fallbackAP))}));
                         }}
                         onKeyDown={e=>{
-                          if(e.key==="Enter"){e.preventDefault();e.target.blur();}
+                          if(e.key==="Enter"){e.preventDefault();e.target.blur();closePanel();}
                         }}
-                        style={{width:34,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}
-                      />
+                        style={{width:30,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
                     </div>
-                    <button type="button"
-                      onClick={e=>{
-                        e.stopPropagation();
-                        const curHr=parseInt(getHr(draft[field])||"9");
-                        const curMin=parseInt(getMin(draft[field])||"0");
-                        const curAp=getAp(draft[field],fallbackAP);
-                        setDraft(d=>({...d,[field]:build(curHr,curMin,curAp==="AM"?"PM":"AM")}));
-                      }}
-                      style={{border:"none",borderRadius:999,background:ap?emp.color:T.muted,color:ap?"white":T.sub,fontSize:12,fontWeight:800,padding:"9px 14px",cursor:"pointer",letterSpacing:"0.03em"}}>
+                    <button type="button" onClick={e=>{ e.stopPropagation(); setApTP(ap==="AM"?"PM":"AM"); }}
+                      style={{
+                        border:"none",borderRadius:999,
+                        background:ap?emp.color:T.muted,color:ap?"white":T.sub,
+                        fontSize:12,fontWeight:800,padding:"9px 14px",cursor:"pointer",letterSpacing:"0.03em"
+                      }}>
                       {ap||fallbackAP}
                     </button>
                   </div>
+
+                  {isOpen && (
+                    <div onClick={e=>e.stopPropagation()} style={{
+                      marginTop:8,background:T.surface,
+                      border:`1.5px solid ${T.border}`,borderRadius:14,boxShadow:"0 6px 20px rgba(0,0,0,0.1)",
+                      overflow:"hidden",zIndex:50
+                    }}>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",height:160}}>
+                        <div style={{overflowY:"auto",borderRight:`1px solid ${T.muted}`}}>
+                          <div style={{position:"sticky",top:0,background:T.bg,padding:"6px 0",textAlign:"center",fontSize:9,fontWeight:800,color:T.sub,letterSpacing:"0.08em",borderBottom:`1px solid ${T.muted}`}}>HR</div>
+                          {HOURS_TP.map(h=>(
+                            <div key={h} onClick={()=>setHrTP(h)} style={{
+                              padding:"9px 0",textAlign:"center",fontSize:14,fontWeight:700,cursor:"pointer",
+                              background:hr===h?emp.color:"transparent",color:hr===h?"white":T.sub
+                            }}>{h}</div>
+                          ))}
+                        </div>
+                        <div style={{overflowY:"auto",borderRight:`1px solid ${T.muted}`}}>
+                          <div style={{position:"sticky",top:0,background:T.bg,padding:"6px 0",textAlign:"center",fontSize:9,fontWeight:800,color:T.sub,letterSpacing:"0.08em",borderBottom:`1px solid ${T.muted}`}}>MIN</div>
+                          {MINS_TP.map(m=>(
+                            <div key={m} onClick={()=>setMinTP(m)} style={{
+                              padding:"9px 0",textAlign:"center",fontSize:14,fontWeight:700,cursor:"pointer",
+                              background:min===m?emp.color:"transparent",color:min===m?"white":T.sub
+                            }}>{String(m).padStart(2,"0")}</div>
+                          ))}
+                        </div>
+                        <div style={{overflowY:"auto"}}>
+                          <div style={{position:"sticky",top:0,background:T.bg,padding:"6px 0",textAlign:"center",fontSize:9,fontWeight:800,color:T.sub,letterSpacing:"0.08em",borderBottom:`1px solid ${T.muted}`}}>AM/PM</div>
+                          {["AM","PM"].map(a=>(
+                            <div key={a} onClick={()=>setApTP(a)} style={{
+                              padding:"9px 0",textAlign:"center",fontSize:14,fontWeight:700,cursor:"pointer",
+                              background:ap===a?emp.color:"transparent",color:ap===a?"white":T.sub
+                            }}>{a}</div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -5420,15 +5484,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
                   return (
                     <Card T={T} style={{padding:"28px 28px 24px"}}>
-                      <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16, flexWrap:"wrap", marginBottom:24}}>
-                        <div>
-                          <div style={{fontWeight:800, fontSize:17, color:T.text, marginBottom:4}}>Your first Pulse is 3 steps away</div>
-                          <div style={{fontSize:13, color:T.sub, lineHeight:1.5}}>Complete these steps, then hit Generate Insights to get your plain-English briefing.</div>
-                        </div>
-                        <button onClick={generateInsight} disabled={!readyToGenerate || insightLoading}
-                          style={{background:readyToGenerate ? T.accent : T.muted, color:readyToGenerate ? "white" : T.sub, border:"none", borderRadius:10, padding:"10px 20px", fontWeight:800, fontSize:13, cursor:readyToGenerate ? "pointer" : "not-allowed", opacity:readyToGenerate ? 1 : 0.55, flexShrink:0, transition:"all 0.15s"}}>
-                          🧠 Generate insights
-                        </button>
+                      <div style={{marginBottom:24}}>
+                        <div style={{fontWeight:800, fontSize:17, color:T.text, marginBottom:4}}>Your first Pulse is 3 steps away</div>
+                        <div style={{fontSize:13, color:T.sub, lineHeight:1.5}}>Complete these steps, then hit Generate Insights above to get your plain-English briefing.</div>
                       </div>
 
                       {/* Step 1 */}
