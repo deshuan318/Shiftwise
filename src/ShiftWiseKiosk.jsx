@@ -21,8 +21,9 @@ async function kbFetch(path, opts = {}) {
 }
 
 const DATA_LAYER = {
-  async getBusinessData() {
-    const bizRows = await kbFetch("businesses?select=*&limit=1");
+  async getBusinessData(bizId) {
+    if (!bizId) return null;
+    const bizRows = await kbFetch(`businesses?select=*&id=eq.${bizId}&limit=1`);
     const business = bizRows?.[0];
     if (!business) return null;
     const [empRows, weekRows, recRows] = await Promise.all([
@@ -182,14 +183,20 @@ export default function ShiftWiseKiosk() {
   const [selectedEmp,     setSelectedEmp]   = useState(null);
   const pinRef = useRef();
 
+  const bizId = useMemo(() => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get("bizId") || params.get("biz_id") || params.get("business_id") || null;
+  }, []);
+
   const loadData = useCallback(async () => {
     try {
-      const data = await DATA_LAYER.getBusinessData();
-      if (!data) throw new Error("No business found. Set up your account in the ShiftWise dashboard first.");
+      if (!bizId) throw new Error("No business ID in URL. Add ?bizId=YOUR_ID to the kiosk URL.");
+      const data = await DATA_LAYER.getBusinessData(bizId);
+      if (!data) throw new Error("No business found. Check your bizId parameter or set up your account in the ShiftWise dashboard first.");
       setBizData(data); setLoadError(null);
     } catch(e) { setLoadError(e.message); }
     finally { setLoading(false); }
-  }, []);
+  }, [bizId]);
 
   useEffect(() => { loadData(); const i = setInterval(loadData,60000); return ()=>clearInterval(i); }, [loadData]);
 
