@@ -3231,6 +3231,71 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
 {/* TIMESHEET VIEW */}
 {schedSubTab==="timesheet" && (()=>{
+  // Per-row punch delete component — inline so it has access to closure vars
+  function PunchRowInline({ p, i, total, typeLabel, typeColor, emp, dateStr, bizId, setPunches, setPunchReviews, addAudit, showToast, T, ADJUSTMENT_REASONS }) {
+    const [delOpen, setDelOpen] = useState(false);
+    const [delReason, setDelReason] = useState("duplicate_punch");
+    const [delNote, setDelNote] = useState("");
+    const [deleting, setDeleting] = useState(false);
+
+    async function confirmDelete() {
+      if (delReason==="other" && !delNote.trim()) { showToast("Enter a reason"); return; }
+      setDeleting(true);
+      try {
+        const reasonText = delReason==="other" ? delNote.trim() : (ADJUSTMENT_REASONS.find(r=>r.value===delReason)?.label || "Manager Correction");
+        setPunches(prev => prev.filter(px => px.id !== p.id));
+        setPunchReviews(prev => { const n={...prev}; delete n[p.id]; return n; });
+        if (bizId) {
+          await fetch(`https://kyrjgfeowmflazywsuir.supabase.co/rest/v1/punches?id=eq.${p.id}`, {
+            method:"DELETE",
+            headers:{ apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cmpnZmVvd21mbGF6eXdzdWlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzMzMTQsImV4cCI6MjA5NTA0OTMxNH0.njuDREVF4oIgTYN6wLXKw6Hw_KsFzKPoMabkld_jy0E", Authorization:`Bearer ${(()=>{try{const s=JSON.parse(localStorage.getItem("sw_session")||"null");return s?.access_token||"";}catch{return "";}})()}` }
+          });
+        }
+        addAudit("Punch Deleted", `${emp.name} — ${dateStr}: ${typeLabel} at ${new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})} removed (${reasonText})`, {empName:emp.name});
+        showToast("Punch deleted ✓");
+      } catch(e) { showToast("Could not delete: "+e.message); }
+      finally { setDeleting(false); }
+    }
+
+    return (
+      <div style={{borderBottom:i<total-1?`1px solid ${T.border}`:"none",paddingBottom:delOpen?8:0}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0"}}>
+          <span style={{fontSize:12,fontWeight:700,color:typeColor}}>{typeLabel}</span>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:12,color:T.sub,fontFamily:"monospace"}}>{new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</span>
+            <button onClick={()=>setDelOpen(o=>!o)} title="Delete this punch"
+              style={{background:delOpen?"#FDECEA":"transparent",border:`1px solid ${delOpen?"#C0392B44":T.border}`,borderRadius:6,width:24,height:24,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,color:delOpen?"#C0392B":T.sub}}>
+              🗑
+            </button>
+          </div>
+        </div>
+        {p.adjustmentReason && !delOpen && (
+          <div style={{fontSize:10,color:"#B7780F",marginBottom:4,fontStyle:"italic"}}>↳ {p.adjustmentReason}</div>
+        )}
+        {delOpen && (
+          <div style={{background:"#FDECEA",borderRadius:8,padding:"10px",marginBottom:4,border:"1px solid #C0392B22"}}>
+            <div style={{fontSize:10,fontWeight:700,color:"#C0392B",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>Delete reason</div>
+            <select value={delReason} onChange={e=>setDelReason(e.target.value)}
+              style={{width:"100%",border:"1.5px solid #C0392B33",borderRadius:6,padding:"6px 8px",fontSize:12,fontWeight:700,background:"white",color:"#C0392B",marginBottom:6,outline:"none"}}>
+              {ADJUSTMENT_REASONS.map(r=><option key={r.value} value={r.value}>{r.label}</option>)}
+            </select>
+            {delReason==="other" && (
+              <input value={delNote} onChange={e=>setDelNote(e.target.value)} placeholder="Briefly describe why"
+                style={{width:"100%",border:"1.5px solid #C0392B33",borderRadius:6,padding:"6px 8px",fontSize:12,background:"white",color:"#333",marginBottom:6,outline:"none",boxSizing:"border-box"}}/>
+            )}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+              <button onClick={()=>{setDelOpen(false);setDelNote("");}}
+                style={{background:"white",border:`1px solid ${T.border}`,borderRadius:6,padding:"6px 0",fontSize:12,fontWeight:700,cursor:"pointer",color:T.sub}}>Cancel</button>
+              <button onClick={confirmDelete} disabled={deleting}
+                style={{background:"#C0392B",border:"none",borderRadius:6,padding:"6px 0",fontSize:12,fontWeight:700,cursor:"pointer",color:"white",opacity:deleting?0.6:1}}>
+                {deleting?"Deleting…":"Confirm Delete"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
   const tsWkDates = Array.from({length:7},(_,i)=>{
     const d = new Date(tsWeekStart+"T00:00:00");
     d.setDate(d.getDate()+i);
@@ -3509,23 +3574,22 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               </div>
             )}
 
-            {/* Punch log */}
+            {/* Punch log — with per-row delete */}
             {dp.length>0&&(
               <div style={{background:T.muted,borderRadius:10,padding:"10px 12px"}}>
                 <div style={{fontSize:10,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:8}}>Punch log</div>
-                {dp.map((p,i)=>(
-                  <div key={p.id||i} style={{padding:"4px 0",borderBottom:i<dp.length-1?`1px solid ${T.border}`:"none"}}>
-                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                      <span style={{fontSize:12,fontWeight:700,color:p.type==="in"||p.type==="break_in"?"#2D6A4F":"#C0392B"}}>
-                        {p.type==="in"?"Clock in":p.type==="out"?"Clock out":p.type==="break_out"?"Break start":"Break end"}
-                      </span>
-                      <span style={{fontSize:12,color:T.sub,fontFamily:"monospace"}}>{new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</span>
-                    </div>
-                    {p.adjustmentReason && (
-                      <div style={{fontSize:10,color:"#B7780F",marginTop:2,fontStyle:"italic"}}>↳ {p.adjustmentReason}</div>
-                    )}
-                  </div>
-                ))}
+                {dp.map((p,i)=>{
+                  const typeLabel = p.type==="in"?"Clock in":p.type==="out"?"Clock out":p.type==="break_out"?"Break start":"Break end";
+                  const typeColor = p.type==="in"||p.type==="break_in" ? "#2D6A4F" : "#C0392B";
+                  return (
+                    <PunchRowInline key={p.id||i} p={p} i={i} total={dp.length}
+                      typeLabel={typeLabel} typeColor={typeColor}
+                      emp={emp} dateStr={dateStr} bizId={bizId}
+                      setPunches={setPunches} setPunchReviews={setPunchReviews}
+                      addAudit={addAudit} showToast={showToast} T={T}
+                      ADJUSTMENT_REASONS={ADJUSTMENT_REASONS} />
+                  );
+                })}
               </div>
             )}
 
@@ -3566,27 +3630,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               <div style={{fontSize:10,color:T.sub,marginTop:6,textAlign:"center"}}>Creates an audit trail entry flagged as ADJUSTMENT</div>
             </div>
 
-{/* Delete punches */}
-{dp.length>0&&(
-  <div style={{borderTop:`1px solid ${T.border}`,paddingTop:12}}>
-    <button onClick={()=>{
-      if(!window.confirm(`Delete all ${dp.length} punch record${dp.length!==1?"s":""} for ${emp.name} on ${dateStr}?\n\nThis cannot be undone. An audit entry will be created.`)) return;
-      const idsToRemove = new Set(dp.map(p=>p.id));
-      setPunches(p=>p.filter(p=>!idsToRemove.has(p.id)));
-      setPunchReviews(prev=>{ const n={...prev}; dp.forEach(p=>delete n[p.id]); return n; });
-      if (bizId) {
-        dp.forEach(p=>{
-          dbDelete(`punches?id=eq.${p.id}`).catch(e=>console.warn("Punch delete failed:",e));
-        });
-      }
-      addAudit("Punches Deleted", `${emp.name} — ${dateStr}: ${dp.length} record${dp.length!==1?"s":""} removed`, {empName:emp.name});
-      showToast(`${dp.length} punch record${dp.length!==1?"s":""} deleted ✓`);
-      setTsOpenCell(null);
-    }} style={{width:"100%",background:"#FDECEA",color:"#C0392B",border:"1px solid #C0392B22",borderRadius:9,padding:"10px 0",fontWeight:700,fontSize:12,cursor:"pointer"}}>
-      Delete {dp.length} punch record{dp.length!==1?"s":""}
-    </button>
-  </div>
-)}
+
 
             {/* Review buttons */}
             <div>
@@ -3757,8 +3801,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           onClick={()=>(hasPunch||shift)&&setTsOpenCell({empId:emp.id,dateStr,dayIdx:di})}
                           style={{
                             borderRadius:8, padding:"5px 4px", minHeight:54,
-                            border:`1.5px solid ${hasFlag?"#E8A93A":status==="approved"?"#4CAF7D40":status==="rejected"?"#C0392B40":(!hasPunch&&shift)?"#E8A93A50":hasPunch?T.border:"transparent"}`,
-                            background:hasFlag?"#FEF3E215":status==="approved"?"#F0FFF420":status==="rejected"?"#FDECEA15":(!hasPunch&&shift)?"#FEF3E210":hasPunch?T.surface:"transparent",
+                            border:`1.5px solid ${hasFlag?"#E8A93A":status==="approved"?"#4CAF7D40":status==="rejected"?"#C0392B40":(!hasPunch&&shift&&dateStr<toLocalDateStr(new Date()))?"#E8A93A50":hasPunch?T.border:"transparent"}`,
+                            background:hasFlag?"#FEF3E215":status==="approved"?"#F0FFF420":status==="rejected"?"#FDECEA15":(!hasPunch&&shift&&dateStr<toLocalDateStr(new Date()))?"#FEF3E210":hasPunch?T.surface:"transparent",
                             cursor:(hasPunch||shift)?"pointer":"default",
                             display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
                             transition:"all 0.12s",
@@ -3766,11 +3810,20 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           {!hasPunch&&!shift ? (
                             <span style={{color:T.border,fontSize:11}}>—</span>
                           ) : !hasPunch&&shift ? (
-                            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-                              <span style={{fontSize:13}}>⚠️</span>
-                              <div style={{fontSize:8,fontWeight:800,color:"#E8A93A",letterSpacing:"0.03em"}}>CORRECTION</div>
-                              <div style={{fontSize:8,fontWeight:700,color:"#E8A93A"}}>NEEDED</div>
-                              <div style={{fontSize:7,color:T.sub,marginTop:1}}>{fmt(shift.start)}–{fmt(shift.end)}</div>
+                            <div style={{opacity:0.6,display:"flex",flexDirection:"column",alignItems:"center",gap:1}}>
+                              {dateStr < toLocalDateStr(new Date()) ? (
+                                <>
+                                  <span style={{fontSize:12}}>⚠️</span>
+                                  <div style={{fontSize:8,fontWeight:800,color:"#E8A93A"}}>CORRECTION</div>
+                                  <div style={{fontSize:7,color:"#E8A93A",fontWeight:700}}>NEEDED</div>
+                                </>
+                              ) : (
+                                <>
+                                  <div style={{fontSize:9,color:T.sub,fontWeight:700}}>No punch</div>
+                                  <div style={{fontSize:8,color:T.sub}}>{fmt(shift.start)}</div>
+                                  <div style={{fontSize:8,color:T.sub}}>{fmt(shift.end)}</div>
+                                </>
+                              )}
                             </div>
                           ) : (
                             <>
