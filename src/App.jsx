@@ -85,7 +85,7 @@ const fmt = v => {
   if (v == null) return "";
   const h = Math.floor(v), m = Math.round((v - h) * 60);
   const hr = h % 12 === 0 ? 12 : h % 12;
-  return `${hr}:${m === 0 ? "00" : "30"} ${h < 12 ? "AM" : "PM"}`;
+  return `${hr}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 };
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end - s.start).toFixed(2))));
 const getSunday = ds => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()-d.getDay()); return d.toISOString().split("T")[0]; };
@@ -2917,7 +2917,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:14,position:"relative"}}>
             {[["Start Time","start"],["End Time","end"]].map(([lbl,field])=>{
               const HOURS_TP = [1,2,3,4,5,6,7,8,9,10,11,12];
-              const MINS_TP  = [0,5,10,15,20,25,30,35,40,45,50,55];
+              const MINS_TP  = [0,15,30,45];
               const val = draft[field];
               const getHrTP = v => { if(!v) return null; const [h]=v.split(":").map(Number); return h%12===0?12:h%12; };
               const getMinTP = v => { if(!v) return null; const [,m]=v.split(":").map(Number); return m; };
@@ -2944,7 +2944,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 const v = e.target.value.replace(/\D/g,"").slice(0,2);
                 if (v === "") return;
                 let n = parseInt(v); if (n > 59) n = 59;
-                setMinTP(n);
+                const snapped = [0,15,30,45].reduce((a,b) => Math.abs(b-n) < Math.abs(a-n) ? b : a);
+                setMinTP(snapped);
               }
               function handleHrKeyDown(e) {
                 if (e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) {
