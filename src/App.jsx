@@ -2857,12 +2857,30 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   function TimePickerModal() {
     const [draft,setDraft] = useState(null);
+    const [localHrStart,  setLocalHrStart]  = useState("");
+    const [localMinStart, setLocalMinStart] = useState("");
+    const [localHrEnd,    setLocalHrEnd]    = useState("");
+    const [localMinEnd,   setLocalMinEnd]   = useState("");
+    const setLocalHr  = f => f==="start" ? setLocalHrStart  : setLocalHrEnd;
+    const setLocalMin = f => f==="start" ? setLocalMinStart : setLocalMinEnd;
+    const getLocalHr  = f => f==="start" ? localHrStart     : localHrEnd;
+    const getLocalMin = f => f==="start" ? localMinStart    : localMinEnd;
     useEffect(()=>{
       if(!openCell){setDraft(null);return;}
       const {empId,weekKey,dayIdx,isNew}=openCell;
       const ex=getShift(weekKey,empId,dayIdx);
-      if(ex) setDraft({start:decToTime(ex.start),end:decToTime(ex.end),type:toTypeArr(ex.type),notes:ex.notes||""});
-      else if(isNew) setDraft({start:"",end:"",type:["regular"],notes:""});
+      if(ex) {
+        const s=decToTime(ex.start), e=decToTime(ex.end);
+        setDraft({start:s,end:e,type:toTypeArr(ex.type),notes:ex.notes||""});
+        const gh=v=>{if(!v)return"";const[h]=v.split(":").map(Number);const r=h%12===0?12:h%12;return String(r);};
+        const gm=v=>{if(!v)return"";const[,m]=v.split(":").map(Number);return String(m).padStart(2,"0");};
+        setLocalHrStart(gh(s)); setLocalMinStart(gm(s));
+        setLocalHrEnd(gh(e));   setLocalMinEnd(gm(e));
+      } else if(isNew) {
+        setDraft({start:"",end:"",type:["regular"],notes:""});
+        setLocalHrStart(""); setLocalMinStart("");
+        setLocalHrEnd("");   setLocalMinEnd("");
+      }
     },[openCell?.empId,openCell?.weekKey,openCell?.dayIdx]);
 
     if(!openCell||!draft) return null;
@@ -2919,17 +2937,25 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               const HOURS_TP = [1,2,3,4,5,6,7,8,9,10,11,12];
               const MINS_TP  = [0,15,30,45];
               const val = draft[field];
-              const getHrTP = v => { if(!v) return null; const [h]=v.split(":").map(Number); return h%12===0?12:h%12; };
+              const getHrTP  = v => { if(!v) return null; const [h]=v.split(":").map(Number); return h%12===0?12:h%12; };
               const getMinTP = v => { if(!v) return null; const [,m]=v.split(":").map(Number); return m; };
-              const getApTP = (v, fb) => { if(!v) return fb; const [h]=v.split(":").map(Number); return h<12?"AM":"PM"; };
+              const getApTP  = (v, fb) => { if(!v) return fb; const [h]=v.split(":").map(Number); return h<12?"AM":"PM"; };
               const buildValTP = (hr,min,ap) => { let h=hr%12; if(ap==="PM") h+=12; return String(h).padStart(2,"0")+":"+String(min).padStart(2,"0"); };
               const fallbackAP = field==="start" ? "AM" : "PM";
-              const hr = getHrTP(val), min = getMinTP(val), ap = getApTP(val, fallbackAP);
+              const ap  = getApTP(val, fallbackAP);
               const isOpen = draft._openPanel === field;
               const filled = !!val;
+              const lhr = getLocalHr(field);
+              const lmin = getLocalMin(field);
 
-              function setHrTP(h) { setDraft(d=>({...d, [field]: buildValTP(h, getMinTP(d[field]) ?? 0, getApTP(d[field], fallbackAP))})); }
-              function setMinTP(m) { setDraft(d=>({...d, [field]: buildValTP(getHrTP(d[field]) ?? 9, m, getApTP(d[field], fallbackAP))})); }
+              function setHrTP(h) {
+                setLocalHr(field)(String(h));
+                setDraft(d=>({...d, [field]: buildValTP(h, getMinTP(d[field]) ?? 0, getApTP(d[field], fallbackAP))}));
+              }
+              function setMinTP(m) {
+                setLocalMin(field)(String(m).padStart(2,"0"));
+                setDraft(d=>({...d, [field]: buildValTP(getHrTP(d[field]) ?? 9, m, getApTP(d[field], fallbackAP))}));
+              }
               function setApTP(a) { setDraft(d=>({...d, [field]: buildValTP(getHrTP(d[field]) ?? 9, getMinTP(d[field]) ?? 0, a)})); }
               function openPanel() { setDraft(d=>({...d, _openPanel: field})); }
               function closePanel() { setDraft(d=>({...d, _openPanel: null})); }
@@ -2945,44 +2971,39 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   }}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:1}}>
                       <input id={`tp-hr-${field}`} inputMode="numeric" placeholder="9"
-                        defaultValue={hr ?? ""}
-                        key={`hr-${field}-${val}`}
+                        value={lhr}
                         onFocus={e=>{ openPanel(); e.target.select(); }}
                         onClick={e=>e.stopPropagation()}
                         onChange={e=>{
                           const v = e.target.value.replace(/\D/g,"").slice(0,2);
-                          if (!v) return;
-                          let n = parseInt(v); if (n > 12) n = 12;
-                          setHrTP(n);
+                          setLocalHr(field)(v);
+                          if(!v) return;
+                          let n=parseInt(v); if(n>12) n=12;
+                          setDraft(d=>({...d,[field]:buildValTP(n,getMinTP(d[field])??0,getApTP(d[field],fallbackAP))}));
                         }}
                         onKeyDown={e=>{
-                          if (e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) {
-                            e.preventDefault();
-                            document.getElementById(`tp-min-${field}`)?.focus();
-                          }
+                          if(e.key==="Enter"||(e.key==="Tab"&&!e.shiftKey)){e.preventDefault();document.getElementById(`tp-min-${field}`)?.focus();}
                         }}
                         style={{width:22,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
                       <span style={{fontSize:17,fontWeight:800,color:T.sub}}>:</span>
                       <input id={`tp-min-${field}`} inputMode="numeric" placeholder="00"
-                        defaultValue={min!=null?String(min).padStart(2,"0"):""}
-                        key={`min-${field}-${val}`}
+                        value={lmin}
                         onFocus={e=>{ openPanel(); e.target.select(); }}
                         onClick={e=>e.stopPropagation()}
                         onChange={e=>{
                           const v = e.target.value.replace(/\D/g,"").slice(0,2);
-                          if (!v) return;
-                          let n = parseInt(v); if (n > 59) n = 59;
-                          setMinTP(n);
+                          setLocalMin(field)(v);
                         }}
                         onBlur={e=>{
                           const v = e.target.value.replace(/\D/g,"");
-                          if (!v) return;
-                          let n = parseInt(v); if (n > 59) n = 59;
-                          const snapped = [0,15,30,45].reduce((a,b)=>Math.abs(b-n)<Math.abs(a-n)?b:a);
-                          setMinTP(snapped);
+                          if(!v){ setLocalMin(field)(""); return; }
+                          let n=parseInt(v); if(n>59) n=59;
+                          const snapped=[0,15,30,45].reduce((a,b)=>Math.abs(b-n)<Math.abs(a-n)?b:a);
+                          setLocalMin(field)(String(snapped).padStart(2,"0"));
+                          setDraft(d=>({...d,[field]:buildValTP(getHrTP(d[field])??9,snapped,getApTP(d[field],fallbackAP))}));
                         }}
                         onKeyDown={e=>{
-                          if (e.key === "Enter") { e.preventDefault(); e.target.blur(); closePanel(); }
+                          if(e.key==="Enter"){e.preventDefault();e.target.blur();closePanel();}
                         }}
                         style={{width:30,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
                     </div>
