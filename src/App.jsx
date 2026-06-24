@@ -972,6 +972,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const [insight,        setInsight]        = useState(null);
   const [insightLoading, setInsightLoading] = useState(false);
   const [insightError,   setInsightError]   = useState(null);
+  const [pulseHistory,   setPulseHistory]   = useState([]); // saved scores from pulse_history table
   const [notifPanelOpen, setNotifPanelOpen] = useState(false);
   const [notifFreq,      setNotifFreq]      = useState(() => { try { return localStorage.getItem("sw_notif_freq")||"login"; } catch { return "login"; } });
   const [notifDay,       setNotifDay]       = useState(() => { try { return localStorage.getItem("sw_notif_day")||"Monday"; } catch { return "Monday"; } });
@@ -1089,7 +1090,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const [
         empRows, weekRows, shiftTypeRows, bizHourRows,
         salesRows, recRows, punchRows, openShiftRows,
-        templateRows, publishedRows, auditRows, reviewRows,
+        templateRows, publishedRows, auditRows, reviewRows, pulseHistoryRows,
       ] = await Promise.all([
         dbGet(`employees?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`),
         dbGet(`schedule_weeks?select=*&business_id=eq.${business.id}&order=week_start.asc`),
@@ -1103,6 +1104,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         dbGet(`published_schedules?select=*&business_id=eq.${business.id}&order=published_at.desc`),
         dbGet(`audit_log?select=*&business_id=eq.${business.id}&order=created_at.desc&limit=500`),
         dbGet(`punch_reviews?select=*&business_id=eq.${business.id}`),
+        dbGet(`pulse_history?select=*&business_id=eq.${business.id}&order=generated_at.desc&limit=20`),
       ]);
 
       // 3. Load shifts for all weeks
@@ -1185,6 +1187,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const reviewMap = {};
       (reviewRows||[]).forEach(r=>{ reviewMap[r.punch_id] = r.status; });
       setPunchReviews(reviewMap);
+      setPulseHistory((pulseHistoryRows||[]).map(r=>({ id:r.id, score:r.score, label:r.label, weekStart:r.week_start, generatedAt:r.generated_at })));
 
       setAuthState("authenticated");
     } catch(err) {
@@ -1454,17 +1457,32 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // AI INSIGHT GENERATOR — calls Claude with the business snapshot.
   // The prompt and API call are data-source agnostic.
   // ─────────────────────────────────────────────────────────────────────────
-  function generateInsight() {
+  async function generateInsight() {
     if (insightLoading) return;
     setInsightLoading(true);
     setInsightError(null);
 
     // Small delay so the loading skeleton renders before heavy computation
-    setTimeout(() => {
+    setTimeout(async () => {
       try {
         const snapshot = buildBusinessSnapshot();
         const result   = computePulse(snapshot);
-        setInsight({ ...result, generatedAt: new Date().toISOString(), snapshot });
+        const now = new Date().toISOString();
+        const weekStart = wk1Start;
+        setInsight({ ...result, generatedAt: now, snapshot });
+        // Save score to pulse_history
+        if (bizId) {
+          try {
+            await fetch(`${SUPABASE_URL}/rest/v1/pulse_history?on_conflict=business_id,week_start`, {
+              method: "POST",
+              headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
+              body: JSON.stringify({ business_id: bizId, score: result.score.value, label: result.score.label, week_start: weekStart })
+            });
+            // Reload history
+            const rows = await dbGet(`pulse_history?select=*&business_id=eq.${bizId}&order=generated_at.desc&limit=20`);
+            setPulseHistory((rows||[]).map(r=>({ id:r.id, score:r.score, label:r.label, weekStart:r.week_start, generatedAt:r.generated_at })));
+          } catch(e) { console.warn("pulse_history save failed:", e); }
+        }
       } catch (err) {
         setInsightError("Could not generate insights right now. Check your data and try again.");
         console.error("Pulse engine error:", err);
@@ -1492,9 +1510,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const staffed  = wk.staffScheduled || 0;
     const empCount = snap.totalEmployees || 0;
     const bizName  = snap.businessName || "your business";
+    const dayOfWeek = snap.dayOfWeek || "today";
 
     // ── helper: $ formatter ──
     const $$ = n => `$${Number(n).toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+    const pct = n => `${Math.round(n)}%`;
+    const hrs = n => `${parseFloat(n.toFixed(1))}h`;
 
     // ── Score calculation (0-100) ────────────────────────────────────────────
     let score = 100;
@@ -1543,26 +1564,40 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       ? `Key concerns: ${scorePenalties.slice(0,2).join(" and ")}.`
       : "Schedule looks solid with no major issues detected.";
 
-    // ── Headline ─────────────────────────────────────────────────────────────
+    // ── Headline — score-aware, leads with positives when healthy ───────────
     let headline = "";
-    if (ot.length > 0) {
-      headline = `${ot[0].name} is headed for overtime — act before it posts`;
-    } else if (burn?.projectedOver) {
-      headline = `On pace to run ${$$( burn.overBy)} over budget this week`;
-    } else if (budget && totalPay > budget) {
-      headline = `Labor spend is ${$$(totalPay - budget)} over your weekly budget`;
-    } else if (af.missedPunches?.length) {
-      headline = `${af.missedPunches[0].name} has no punch-in recorded today`;
-    } else if (hasSales && rplh) {
-      headline = score >= 75
-        ? `Strong week — earning ${$$(rplh)} per labor hour`
-        : `Earning ${$$(rplh)}/labor hr — check your lowest-revenue days`;
-    } else if (gapDays > 0) {
-      headline = `${gapDays} open day${gapDays > 1 ? "s" : ""} with no staff scheduled`;
-    } else if (totalHrs === 0) {
-      headline = "No shifts scheduled yet — build your schedule to get insights";
+    if (score >= 75) {
+      // Healthy — lead with what's going well
+      if (hasSales && rplh) {
+        headline = `Strong week — earning ${$$(rplh)} per labor hour${burn?.projectedOver ? ` · watch budget pace` : ""}`;
+      } else if (budget && !burn?.projectedOver && totalPay <= budget) {
+        headline = `Labor on track — ${$$(budget - totalPay)} of runway left in this week's budget`;
+      } else if (ot.length > 0) {
+        headline = `Good week overall — but ${ot[0].name} is approaching overtime, act before end of week`;
+      } else if (burn?.projectedOver) {
+        headline = `Schedule looks healthy — heads up, current pace projects ${$$(burn.overBy)} over budget`;
+      } else {
+        headline = `${staffed} of ${empCount} employees scheduled — ${totalHrs}h total labor, looking solid`;
+      }
     } else {
-      headline = `${staffed} of ${empCount} employees scheduled — ${totalHrs}h total labor this week`;
+      // Caution / Warning / Critical — lead with the biggest issue
+      if (ot.length > 0) {
+        headline = `${ot[0].name} is headed for overtime — act before it posts`;
+      } else if (budget && totalPay > budget) {
+        headline = `Labor spend is ${$$(totalPay - budget)} over your weekly budget`;
+      } else if (burn?.projectedOver) {
+        headline = `On pace to finish ${$$(burn.overBy)} over budget — trim hours now to course-correct`;
+      } else if (af.missedPunches?.length) {
+        headline = `${af.missedPunches[0].name} has no punch-in recorded today`;
+      } else if (gapDays > 0) {
+        headline = `${gapDays} open day${gapDays > 1 ? "s" : ""} with no staff scheduled`;
+      } else if (hasSales && rplh) {
+        headline = `Earning ${$$(rplh)}/labor hr — check your lowest-revenue days`;
+      } else if (totalHrs === 0) {
+        headline = "No shifts scheduled yet — build your schedule to get insights";
+      } else {
+        headline = `${staffed} of ${empCount} employees scheduled — ${totalHrs}h total labor this week`;
+      }
     }
 
     // ── Pulse narrative (3-4 sentences) ──────────────────────────────────────
@@ -1706,107 +1741,177 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       });
     }
 
-    // ── Sections (2-4 most relevant) ─────────────────────────────────────────
+    // ── Sections — rich templated analysis per topic ─────────────────────────
     const sections = [];
+    const nearOTEmps = wk.employeeBreakdown?.filter(e => e.scheduledHours >= 36) || [];
 
-    // Labor cost — always
-    sections.push({
-      title: "Labor Cost",
-      icon: "💰",
-      urgency: budget && totalPay > budget ? "high" : burn?.projectedOver ? "medium" : "low",
-      insight: budget
-        ? `Scheduled labor is ${$$(totalPay)} against a ${$$(budget)} budget — ${totalPay > budget ? `${$$(totalPay - budget)} over` : `${$$(budget - totalPay)} of runway remaining`}. ${hasSales && laborPct ? `Labor cost is running at ${laborPct}% of revenue.` : ""} ${burn ? `Mid-week pace projects you to finish at ${$$(burn.projectedEnd)}.` : ""}`
-        : `Estimated labor spend is ${$$(totalPay)} for ${totalHrs} scheduled hours this week across ${staffed} employee${staffed !== 1 ? "s" : ""}. Set a weekly budget in Settings to track variance automatically.`,
-    });
+    // ── SECTION 1: Labor Cost — always shown ─────────────────────────────────
+    {
+      const overBudget = budget && totalPay > budget;
+      const projOver   = burn?.projectedOver;
+      const runway     = budget ? budget - totalPay : 0;
+      const urgency    = overBudget ? "high" : projOver ? "medium" : "low";
 
-    // Revenue efficiency — if sales data
-    if (hasSales && rplh) {
-      const days = (wk.dailyTotals || []).filter(d => d.revenuePerLaborHour);
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
+      let insight = "";
+      if (!budget && totalHrs === 0) {
+        insight = `No shifts are scheduled yet this week — there's nothing to track yet. Head to the Schedule tab, build out the week, and come back for a full labor analysis.`;
+      } else if (!budget) {
+        insight = `You've scheduled ${hrs(totalHrs)} of labor across ${staffed} employee${staffed!==1?"s":""}, estimated at ${$$(totalPay)} for the week. You haven't set a weekly budget yet — add one in Settings and ShiftWise will automatically flag you when you're trending over.`;
+      } else if (overBudget) {
+        const overAmt = totalPay - budget;
+        const overPct = Math.round((overAmt / budget) * 100);
+        insight = `Scheduled labor is ${$$(totalPay)}, which puts you ${$$(overAmt)} (${overPct}%) over your ${$$(budget)} weekly budget. That gap needs to close before payroll runs — look for overlap shifts or days where coverage exceeds what the schedule actually requires. ${hasSales && laborPct ? `At ${pct(laborPct)} of revenue, labor cost is above the 25–35% target range.` : ""}`;
+      } else if (projOver) {
+        insight = `You're at ${$$(totalPay)} against a ${$$(budget)} budget with ${hrs(burn.daysPassed)} days elapsed. At this pace you'll finish the week at ${$$(burn.projectedEnd)} — ${$$(burn.overBy)} over. The back half of the week is your window to course-correct by trimming a shift or two. ${hasSales && laborPct ? `Current labor cost is ${pct(laborPct)} of revenue.` : ""}`;
+      } else {
+        const usedPct = budget > 0 ? Math.round((totalPay / budget) * 100) : 0;
+        insight = `Labor is running at ${$$(totalPay)} against your ${$$(budget)} budget — ${$$(runway)} of runway remaining (${100 - usedPct}% unused). ${burn ? `Mid-week pace projects you to finish at ${$$(burn.projectedEnd)}, which is under budget.` : ""} ${hasSales && laborPct ? `Your labor cost is ${pct(laborPct)} of revenue, which is ${laborPct <= 35 ? "within" : "above"} the 25–35% target.` : ""}`;
+      }
+      sections.push({ title: "Labor Cost", icon: "💰", urgency, insight });
+    }
+
+    // ── SECTION 2: Revenue Efficiency — shown when sales data exists ──────────
+    if (hasSales) {
+      const days = (wk.dailyTotals || []).filter(d => d.revenuePerLaborHour && d.totalHours > 0);
+      const best  = days.reduce((b,d) => (!b || d.revenuePerLaborHour > b.revenuePerLaborHour) ? d : b, null);
+      const worst = days.reduce((w,d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
+      const spread = best && worst && best.day !== worst.day ? best.revenuePerLaborHour - worst.revenuePerLaborHour : 0;
+      const urgency = !rplh ? "low" : rplh < 15 ? "high" : rplh < 25 ? "medium" : "low";
+
+      let insight = "";
+      if (!rplh) {
+        insight = `Sales data is loaded but no labor hours are scheduled yet, so revenue per labor hour can't be calculated. Build out this week's schedule and the efficiency numbers will populate automatically.`;
+      } else if (rplh >= 40) {
+        insight = `You're generating ${$$(rplh)} in revenue per labor hour this week — that's excellent efficiency. ${best ? `${best.day} is your strongest day at ${$$(best.revenuePerLaborHour)}/hr.` : ""} ${laborPct ? `Overall labor cost is ${pct(laborPct)} of revenue.` : ""} At this ratio, you have room to reinvest some of that margin back into staffing on your highest-traffic days without hurting profitability.`;
+      } else if (rplh >= 25) {
+        insight = `Revenue per labor hour is ${$$(rplh)} this week — solidly within range. ${best && worst && best.day !== worst.day ? `${best.day} leads at ${$$(best.revenuePerLaborHour)}/hr while ${worst.day} trails at ${$$(worst.revenuePerLaborHour)}/hr — a ${$$(Math.round(spread))} spread.` : ""} ${laborPct ? `Labor cost is ${pct(laborPct)} of revenue.` : ""} The opportunity is to shift more hours toward your stronger days.`;
+      } else if (rplh >= 15) {
+        insight = `Revenue per labor hour is ${$$(rplh)} this week, which is below the target range. ${worst ? `${worst.day} is the main drag at ${$$(worst.revenuePerLaborHour)}/hr` : ""} — that's a day where you're paying more in labor than the volume justifies. ${laborPct ? `Labor cost is ${pct(laborPct)} of revenue — consider trimming hours on slow days and protecting coverage on your top performers.` : ""}`;
+      } else {
+        insight = `Revenue per labor hour is ${$$(rplh)} this week, which is low. For every dollar of labor you're only generating ${$$(Math.round(rplh))} in revenue. ${worst ? `${worst.day} is the weakest point at ${$$(worst.revenuePerLaborHour)}/hr.` : ""} This usually means either over-staffing on slow days, slow sales this week, or both. ${laborPct ? `Labor cost at ${pct(laborPct)} of revenue needs to come down.` : ""}`;
+      }
+      sections.push({ title: "Revenue Efficiency", icon: "💵", urgency, insight });
+    } else {
       sections.push({
         title: "Revenue Efficiency",
         icon: "💵",
-        urgency: rplh < 15 ? "high" : rplh < 25 ? "medium" : "low",
-        insight: `You're generating ${$$(rplh)} in revenue per labor hour this week. ${worst ? `${worst.day} is your weakest day at ${$$(worst.revenuePerLaborHour)}/hr` : ""} — ${laborPct ? `your overall labor cost is ${laborPct}% of revenue` : "load Square sales data to track labor cost %"}.`,
+        urgency: "low",
+        insight: `No sales data is connected yet. When you link Square, ShiftWise calculates revenue per labor hour for every day of the week — the single clearest signal of whether your staffing is earning its cost. Connect Square in the Dashboard tab or import a sales CSV to unlock this section.`,
       });
     }
 
-    // Overtime risk — if anyone >= 36h
-    const nearOTEmps = wk.employeeBreakdown?.filter(e => e.scheduledHours >= 36) || [];
-    if (nearOTEmps.length > 0) {
-      const topEmp = nearOTEmps.sort((a,b) => b.scheduledHours - a.scheduledHours)[0];
-      sections.push({
-        title: "Overtime Risk",
-        icon: "⏱️",
-        urgency: topEmp.scheduledHours > 40 ? "high" : "medium",
-        insight: `${topEmp.name} is scheduled for ${topEmp.scheduledHours}h this week${topEmp.scheduledHours > 40 ? " — already over the 40h threshold" : " — close to the overtime threshold"}. ${ot.length > 0 ? `Reducing their hours by ${(topEmp.scheduledHours - 38).toFixed(1)}h eliminates the risk entirely.` : "Keep an eye on punch-in times to avoid unplanned overtime."}`,
-      });
+    // ── SECTION 3: Overtime & Hours Risk ─────────────────────────────────────
+    if (nearOTEmps.length > 0 || ot.length > 0) {
+      const topEmp = [...nearOTEmps].sort((a,b) => b.scheduledHours - a.scheduledHours)[0];
+      const isOver = ot.length > 0;
+      const urgency = isOver ? "high" : "medium";
+      const hrOver  = topEmp ? parseFloat((topEmp.scheduledHours - 40).toFixed(1)) : 0;
+      const hrToSafe = topEmp ? parseFloat((topEmp.scheduledHours - 38).toFixed(1)) : 0;
+      const rate    = topEmp?.hourlyRate || 0;
+      const otCost  = isOver && rate > 0 ? $$(Math.round(hrOver * rate * 0.5)) : null;
+
+      let insight = "";
+      if (isOver && ot.length > 1) {
+        insight = `${ot.length} employees are scheduled over 40 hours this week: ${ot.map(e=>`${e.name} at ${hrs(e.hours)}`).join(", ")}. Each hour over 40 costs 1.5× their hourly rate — this is a payroll hit that compounds fast. Review their schedules now and look for shifts that can be reassigned or shortened before week end.`;
+      } else if (isOver) {
+        const e = ot[0];
+        insight = `${e.name} is scheduled for ${hrs(e.hours)} this week — ${hrs(e.hours - 40)} into overtime territory. ${rate > 0 ? `Those overtime hours carry a ${otCost} premium above their regular rate.` : "Every hour over 40 costs 1.5× their regular rate."} The fastest fix is to pull one shift or trim the end of their longest day to get under 40h before payroll closes.`;
+      } else {
+        insight = `${topEmp.name} is at ${hrs(topEmp.scheduledHours)} — ${hrs(40 - topEmp.scheduledHours)} away from overtime. That's close enough that any unexpected clock-in time or manual adjustment could push them over. ${hrToSafe > 0 ? `Trimming ${hrs(hrToSafe)} now gives you a safe buffer.` : ""} Keep an eye on their punch times through the rest of the week.`;
+      }
+      sections.push({ title: "Overtime Risk", icon: "⏱️", urgency, insight });
     }
 
-    // Attendance patterns — if flags exist
+    // ── SECTION 4: Attendance & Reliability ──────────────────────────────────
     const hasAttendance = (af.lateArrivals?.length || 0) + (af.missedPunches?.length || 0) + (af.reliabilityFlags?.length || 0) > 0;
     if (hasAttendance) {
       const topFlag = af.reliabilityFlags?.[0];
+      const urgency = af.missedPunches?.length ? "high" : topFlag?.flags30Days >= 7 ? "medium" : "low";
+
+      let insight = "";
+      const parts = [];
+      if (af.missedPunches?.length) {
+        const names = af.missedPunches.map(m=>m.name).join(" and ");
+        parts.push(`${names} ${af.missedPunches.length===1?"has":"have"} a scheduled shift today with no clock-in recorded. If they're actually working, add a manual punch in the Timesheet tab so payroll and punch variance stay accurate. If they didn't show up, this is a no-call-no-show and needs to be followed up directly.`);
+      }
+      if (af.lateArrivals?.length) {
+        const lateNames = af.lateArrivals.map(a=>`${a.name} (${a.count} time${a.count!==1?"s":""})`).join(", ");
+        parts.push(`Late clock-ins this week: ${lateNames}. Occasional lateness isn't always a problem, but a pattern across multiple days signals either a schedule mismatch or a reliability issue worth addressing.`);
+      }
+      if (topFlag && !af.missedPunches?.length) {
+        parts.push(`${topFlag.name} has accumulated ${topFlag.flags30Days} attendance flag${topFlag.flags30Days!==1?"s":""} in the last 30 days — the highest on your team. That's enough of a pattern to warrant a direct conversation before it affects scheduling reliability.`);
+      }
+      insight = parts.join(" ");
+      sections.push({ title: "Attendance Patterns", icon: "🚩", urgency, insight });
+    } else if (totalHrs > 0) {
       sections.push({
         title: "Attendance Patterns",
         icon: "🚩",
-        urgency: af.missedPunches?.length ? "high" : topFlag?.flags30Days >= 7 ? "medium" : "low",
-        insight: `${af.missedPunches?.length ? `${af.missedPunches.map(m=>m.name).join(", ")} missed a punch-in today. ` : ""}${af.lateArrivals?.length ? `${af.lateArrivals.map(a=>`${a.name} (${a.count}×)`).join(", ")} arrived late this period. ` : ""}${topFlag ? `${topFlag.name} has ${topFlag.flags30Days} attendance flags in the last 30 days — worth a quick check-in.` : ""}`,
+        urgency: "low",
+        insight: `No attendance flags this week — everyone is clocking in on time and without issues. That's worth noting because clean attendance is one of the things that quietly erodes labor cost accuracy when it goes wrong. Keep the kiosk running so the punch record stays current.`,
       });
     }
 
-    // Schedule gaps
+    // ── SECTION 5: Schedule Gaps — if any ────────────────────────────────────
     if (gapDays > 0) {
       const uncovered = (wk.dailyTotals || []).filter(d => d.staffCount === 0).map(d => d.day);
-      sections.push({
-        title: "Schedule Gaps",
-        icon: "📅",
-        urgency: gapDays >= 2 ? "high" : "medium",
-        insight: `${uncovered.join(", ")} ${uncovered.length === 1 ? "has" : "have"} no staff scheduled this week while your posted business hours show you're open. Leaving days uncovered either loses revenue or means you're working solo.`,
-      });
+      const urgency   = gapDays >= 3 ? "high" : gapDays >= 2 ? "medium" : "low";
+      const revLost   = hasSales && wk.dailyTotals ? $$(Math.round(wk.dailyTotals.filter(d=>uncovered.includes(d.day)).reduce((s,d)=>s+(d.revenue||0),0))) : null;
+      let insight = `${uncovered.join(", ")} ${uncovered.length===1?"has":"have"} no staff scheduled this week, but your business hours show you're open on ${uncovered.length===1?"that day":"those days"}. `;
+      insight += revLost && revLost !== "$0" ? `Historical data suggests you'd expect around ${revLost} in revenue on ${uncovered.length===1?"that day":"those days"} — leaving it unstaffed either means lost sales or you're working it alone. ` : `Either you're covering it yourself or the revenue opportunity is going unserved. `;
+      insight += `If the day is intentionally closed, update your operating hours in Settings so the schedule grid reflects it. If you need coverage, check the Coverage tab for available staff.`;
+      sections.push({ title: "Schedule Gaps", icon: "📅", urgency, insight });
     }
 
     // ── Positives ─────────────────────────────────────────────────────────────
     const positives = [];
     if (budget && totalPay <= budget && !burn?.projectedOver) {
-      positives.push(`Labor budget on track — ${$$(budget - totalPay)} of runway remaining`);
+      const pctUsed = Math.round((totalPay / budget) * 100);
+      positives.push(`Labor budget on track — ${$$(budget - totalPay)} remaining (${100-pctUsed}% unused)`);
     }
     if (ot.length === 0 && nearOTEmps.length === 0) {
-      positives.push("No overtime risk detected this week");
+      positives.push("No overtime risk — full team is under 36 scheduled hours");
     }
     if (hasSales && rplh >= 25) {
-      positives.push(`Strong revenue efficiency at ${$$(rplh)}/labor hour`);
+      positives.push(`Strong revenue efficiency at ${$$(rplh)}/labor hour${laborPct ? ` · ${pct(laborPct)} labor cost` : ""}`);
     }
     if (coveredDays >= openDays && openDays > 0) {
-      positives.push(`All ${openDays} open days have staff scheduled`);
+      positives.push(`All ${openDays} open day${openDays!==1?"s":""} have staff scheduled`);
     }
     if (staffed === empCount && empCount > 0) {
-      positives.push(`Full team scheduled — all ${empCount} employees have shifts this week`);
+      positives.push(`Full team on the schedule — all ${empCount} employee${empCount!==1?"s":""} have shifts this week`);
+    }
+    if (!af.missedPunches?.length && !af.lateArrivals?.length && totalHrs > 0) {
+      positives.push("Clean attendance this week — no missed punches or late clock-ins");
     }
     if (positives.length === 0) {
-      positives.push(`${staffed} employee${staffed !== 1 ? "s" : ""} scheduled and tracked`);
+      positives.push(`${staffed} employee${staffed!==1?"s":""} scheduled · ${hrs(totalHrs)} total labor tracked`);
     }
 
-    // ── Next week focus ───────────────────────────────────────────────────────
+    // ── Next week focus — specific and actionable ──────────────────────────────
     let nextWeekFocus = "";
-    if (hasSales) {
-      const days = (wk.dailyTotals || []).filter(d => d.revenue && d.totalHours > 0).sort((a,b) => b.revenue - a.revenue);
-      const topDay = days[0];
-      if (topDay) {
-        nextWeekFocus = `Build next week's schedule around ${topDay.day} first — it's your highest-revenue day at ${$$(topDay.revenue)} in sales. Staff decisions there have the biggest margin impact.`;
-      }
-    }
-    if (!nextWeekFocus && ot.length > 0) {
-      nextWeekFocus = `Resolve this week's overtime before building next week's schedule. Redistributing ${ot[0].name}'s hours now will make next week's labor math cleaner.`;
-    }
-    if (!nextWeekFocus && budget) {
-      nextWeekFocus = `Use this week's labor actuals as your baseline for next week's budget. If punch variance ran high, tighten scheduled hours by the same amount to land under budget.`;
-    }
-    if (!nextWeekFocus) {
-      nextWeekFocus = `Add your Square sales data to unlock revenue-per-labor-hour tracking — it's the single most useful number for deciding where to add or cut shifts.`;
+    const salesDays = hasSales ? (wk.dailyTotals||[]).filter(d=>d.revenue && d.totalHours>0).sort((a,b)=>b.revenue-a.revenue) : [];
+    const topSalesDay = salesDays[0];
+    const bottomSalesDay = salesDays[salesDays.length-1];
+
+    if (ot.length > 0) {
+      nextWeekFocus = `Before building next week's schedule, resolve this week's overtime. ${ot[0].name} finishing over 40h means next week needs to start with a lighter load for them. Redistribute their hours across the team if the coverage is still needed — don't just cut the shift and leave a gap.`;
+    } else if (hasSales && topSalesDay && bottomSalesDay && topSalesDay.day !== bottomSalesDay.day) {
+      const topRev = $$(topSalesDay.revenue);
+      const botRev = $$(bottomSalesDay.revenue);
+      nextWeekFocus = `Build next week around ${topSalesDay.day} first — at ${topRev} in sales it's your highest-revenue day and where staffing decisions have the most margin impact. ${bottomSalesDay.day} brought in ${botRev} — review whether current staffing there is proportional to the volume, and consider shifting hours to stronger days if it isn't.`;
+    } else if (burn?.projectedOver || (budget && totalPay > budget)) {
+      const target = budget ? $$(Math.round(budget * 0.9)) : null;
+      nextWeekFocus = `Use this week's overage as your calibration point. ${target ? `Try targeting ${target} in scheduled labor next week — 10% under budget gives you room for punch variance without blowing the number.` : "Set a weekly budget in Settings, then build the schedule to that number instead of building first and checking cost after."}`;
+    } else if (!hasSales) {
+      nextWeekFocus = `The most impactful thing you can do before next week is connect your Square account. Revenue per labor hour is the one number that tells you whether your staffing is earning its cost — and right now ShiftWise can't calculate it without sales data. Five minutes in the Dashboard tab unlocks it permanently.`;
+    } else if (topSalesDay) {
+      nextWeekFocus = `${topSalesDay.day} is your best revenue day at ${$$(topSalesDay.revenue)}. Make sure it's fully staffed next week before filling in the rest. The schedule should start with your highest-volume days and work backward — not the other way around.`;
+    } else {
+      nextWeekFocus = `Review your operating hours in Settings and make sure they reflect when you're actually open. Accurate hours let ShiftWise detect coverage gaps automatically and give the Pulse engine better data to work with next week.`;
     }
 
-    return { pulse, headline, score: { value: score, label: scoreLabel, reason: scoreReason }, sections: sections.slice(0, 4), actions: actions.slice(0, 5), positives: positives.slice(0, 3), nextWeekFocus };
+    return { pulse, headline, score: { value: score, label: scoreLabel, reason: scoreReason }, sections: sections.slice(0, 5), actions: actions.slice(0, 5), positives: positives.slice(0, 3), nextWeekFocus };
   }
   // ── end computePulse ───────────────────────────────────────────────────────
 
@@ -4912,6 +5017,103 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             </div>
           )}
           {tab==="insights" && (()=>{
+            function ScoreCard({ score, scoreColor, scoreBg, history }) {
+              const [open, setOpen] = React.useState(false);
+
+              // 4-week rolling average (excluding current week)
+              const prior = history.slice(1, 5); // skip index 0 = current week
+              const avg4  = prior.length > 0 ? Math.round(prior.reduce((s,h)=>s+h.score,0)/prior.length) : null;
+              const delta = avg4 != null ? score.value - avg4 : null;
+              const deltaColor = delta == null ? T.sub : delta > 0 ? "#4CAF7D" : delta < 0 ? "#C0392B" : T.sub;
+              const deltaLabel = delta == null ? null : delta > 0 ? `+${delta} vs avg` : delta < 0 ? `${delta} vs avg` : "= avg";
+
+              // Sparkline — last 8 weeks
+              const sparkData = [...history].reverse().slice(-8);
+
+              return (
+                <div style={{flexShrink:0, minWidth:160}}>
+                  <div style={{background:scoreBg(score.value), borderRadius:12, padding:"12px 18px", textAlign:"center", marginBottom:6}}>
+                    <div style={{fontSize:32, fontWeight:900, color:scoreColor(score.value), lineHeight:1}}>{score.value}</div>
+                    <div style={{fontSize:11, fontWeight:800, color:scoreColor(score.value), marginTop:2}}>{score.label}</div>
+                    <div style={{fontSize:9, color:"#888", marginTop:4, lineHeight:1.3}}>{score.reason}</div>
+                    {/* Delta vs 4-week avg */}
+                    {delta != null && (
+                      <div style={{marginTop:8, display:"flex", alignItems:"center", justifyContent:"center", gap:6}}>
+                        <span style={{fontSize:12, fontWeight:800, color:deltaColor}}>{deltaLabel}</span>
+                        <span style={{fontSize:9, color:"#888"}}>{prior.length}wk avg: {avg4}</span>
+                      </div>
+                    )}
+                    {history.length === 0 && (
+                      <div style={{fontSize:9, color:"#888", marginTop:6}}>Run weekly to build your benchmark</div>
+                    )}
+                    {/* Sparkline */}
+                    {sparkData.length > 1 && (
+                      <div style={{marginTop:10}}>
+                        <svg viewBox={`0 0 ${sparkData.length * 20} 32`} style={{width:"100%", height:32}}>
+                          {sparkData.map((h,i) => {
+                            const x = i * 20 + 10;
+                            const y = 30 - Math.round((h.score / 100) * 26);
+                            const isCurrent = i === sparkData.length - 1;
+                            return (
+                              <g key={h.id}>
+                                {i > 0 && (
+                                  <line
+                                    x1={(i-1)*20+10} y1={30 - Math.round((sparkData[i-1].score/100)*26)}
+                                    x2={x} y2={y}
+                                    stroke={isCurrent ? scoreColor(h.score) : "#ccc"} strokeWidth="1.5"/>
+                                )}
+                                <circle cx={x} cy={y} r={isCurrent?4:2.5}
+                                  fill={isCurrent ? scoreColor(h.score) : "#ccc"}/>
+                              </g>
+                            );
+                          })}
+                        </svg>
+                        <div style={{fontSize:8, color:"#aaa", textAlign:"center"}}>last {sparkData.length} weeks</div>
+                      </div>
+                    )}
+                  </div>
+                  <button onClick={()=>setOpen(o=>!o)}
+                    style={{width:"100%", background:"transparent", border:`1px solid ${T.border}`, borderRadius:8, padding:"5px 8px", fontSize:10, fontWeight:700, color:T.sub, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center", gap:4}}>
+                    <span>📖</span> How is this scored? {open?"▲":"▼"}
+                  </button>
+                  {open && (
+                    <div style={{background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, padding:"12px 14px", marginTop:6, fontSize:11, color:T.text}}>
+                      <div style={{fontWeight:800, marginBottom:8, color:T.text}}>Score ranges</div>
+                      {[
+                        {range:"75–100", label:"Healthy",  color:"#4CAF7D"},
+                        {range:"50–74",  label:"Caution",  color:"#E8A93A"},
+                        {range:"30–49",  label:"Warning",  color:"#C0392B"},
+                        {range:"0–29",   label:"Critical", color:"#7B0000"},
+                      ].map(s=>(
+                        <div key={s.label} style={{display:"flex", alignItems:"center", gap:6, marginBottom:4,
+                          fontWeight: score.label===s.label ? 800 : 400,
+                          color: score.label===s.label ? s.color : T.sub}}>
+                          <div style={{width:8, height:8, borderRadius:"50%", background:s.color, flexShrink:0}}/>
+                          {s.range} — {s.label}
+                        </div>
+                      ))}
+                      <div style={{borderTop:`1px solid ${T.border}`, marginTop:10, paddingTop:10, fontWeight:700, color:T.text, marginBottom:6}}>Points deducted for</div>
+                      {[
+                        ["−20", "Overtime scheduled (40h+)"],
+                        ["−8",  "Near overtime (36–40h)"],
+                        ["−15", "Labor over weekly budget"],
+                        ["−10", "Budget projected over at week end"],
+                        ["−12", "Punch variance over 8h total"],
+                        ["−10", "Missed punch-in today"],
+                        ["−8",  "Attendance reliability concern"],
+                        ["−5/day", "Open days with no staff"],
+                        ["−3",  "No sales data loaded"],
+                      ].map(([pts, desc])=>(
+                        <div key={desc} style={{display:"flex", gap:8, marginBottom:4, alignItems:"flex-start"}}>
+                          <span style={{fontWeight:800, color:"#C0392B", minWidth:44, flexShrink:0}}>{pts}</span>
+                          <span style={{color:T.sub, lineHeight:1.4}}>{desc}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
             const hasData = employees.length > 0 && Object.keys(schedule).length > 0;
             const urgencyColor = { low:"#4CAF7D", medium:"#E8A93A", high:"#C0392B" };
             const scoreColor = v => v >= 75 ? "#4CAF7D" : v >= 50 ? "#E8A93A" : "#C0392B";
@@ -5074,31 +5276,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           <div style={{fontSize:17, fontWeight:800, color:"white", lineHeight:1.4}}>{insight.headline}</div>
                         </div>
                         {insight.score && (
-                          <div style={{flexShrink:0}}>
-                            <div style={{background:scoreBg(insight.score.value), borderRadius:12, padding:"12px 18px", textAlign:"center", marginBottom:8}}>
-                              <div style={{fontSize:32, fontWeight:900, color:scoreColor(insight.score.value), lineHeight:1}}>{insight.score.value}</div>
-                              <div style={{fontSize:11, fontWeight:800, color:scoreColor(insight.score.value), marginTop:2}}>{insight.score.label}</div>
-                              <div style={{fontSize:9, color:"#888", marginTop:4, maxWidth:120, lineHeight:1.3}}>{insight.score.reason}</div>
-                            </div>
-                            {/* Score legend */}
-                            <div style={{display:"flex", flexDirection:"column", gap:3}}>
-                              {[
-                                {range:"75–100", label:"Healthy",  color:"#4CAF7D", bg:"#F0FFF4"},
-                                {range:"50–74",  label:"Caution",  color:"#E8A93A", bg:"#FEF3E2"},
-                                {range:"30–49",  label:"Warning",  color:"#C0392B", bg:"#FDECEA"},
-                                {range:"0–29",   label:"Critical", color:"#7B0000", bg:"#FDECEA"},
-                              ].map(s=>(
-                                <div key={s.label} style={{display:"flex", alignItems:"center", gap:6, padding:"3px 6px", borderRadius:6,
-                                  background: insight.score.label===s.label ? s.bg : "transparent",
-                                  border: insight.score.label===s.label ? `1px solid ${s.color}30` : "1px solid transparent"}}>
-                                  <div style={{width:8, height:8, borderRadius:"50%", background:s.color, flexShrink:0}}/>
-                                  <span style={{fontSize:9, fontWeight:insight.score.label===s.label?800:500, color:insight.score.label===s.label?s.color:"#aaa", whiteSpace:"nowrap"}}>
-                                    {s.range} — {s.label}
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
+                          <ScoreCard score={insight.score} scoreColor={scoreColor} scoreBg={scoreBg} history={pulseHistory} />
                         )}
                       </div>
 
