@@ -4478,6 +4478,17 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     </tfoot>
                   </table>
                 </div>}
+                {activeWeek && (() => {
+                  const totalShiftsThisWeek = employees.reduce((s, e) => s + DAYS.reduce((ds, _, di) => ds + (getShift(activeWeek, e.id, di) ? 1 : 0), 0), 0);
+                  return totalShiftsThisWeek === 0 && employees.length > 0 ? (
+                    <div style={{marginTop:14, background:T.surface, borderRadius:T.radius, border:`2px dashed ${T.border}`, padding:"36px 24px", textAlign:"center", position:"relative"}}>
+                      <div style={{width:44, height:44, borderRadius:"50%", background:T.accent+"18", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 14px", fontSize:22}}>📅</div>
+                      <div style={{fontWeight:800, fontSize:15, color:T.text, marginBottom:6}}>Your team is ready — now add their shifts</div>
+                      <div style={{fontSize:13, color:T.sub, lineHeight:1.6, marginBottom:16, maxWidth:340, margin:"0 auto 16px"}}>Tap any <strong style={{color:T.text}}>+</strong> cell on the grid above to schedule a shift. ShiftWise tracks labor cost as you go.</div>
+                      <div style={{display:"inline-flex", alignItems:"center", gap:8, background:T.accent, color:"white", borderRadius:10, padding:"10px 22px", fontSize:13, fontWeight:700}}>Tap any cell above to start</div>
+                    </div>
+                  ) : null;
+                })()}
                 {activeWeek && <div style={{marginTop:8,fontSize:11,color:T.sub,textAlign:"center"}}>Tap <strong>+</strong> to add a shift · Tap a shift to edit · Tap <strong>×</strong> to remove · <strong>Drag</strong> a shift to move it</div>}
               </>}
             </>}
@@ -5425,38 +5436,73 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                 )}
 
-                {/* Empty state — no data yet */}
-                {!insightLoading && !insight && !insightError && (
-                  <Card T={T} style={{padding:"48px 32px", textAlign:"center", border:`2px dashed ${T.border}`}}>
-                    <div style={{fontSize:48, marginBottom:16}}>🧠</div>
-                    <div style={{fontWeight:800, fontSize:17, color:T.text, marginBottom:8}}>Your AI business advisor</div>
-                    <p style={{margin:"0 0 20px", fontSize:13, color:T.sub, lineHeight:1.7, maxWidth:400, marginLeft:"auto", marginRight:"auto"}}>
-                      ShiftWise analyzes your schedule, labor costs, team availability, and sales data to give you a plain-English briefing — the things you'd tell yourself if you had time to look at all the numbers.
-                    </p>
-                    <div style={{display:"flex", flexDirection:"column", gap:10, maxWidth:340, margin:"0 auto 24px", textAlign:"left"}}>
-                      {[
-                        {icon:"💰", text:"Are you on track with your labor budget?"},
-                        {icon:"📅", text:"Which days are over or under-staffed?"},
-                        {icon:"⚠️", text:"Who's at risk of overtime this week?"},
-                        {icon:"📈", text:"How does your labor cost compare to revenue?"},
-                      ].map(item => (
-                        <div key={item.icon} style={{display:"flex", alignItems:"center", gap:10, background:T.muted, borderRadius:9, padding:"10px 14px"}}>
-                          <span style={{fontSize:18}}>{item.icon}</span>
-                          <span style={{fontSize:13, color:T.text, fontWeight:500}}>{item.text}</span>
+                {/* Empty state — first-run checklist */}
+                {!insightLoading && !insight && !insightError && (() => {
+                  const hasEmployees = employees.length > 0;
+                  const hasShifts = hasEmployees && Object.keys(schedule).some(wk =>
+                    employees.some(e => DAYS.some((_, di) => getShift(wk, e.id, di)))
+                  );
+                  const readyToGenerate = hasEmployees && hasShifts;
+
+                  const stepIcon = (done, active) => ({
+                    bg: done ? "#E8F5E9" : active ? "#EBF5FF" : T.muted,
+                    color: done ? "#2D6A4F" : active ? "#185FA5" : T.sub,
+                    symbol: done ? "✓" : active ? "→" : "·",
+                  });
+
+                  return (
+                    <Card T={T} style={{padding:"28px 28px 24px"}}>
+                      <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", gap:16, flexWrap:"wrap", marginBottom:24}}>
+                        <div>
+                          <div style={{fontWeight:800, fontSize:17, color:T.text, marginBottom:4}}>Your first Pulse is 3 steps away</div>
+                          <div style={{fontSize:13, color:T.sub, lineHeight:1.5}}>Complete these steps, then hit Generate Insights to get your plain-English briefing.</div>
                         </div>
-                      ))}
-                    </div>
-                    {!hasData && (
-                      <div style={{background:"#FEF3E2", border:"1px solid #E8A93A30", borderRadius:9, padding:"10px 14px", fontSize:12, color:"#E67E22", marginBottom:16, fontWeight:600}}>
-                        💡 Add employees and build a schedule first for the most useful analysis
+                        <button onClick={generateInsight} disabled={!readyToGenerate || insightLoading}
+                          style={{background:readyToGenerate ? T.accent : T.muted, color:readyToGenerate ? "white" : T.sub, border:"none", borderRadius:10, padding:"10px 20px", fontWeight:800, fontSize:13, cursor:readyToGenerate ? "pointer" : "not-allowed", opacity:readyToGenerate ? 1 : 0.55, flexShrink:0, transition:"all 0.15s"}}>
+                          🧠 Generate insights
+                        </button>
                       </div>
-                    )}
-                    <button onClick={generateInsight} disabled={insightLoading}
-                      style={{background:T.accent, color:"white", border:"none", borderRadius:10, padding:"13px 28px", fontWeight:800, fontSize:14, cursor:"pointer"}}>
-                      🧠 Generate My First Insight
-                    </button>
-                  </Card>
-                )}
+
+                      {/* Step 1 */}
+                      {(() => { const s = stepIcon(hasEmployees, !hasEmployees); return (
+                        <div style={{display:"flex", alignItems:"flex-start", gap:14, padding:"16px 0", borderBottom:`1px solid ${T.border}`}}>
+                          <div style={{width:34, height:34, borderRadius:"50%", background:s.bg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, color:s.color, fontWeight:800, flexShrink:0, marginTop:1}}>{s.symbol}</div>
+                          <div style={{flex:1}}>
+                            <div style={{fontWeight:700, fontSize:14, color:hasEmployees ? T.text : T.sub, marginBottom:3}}>Employees added</div>
+                            <div style={{fontSize:12, color:T.sub, lineHeight:1.5}}>{hasEmployees ? `${employees.length} team member${employees.length !== 1 ? "s" : ""} on your roster with roles and hourly rates.` : "Add your team in Settings → Team Roster so ShiftWise can calculate labor cost."}</div>
+                            {hasEmployees && <span style={{display:"inline-block", marginTop:5, fontSize:11, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#E8F5E9", color:"#2D6A4F"}}>Done</span>}
+                            {!hasEmployees && <button onClick={()=>setTab("settings")} style={{marginTop:8, background:"transparent", border:`1px solid ${T.border}`, borderRadius:8, padding:"5px 12px", fontSize:12, color:T.text, cursor:"pointer", fontWeight:600}}>Go to Settings →</button>}
+                          </div>
+                        </div>
+                      ); })()}
+
+                      {/* Step 2 */}
+                      {(() => { const s = stepIcon(hasShifts, hasEmployees && !hasShifts); return (
+                        <div style={{display:"flex", alignItems:"flex-start", gap:14, padding:"16px 0", borderBottom:`1px solid ${T.border}`}}>
+                          <div style={{width:34, height:34, borderRadius:"50%", background:s.bg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, color:s.color, fontWeight:800, flexShrink:0, marginTop:1}}>{s.symbol}</div>
+                          <div style={{flex:1}}>
+                            <div style={{fontWeight:700, fontSize:14, color:hasShifts ? T.text : hasEmployees ? T.text : T.sub, marginBottom:3}}>Build your first week of shifts</div>
+                            <div style={{fontSize:12, color:T.sub, lineHeight:1.5}}>Head to the Schedule tab and assign shifts to your team. ShiftWise needs at least one scheduled week to generate your Pulse.</div>
+                            {hasShifts && <span style={{display:"inline-block", marginTop:5, fontSize:11, fontWeight:700, padding:"2px 8px", borderRadius:20, background:"#E8F5E9", color:"#2D6A4F"}}>Done</span>}
+                            {hasEmployees && !hasShifts && <button onClick={()=>setTab("grid")} style={{marginTop:8, background:"transparent", border:`1px solid ${T.border}`, borderRadius:8, padding:"5px 12px", fontSize:12, color:T.text, cursor:"pointer", fontWeight:600}}>Go to Schedule →</button>}
+                          </div>
+                        </div>
+                      ); })()}
+
+                      {/* Step 3 */}
+                      {(() => { const s = stepIcon(false, hasShifts); return (
+                        <div style={{display:"flex", alignItems:"flex-start", gap:14, padding:"16px 0 0"}}>
+                          <div style={{width:34, height:34, borderRadius:"50%", background:s.bg, display:"flex", alignItems:"center", justifyContent:"center", fontSize:15, color:s.color, fontWeight:800, flexShrink:0, marginTop:1}}>{s.symbol}</div>
+                          <div style={{flex:1}}>
+                            <div style={{fontWeight:700, fontSize:14, color:hasShifts ? T.text : T.sub, marginBottom:3}}>Come back and generate your Pulse</div>
+                            <div style={{fontSize:12, color:T.sub, lineHeight:1.5}}>Once you have shifts scheduled, hit "Generate insights" above. Your first Weekly Pulse will analyze labor cost, coverage gaps, and attendance — in plain English.</div>
+                          </div>
+                        </div>
+                      ); })()}
+
+                    </Card>
+                  );
+                })()}
 
                 {/* INSIGHT RESULTS */}
                 {!insightLoading && insight && (
