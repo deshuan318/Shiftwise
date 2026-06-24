@@ -859,6 +859,142 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
 }
 // ── END SetupFlow ────────────────────────────────────────────────────────────
 
+
+// ── FeedbackTab component ─────────────────────────────────────────────────────
+function FeedbackTab({ bizId, T, Card, showToast, addAudit, getSession, dbPost }) {
+  const FEEDBACK_AREAS = [
+    "Schedule","Timesheet","Kiosk / Clock-In","Coverage",
+    "Business Insights","Dashboard","Team Feed","Settings",
+    "Onboarding","Wins / Recognition","General / Other"
+  ];
+  const FEEDBACK_TYPES = [
+    {k:"bug",     l:"🐛 Bug",             d:"Something isn't working correctly"},
+    {k:"feature", l:"✨ Feature Request",  d:"An idea for something new"},
+    {k:"general", l:"💬 General Feedback", d:"Thoughts, suggestions, impressions"},
+  ];
+
+  const [fbArea,    setFbArea]    = useState(FEEDBACK_AREAS[10]);
+  const [fbType,    setFbType]    = useState("general");
+  const [fbMessage, setFbMessage] = useState("");
+  const [fbSaving,  setFbSaving]  = useState(false);
+  const [fbSent,    setFbSent]    = useState(false);
+
+  async function submitFeedback() {
+    if (!fbMessage.trim()) { showToast("Write something before submitting"); return; }
+    setFbSaving(true);
+    try {
+      await dbPost("feedback", {
+        business_id: bizId,
+        owner_id:    getSession()?.user?.id || null,
+        area:        fbArea,
+        type:        fbType,
+        message:     fbMessage.trim(),
+      });
+      setFbSent(true);
+      setFbMessage("");
+      addAudit("Feedback Submitted", `${fbType} · ${fbArea}`);
+    } catch(e) {
+      showToast("Could not submit: " + e.message, 5000);
+    } finally {
+      setFbSaving(false);
+    }
+  }
+
+  return (
+    <div style={{maxWidth:640, margin:"0 auto", paddingBottom:20}}>
+      <div style={{marginBottom:20}}>
+        <h2 style={{margin:"0 0 4px", fontSize:20, fontWeight:800, color:T.text}}>Feedback</h2>
+        <p style={{margin:0, fontSize:12, color:T.sub, lineHeight:1.5}}>Help shape ShiftWise — report bugs, suggest features, or share what's on your mind.</p>
+      </div>
+
+      {fbSent ? (
+        <Card T={T} style={{padding:"40px 32px", textAlign:"center"}}>
+          <div style={{fontSize:48, marginBottom:16}}>✅</div>
+          <div style={{fontWeight:800, fontSize:18, color:T.text, marginBottom:8}}>Thanks for the feedback!</div>
+          <p style={{margin:"0 0 24px", fontSize:13, color:T.sub, lineHeight:1.6}}>
+            Your message was received. We read everything — it directly shapes what gets built next.
+          </p>
+          <button onClick={()=>setFbSent(false)}
+            style={{background:T.accent, color:"white", border:"none", borderRadius:10, padding:"11px 28px", fontWeight:700, fontSize:13, cursor:"pointer"}}>
+            Send More Feedback
+          </button>
+        </Card>
+      ) : (
+        <Card T={T} style={{padding:"20px 22px", display:"flex", flexDirection:"column", gap:16}}>
+
+          {/* Area */}
+          <div>
+            <label style={{fontSize:11, fontWeight:700, color:T.sub, display:"block", marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em"}}>Area</label>
+            <select value={fbArea} onChange={e=>setFbArea(e.target.value)}
+              style={{width:"100%", border:`1.5px solid ${T.border}`, borderRadius:9, padding:"10px 12px", fontSize:14, fontWeight:600, outline:"none", background:T.surface, color:T.text, cursor:"pointer"}}>
+              {FEEDBACK_AREAS.map(a=><option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+
+          {/* Type */}
+          <div>
+            <label style={{fontSize:11, fontWeight:700, color:T.sub, display:"block", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.06em"}}>Type</label>
+            <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+              {FEEDBACK_TYPES.map(t=>(
+                <button key={t.k} onClick={()=>setFbType(t.k)}
+                  title={t.d}
+                  style={{
+                    background: fbType===t.k ? T.accent : T.muted,
+                    color: fbType===t.k ? "white" : T.sub,
+                    border: `1.5px solid ${fbType===t.k ? T.accent : T.border}`,
+                    borderRadius:9, padding:"8px 16px", fontWeight:700, fontSize:12,
+                    cursor:"pointer", transition:"all 0.15s"
+                  }}>
+                  {t.l}
+                </button>
+              ))}
+            </div>
+            <div style={{fontSize:11, color:T.sub, marginTop:6}}>
+              {FEEDBACK_TYPES.find(t=>t.k===fbType)?.d}
+            </div>
+          </div>
+
+          {/* Message */}
+          <div>
+            <label style={{fontSize:11, fontWeight:700, color:T.sub, display:"block", marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em"}}>Message</label>
+            <textarea
+              value={fbMessage}
+              onChange={e=>setFbMessage(e.target.value)}
+              rows={5}
+              placeholder={
+                fbType==="bug"
+                  ? "Describe what happened, what you expected, and how to reproduce it..."
+                  : fbType==="feature"
+                  ? "Describe the feature, what problem it solves, and how you'd use it..."
+                  : "Share your thoughts..."
+              }
+              style={{width:"100%", border:`1.5px solid ${fbMessage.trim()?T.accent:T.border}`, borderRadius:9, padding:"12px 14px", fontSize:13, outline:"none", resize:"vertical", fontFamily:"inherit", color:T.text, background:T.surface, lineHeight:1.6, transition:"border 0.15s", boxSizing:"border-box"}}
+            />
+            <div style={{fontSize:10, color:T.sub, marginTop:4, textAlign:"right"}}>{fbMessage.length} characters</div>
+          </div>
+
+          {/* Submit */}
+          <button onClick={submitFeedback} disabled={fbSaving || !fbMessage.trim()}
+            style={{
+              background: fbMessage.trim() ? T.accent : T.muted,
+              color: fbMessage.trim() ? "white" : T.sub,
+              border:"none", borderRadius:10, padding:"13px 0",
+              fontWeight:800, fontSize:14, cursor: fbMessage.trim() ? "pointer" : "not-allowed",
+              transition:"all 0.15s"
+            }}>
+            {fbSaving ? "Sending…" : "Send Feedback →"}
+          </button>
+
+          <div style={{fontSize:11, color:T.sub, textAlign:"center", lineHeight:1.6, paddingTop:4, borderTop:`1px solid ${T.border}`}}>
+            Feedback goes directly to the ShiftWise team. We read every submission.
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 export default function App() {
   const defaultSun = useMemo(() => getSunday(new Date().toISOString().split("T")[0]), []);
 
@@ -6662,141 +6798,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         )}
 
         {/* FEEDBACK TAB */}
-        {tab==="feedback" && (()=>{
-          const FEEDBACK_AREAS = [
-            "Schedule","Timesheet","Kiosk / Clock-In","Coverage",
-            "Business Insights","Dashboard","Team Feed","Settings",
-            "Onboarding","Wins / Recognition","General / Other"
-          ];
-          const FEEDBACK_TYPES = [
-            {k:"bug",     l:"🐛 Bug",             d:"Something isn't working correctly"},
-            {k:"feature", l:"✨ Feature Request",  d:"An idea for something new"},
-            {k:"general", l:"💬 General Feedback", d:"Thoughts, suggestions, impressions"},
-          ];
+        {tab==="feedback" && <FeedbackTab bizId={bizId} T={T} Card={Card} showToast={showToast} addAudit={addAudit} getSession={getSession} dbPost={dbPost}/>}
 
-          const [fbArea,    setFbArea]    = useState(FEEDBACK_AREAS[10]);
-          const [fbType,    setFbType]    = useState("general");
-          const [fbMessage, setFbMessage] = useState("");
-          const [fbSaving,  setFbSaving]  = useState(false);
-          const [fbSent,    setFbSent]    = useState(false);
-
-          async function submitFeedback() {
-            if (!fbMessage.trim()) { showToast("Write something before submitting"); return; }
-            setFbSaving(true);
-            try {
-              await dbPost("feedback", {
-                business_id: bizId,
-                owner_id:    getSession()?.user?.id || null,
-                area:        fbArea,
-                type:        fbType,
-                message:     fbMessage.trim(),
-              });
-              setFbSent(true);
-              setFbMessage("");
-              addAudit("Feedback Submitted", `${fbType} · ${fbArea}`);
-            } catch(e) {
-              showToast("Could not submit: " + e.message, 5000);
-            } finally {
-              setFbSaving(false);
-            }
-          }
-
-          return (
-            <div style={{maxWidth:640, margin:"0 auto", paddingBottom:20}}>
-              <div style={{marginBottom:20}}>
-                <h2 style={{margin:"0 0 4px", fontSize:20, fontWeight:800, color:T.text}}>Feedback</h2>
-                <p style={{margin:0, fontSize:12, color:T.sub, lineHeight:1.5}}>Help shape ShiftWise — report bugs, suggest features, or share what's on your mind.</p>
-              </div>
-
-              {fbSent ? (
-                <Card T={T} style={{padding:"40px 32px", textAlign:"center"}}>
-                  <div style={{fontSize:48, marginBottom:16}}>✅</div>
-                  <div style={{fontWeight:800, fontSize:18, color:T.text, marginBottom:8}}>Thanks for the feedback!</div>
-                  <p style={{margin:"0 0 24px", fontSize:13, color:T.sub, lineHeight:1.6}}>
-                    Your message was received. We read everything — it directly shapes what gets built next.
-                  </p>
-                  <button onClick={()=>setFbSent(false)}
-                    style={{background:T.accent, color:"white", border:"none", borderRadius:10, padding:"11px 28px", fontWeight:700, fontSize:13, cursor:"pointer"}}>
-                    Send More Feedback
-                  </button>
-                </Card>
-              ) : (
-                <Card T={T} style={{padding:"20px 22px", display:"flex", flexDirection:"column", gap:16}}>
-
-                  {/* Area dropdown */}
-                  <div>
-                    <label style={{fontSize:11, fontWeight:700, color:T.sub, display:"block", marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em"}}>Area</label>
-                    <select value={fbArea} onChange={e=>setFbArea(e.target.value)}
-                      style={{width:"100%", border:`1.5px solid ${T.border}`, borderRadius:9, padding:"10px 12px", fontSize:14, fontWeight:600, outline:"none", background:T.surface, color:T.text, cursor:"pointer"}}>
-                      {FEEDBACK_AREAS.map(a=><option key={a} value={a}>{a}</option>)}
-                    </select>
-                  </div>
-
-                  {/* Type selector */}
-                  <div>
-                    <label style={{fontSize:11, fontWeight:700, color:T.sub, display:"block", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.06em"}}>Type</label>
-                    <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
-                      {FEEDBACK_TYPES.map(t=>(
-                        <button key={t.k} onClick={()=>setFbType(t.k)}
-                          title={t.d}
-                          style={{
-                            background: fbType===t.k ? T.accent : T.muted,
-                            color: fbType===t.k ? "white" : T.sub,
-                            border: `1.5px solid ${fbType===t.k ? T.accent : T.border}`,
-                            borderRadius:9, padding:"8px 16px", fontWeight:700, fontSize:12,
-                            cursor:"pointer", transition:"all 0.15s"
-                          }}>
-                          {t.l}
-                        </button>
-                      ))}
-                    </div>
-                    <div style={{fontSize:11, color:T.sub, marginTop:6}}>
-                      {FEEDBACK_TYPES.find(t=>t.k===fbType)?.d}
-                    </div>
-                  </div>
-
-                  {/* Message */}
-                  <div>
-                    <label style={{fontSize:11, fontWeight:700, color:T.sub, display:"block", marginBottom:6, textTransform:"uppercase", letterSpacing:"0.06em"}}>Message</label>
-                    <textarea
-                      value={fbMessage}
-                      onChange={e=>setFbMessage(e.target.value)}
-                      rows={5}
-                      placeholder={
-                        fbType==="bug"
-                          ? "Describe what happened, what you expected, and how to reproduce it..."
-                          : fbType==="feature"
-                          ? "Describe the feature, what problem it solves, and how you'd use it..."
-                          : "Share your thoughts..."
-                      }
-                      style={{width:"100%", border:`1.5px solid ${fbMessage.trim()?T.accent:T.border}`, borderRadius:9, padding:"12px 14px", fontSize:13, outline:"none", resize:"vertical", fontFamily:"inherit", color:T.text, background:T.surface, lineHeight:1.6, transition:"border 0.15s", boxSizing:"border-box"}}
-                    />
-                    <div style={{fontSize:10, color:T.sub, marginTop:4, textAlign:"right"}}>{fbMessage.length} characters</div>
-                  </div>
-
-                  {/* Submit */}
-                  <button onClick={submitFeedback} disabled={fbSaving || !fbMessage.trim()}
-                    style={{
-                      background: fbMessage.trim() ? T.accent : T.muted,
-                      color: fbMessage.trim() ? "white" : T.sub,
-                      border:"none", borderRadius:10, padding:"13px 0",
-                      fontWeight:800, fontSize:14, cursor: fbMessage.trim() ? "pointer" : "not-allowed",
-                      transition:"all 0.15s"
-                    }}>
-                    {fbSaving ? "Sending…" : "Send Feedback →"}
-                  </button>
-
-                  {/* Footer note */}
-                  <div style={{fontSize:11, color:T.sub, textAlign:"center", lineHeight:1.6, paddingTop:4, borderTop:`1px solid ${T.border}`}}>
-                    Feedback goes directly to the ShiftWise team. We read every submission.
-                  </div>
-                </Card>
-              )}
-            </div>
-          );
-        })()}
-
-        <TimePickerModal/>
+                <TimePickerModal/>
 
         {/* MOBILE BOTTOM NAV */}
         <nav className="bottom-nav">
