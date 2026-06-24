@@ -3776,7 +3776,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       <div style={{width:26,height:26,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:10,flexShrink:0}}>{emp.name?emp.name[0].toUpperCase():"?"}</div>
                       <div>
                         <div style={{fontWeight:700,fontSize:12,color:T.text}}>{emp.name||"New"}</div>
-                        <div style={{fontSize:9,color:T.sub}}>${emp.hourlyRate||0}/hr</div>
+
                       </div>
                     </div>
                   </td>
