@@ -109,14 +109,14 @@ const CSS = `
   input{font-family:'DM Mono',monospace;}
   button{font-family:'DM Sans',system-ui,sans-serif;-webkit-tap-highlight-color:transparent;cursor:pointer;}
   @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-  @keyframes ticker{0%{transform:translateX(100vw)}100%{transform:translateX(-100%)}}
+  @keyframes ticker{0%{transform:translate3d(0,0,0)}100%{transform:translate3d(-50%,0,0)}}
   @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes blink{0%,100%{border-color:#2D6A4F}50%{border-color:#21262D}}
   @keyframes progress{from{width:100%}to{width:0%}}
   .fade-in{animation:fadeIn 0.3s ease both;}
   .spin{animation:spin 1s linear infinite;}
   .ticker-outer{overflow:hidden;width:100%;}
-  .ticker-track{display:inline-flex;gap:48px;white-space:nowrap;animation:ticker 28s linear infinite;}
+  .ticker-track{display:inline-flex;gap:64px;white-space:nowrap;animation:ticker 30s linear infinite;will-change:transform;backface-visibility:hidden;-webkit-backface-visibility:hidden;}
   .ticker-track:hover{animation-play-state:paused;}
   .pin-input{width:100%;height:72px;background:#161B22;border:2px solid #21262D;border-radius:14px;color:white;font-size:32px;font-family:'DM Mono',monospace;font-weight:500;letter-spacing:0.3em;text-align:center;outline:none;transition:border-color 0.15s;animation:blink 1.2s ease-in-out infinite;}
   .pin-input:focus{border-color:#2D6A4F;animation:none;}
@@ -146,19 +146,21 @@ function LiveClock() {
 
 function RecTicker({ items }) {
   if (!items || items.length===0) return null;
-  const doubled = [...items,...items];
+  // Duplicate for seamless infinite loop — animation moves -50% so both halves cycle
+  const looped = [...items, ...items];
+  const Item = ({r,i}) => (
+    <span key={i} style={{color:"#8B949E",fontSize:13,fontWeight:500,display:"inline-flex",alignItems:"center",gap:8,flexShrink:0}}>
+      <span style={{fontSize:16}}>{r.emoji}</span>
+      <span style={{color:"#E6EDF3",fontWeight:600}}>{r.fromName}</span>
+      {r.toName&&<><span style={{color:"#2D6A4F"}}>→</span><span style={{color:"#E6EDF3",fontWeight:600}}>{r.toName}</span></>}
+      <span style={{color:"#8B949E"}}>{r.message}</span>
+      <span style={{color:"#21262D",marginLeft:16,fontSize:16}}>✦</span>
+    </span>
+  );
   return (
-    <div className="ticker-outer" style={{borderTop:"1px solid #21262D",padding:"10px 0",background:"#0D1117"}}>
+    <div className="ticker-outer" style={{borderTop:"1px solid #21262D",padding:"12px 0",background:"#0D1117"}}>
       <div className="ticker-track">
-        {doubled.map((r,i)=>(
-          <span key={i} style={{color:"#8B949E",fontSize:13,fontWeight:500,display:"inline-flex",alignItems:"center",gap:8}}>
-            <span style={{fontSize:16}}>{r.emoji}</span>
-            <span style={{color:"#E6EDF3"}}>{r.fromName}</span>
-            {r.toName&&<><span style={{color:"#2D6A4F"}}>→</span><span style={{color:"#E6EDF3"}}>{r.toName}</span></>}
-            <span>{r.message}</span>
-            <span style={{color:"#21262D",marginLeft:8}}>·</span>
-          </span>
-        ))}
+        {looped.map((r,i)=><Item key={i} r={r} i={i}/>)}
       </div>
     </div>
   );
