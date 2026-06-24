@@ -3145,7 +3145,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     {key:"coverage",    icon:"🚨", label:"Coverage"},
     {key:"insights",    icon:"🧠", label:"Insights"},
     {key:"dashboard",   icon:"💵", label:"Dashboard"},
-    {key:"recognition", icon:"⭐", label:"Team"},
     {key:"settings",    icon:"⚙️", label:"Settings"},
     {key:"feedback",    icon:"💬", label:"Feedback"},
   ];
@@ -5657,121 +5656,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           })()}
 
           {/* TEAM / RECOGNITION */}
-          {tab==="recognition" && (()=>{
-            const EMOJIS = ["⭐","🙌","🔥","💪","👏","🎉","💯","❤️","🏆","✨"];
-            const REC_TYPES = [
-              { id:"shoutout",  label:"Shoutout",  desc:"Recognize great work",      color:"#F9C74F" },
-              { id:"hype",      label:"Shift Hype", desc:"Get the team fired up",    color:"#4CC9F0" },
-              { id:"milestone", label:"Milestone",  desc:"Celebrate an achievement", color:"#E8623A" },
-            ];
 
-            async function postRecognition() {
-              if (!recMsg.trim()) return;
-              const toEmp = employees.find(e=>e.id===recTo);
-              const entry = { id:Date.now().toString(), at:new Date().toISOString(), type:recType, emoji:recEmoji, message:recMsg.trim(), fromName:recFrom||"Owner", toName:toEmp?.name||null, toId:recTo||null };
-              setRecognition(p=>[entry,...p].slice(0,200));
-              addAudit("Recognition Posted", (entry.fromName) + " → " + (entry.toName||"Team") + ": " + entry.message.slice(0,60));
-              setRecMsg(""); setRecTo(""); setRecEmoji("⭐"); setRecType("shoutout");
-              // Write to Supabase
-              if (bizId) {
-                dbPost("recognition", { business_id:bizId, from_name:entry.fromName, to_id:recTo||null, to_name:entry.toName||null, rec_type:recType, emoji:recEmoji, message:entry.message })
-                  .catch(e => console.warn("Recognition write failed:", e));
-              }
-            }
 
-            const typeInfo = REC_TYPES.find(t=>t.id===recType);
-
-            return (
-              <div style={{maxWidth:900,margin:"0 auto",paddingBottom:20}}>
-                <div style={{marginBottom:20}}>
-                  <h2 style={{margin:"0 0 4px",fontSize:20,fontWeight:800,color:T.text}}>Team Feed</h2>
-                  <p style={{margin:0,fontSize:12,color:T.sub}}>Recognize great work, hype an upcoming shift, celebrate milestones.</p>
-                </div>
-                <Card T={T} style={{padding:"18px 20px",marginBottom:20}}>
-                  <div style={{display:"flex",gap:8,marginBottom:14,flexWrap:"wrap"}}>
-                    {REC_TYPES.map(rt=>(
-                      <button key={rt.id} onClick={()=>setRecType(rt.id)} style={{background:recType===rt.id?rt.color:T.muted,color:recType===rt.id?"white":T.sub,border:"none",borderRadius:8,padding:"6px 14px",fontWeight:700,fontSize:12,cursor:"pointer",transition:"all 0.15s"}}>{rt.label}</button>
-                    ))}
-                  </div>
-                  <div style={{display:"flex",gap:10,marginBottom:12,alignItems:"flex-start"}}>
-                    <div style={{position:"relative",flexShrink:0}}>
-                      <button onClick={()=>{ const idx=EMOJIS.indexOf(recEmoji); setRecEmoji(EMOJIS[(idx+1)%EMOJIS.length]); }} style={{width:44,height:44,borderRadius:10,background:typeInfo.color+"22",border:`1.5px solid ${typeInfo.color}44`,fontSize:22,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",transition:"all 0.15s"}}>{recEmoji}</button>
-                      <div style={{fontSize:8,color:T.sub,textAlign:"center",marginTop:2}}>tap to cycle</div>
-                    </div>
-                    <textarea value={recMsg} onChange={e=>setRecMsg(e.target.value)} rows={3}
-                      placeholder={recType==="shoutout"?"Write a shoutout...":recType==="hype"?"Hype up the team...":"Celebrate a milestone..."}
-                      style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:10,padding:"10px 12px",fontSize:13,outline:"none",resize:"none",fontFamily:"inherit",color:T.text,background:T.surface}}/>
-                  </div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
-                    <div>
-                      <label style={{fontSize:10,color:T.sub,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>From</label>
-                      <input value={recFrom} onChange={e=>setRecFrom(e.target.value)} placeholder="Your name" style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none",background:T.surface}}/>
-                    </div>
-                    <div>
-                      <label style={{fontSize:10,color:T.sub,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>To</label>
-                      <select value={recTo} onChange={e=>setRecTo(e.target.value)} style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none",background:T.surface,color:T.text}}>
-                        <option value="">Whole Team</option>
-                        {employees.map(e=><option key={e.id} value={e.id}>{e.name}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                  <button onClick={postRecognition} disabled={!recMsg.trim()}
-                    style={{width:"100%",background:recMsg.trim()?typeInfo.color:"#DDD",color:recMsg.trim()?"white":"#aaa",border:"none",borderRadius:10,padding:"12px 0",fontWeight:800,fontSize:14,cursor:recMsg.trim()?"pointer":"not-allowed",transition:"all 0.15s"}}>
-                    Post {typeInfo.label}
-                  </button>
-                </Card>
-                {recognition.length===0&&(
-                  <Card T={T} style={{padding:"40px 24px",textAlign:"center",border:`2px dashed ${T.border}`}}>
-                    <div style={{fontSize:40,marginBottom:12}}>⭐</div>
-                    <div style={{fontWeight:700,fontSize:15,marginBottom:6,color:T.sub}}>No posts yet</div>
-                    <div style={{fontSize:12,color:T.sub}}>Post a shoutout, shift hype, or milestone above to start the team feed.</div>
-                  </Card>
-                )}
-                <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                  {recognition.map((r,i)=>{
-                    const typeColor = REC_TYPES.find(t=>t.id===r.type)?.color || T.accent;
-                    const pd = new Date(r.at);
-                    const timeAgo = (()=>{ const mins=Math.floor((Date.now()-pd)/60000); if(mins<1)return "just now"; if(mins<60)return `${mins}m ago`; const hrs=Math.floor(mins/60); if(hrs<24)return `${hrs}h ago`; return pd.toLocaleDateString("en-US",{month:"short",day:"numeric"}); })();
-                    return (
-                      <Card key={r.id} T={T} style={{padding:0,overflow:"hidden"}}>
-                        <div style={{height:4,background:typeColor}}/>
-                        <div style={{padding:"14px 16px"}}>
-                          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                            <div style={{display:"flex",alignItems:"center",gap:10}}>
-                              <div style={{width:38,height:38,borderRadius:"50%",background:typeColor+"22",border:`1.5px solid ${typeColor}44`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{r.emoji||"⭐"}</div>
-                              <div>
-                                <div style={{fontWeight:700,fontSize:13,color:T.text}}>
-                                  {r.fromName}
-                                  {r.toName&&<><span style={{color:T.sub,fontWeight:400}}> → </span><span style={{color:typeColor}}>{r.toName}</span></>}
-                                  {!r.toName&&<><span style={{color:T.sub,fontWeight:400}}> → </span><span style={{color:typeColor}}>Whole Team</span></>}
-                                </div>
-                                <div style={{fontSize:10,color:T.sub,marginTop:1,display:"flex",alignItems:"center",gap:6}}>
-                                  <span style={{background:typeColor+"22",color:typeColor,borderRadius:4,padding:"1px 6px",fontSize:9,fontWeight:700}}>{(r.type||"shoutout").toUpperCase()}</span>
-                                  <span>{timeAgo}</span>
-                                </div>
-                              </div>
-                            </div>
-                            <button onClick={()=>{ if(window.confirm("Delete this post?")) { setRecognition(p=>p.filter(e=>e.id!==r.id)); if(bizId) dbDelete(`recognition?id=eq.${r.id}`).catch(()=>{}); }; }}
-                              style={{background:"transparent",color:T.sub,border:"none",fontSize:18,cursor:"pointer",opacity:0.4,padding:"4px 6px"}}>×</button>
-                          </div>
-                          <div style={{fontSize:14,color:T.text,lineHeight:1.6,paddingLeft:48}}>{r.message}</div>
-                        </div>
-                      </Card>
-                    );
-                  })}
-                </div>
-                {recognition.length>0&&(
-                  <div style={{marginTop:16,textAlign:"center"}}>
-                    <button onClick={()=>{ if(window.confirm("Clear all recognition posts?")) { setRecognition([]); if(bizId) dbDelete(`recognition?business_id=eq.${bizId}`).catch(()=>{}); }; }}
-                      style={{background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 14px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                      Clear All Posts
-                    </button>
-                  </div>
-                )}
-              </div>
-            );
-          })()}
-
+          {/* SETTINGS */}
 
 
           {/* SETTINGS */}
