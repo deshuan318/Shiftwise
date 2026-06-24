@@ -2934,55 +2934,59 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               function openPanel() { setDraft(d=>({...d, _openPanel: field})); }
               function closePanel() { setDraft(d=>({...d, _openPanel: null})); }
 
-              function handleHrChange(e) {
-                const v = e.target.value.replace(/\D/g,"").slice(0,2);
-                if (v === "") return;
-                let n = parseInt(v); if (n > 12) n = 12;
-                setHrTP(n);
-              }
-              function handleMinChange(e) {
-                const v = e.target.value.replace(/\D/g,"").slice(0,2);
-                if (v === "") return;
-                let n = parseInt(v); if (n > 59) n = 59;
-                setMinTP(n);
-              }
-              function handleMinBlur() {
-                const m = getMinTP(draft[field]);
-                if (m == null) return;
-                const snapped = [0,15,30,45].reduce((a,b) => Math.abs(b-m) < Math.abs(a-m) ? b : a);
-                setMinTP(snapped);
-              }
-              function handleHrKeyDown(e) {
-                if (e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) {
-                  e.preventDefault();
-                  document.getElementById(`tp-min-${field}`)?.focus();
-                }
-              }
-              function handleMinKeyDown(e) {
-                if (e.key === "Enter") { e.preventDefault(); closePanel(); }
-              }
-
               return (
                 <div key={field} style={{position:"relative"}}>
                   <label style={{fontSize:11,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>{lbl}</label>
 
-                  <div onClick={openPanel} style={{
+                  <div style={{
                     display:"flex",alignItems:"center",
                     border:`2px solid ${isOpen||filled?emp.color:T.border}`,borderRadius:999,
                     background:T.surface,transition:"border-color 0.15s",padding:"4px 6px"
                   }}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:1}}>
-                      <input id={`tp-hr-${field}`} inputMode="numeric" placeholder="9" value={hr ?? ""}
-                        onChange={handleHrChange} onFocus={openPanel} onKeyDown={handleHrKeyDown}
+                      <input id={`tp-hr-${field}`} inputMode="numeric" placeholder="9"
+                        defaultValue={hr ?? ""}
+                        key={`hr-${field}-${val}`}
+                        onFocus={e=>{ openPanel(); e.target.select(); }}
                         onClick={e=>e.stopPropagation()}
+                        onChange={e=>{
+                          const v = e.target.value.replace(/\D/g,"").slice(0,2);
+                          if (!v) return;
+                          let n = parseInt(v); if (n > 12) n = 12;
+                          setHrTP(n);
+                        }}
+                        onKeyDown={e=>{
+                          if (e.key === "Enter" || (e.key === "Tab" && !e.shiftKey)) {
+                            e.preventDefault();
+                            document.getElementById(`tp-min-${field}`)?.focus();
+                          }
+                        }}
                         style={{width:22,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
                       <span style={{fontSize:17,fontWeight:800,color:T.sub}}>:</span>
-                      <input id={`tp-min-${field}`} inputMode="numeric" placeholder="00" value={min!=null?String(min).padStart(2,"0"):""}
-                        onChange={handleMinChange} onFocus={openPanel} onKeyDown={handleMinKeyDown}
-                        onClick={e=>e.stopPropagation()} onBlur={handleMinBlur}
+                      <input id={`tp-min-${field}`} inputMode="numeric" placeholder="00"
+                        defaultValue={min!=null?String(min).padStart(2,"0"):""}
+                        key={`min-${field}-${val}`}
+                        onFocus={e=>{ openPanel(); e.target.select(); }}
+                        onClick={e=>e.stopPropagation()}
+                        onChange={e=>{
+                          const v = e.target.value.replace(/\D/g,"").slice(0,2);
+                          if (!v) return;
+                          let n = parseInt(v); if (n > 59) n = 59;
+                          setMinTP(n);
+                        }}
+                        onBlur={e=>{
+                          const v = e.target.value.replace(/\D/g,"");
+                          if (!v) return;
+                          let n = parseInt(v); if (n > 59) n = 59;
+                          const snapped = [0,15,30,45].reduce((a,b)=>Math.abs(b-n)<Math.abs(a-n)?b:a);
+                          setMinTP(snapped);
+                        }}
+                        onKeyDown={e=>{
+                          if (e.key === "Enter") { e.preventDefault(); e.target.blur(); closePanel(); }
+                        }}
                         style={{width:30,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}/>
                     </div>
-                    <button type="button" onClick={()=>setApTP(ap==="AM"?"PM":"AM")}
+                    <button type="button" onClick={e=>{ e.stopPropagation(); setApTP(ap==="AM"?"PM":"AM"); }}
                       style={{
                         border:"none",borderRadius:999,
                         background:ap?emp.color:T.muted,color:ap?"white":T.sub,
