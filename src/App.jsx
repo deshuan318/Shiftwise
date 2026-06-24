@@ -2938,12 +2938,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         key={`hr-${field}-${val}`}
                         onFocus={e=>e.target.select()}
                         onChange={e=>{
-                          const v=e.target.value.replace(/\D/g,"").slice(0,2);
+                          const v=e.target.value.replace(/[^0-9]/g,"").slice(0,2);
+                          e.target.value=v;
                           if(!v) return;
                           let n=parseInt(v); if(n>12) n=12;
-                          const curMin=getMin(draft[field])||"00";
+                          const curMin=parseInt(getMin(draft[field])||"0");
                           const curAp=getAp(draft[field],fallbackAP);
-                          setDraft(d=>({...d,[field]:build(n,parseInt(curMin),curAp)}));
+                          setDraft(d=>({...d,[field]:build(n,curMin,curAp)}));
                         }}
                         onKeyDown={e=>{
                           if(e.key==="Enter"||(e.key==="Tab"&&!e.shiftKey)){e.preventDefault();document.getElementById(`tp-min-${field}`)?.focus();}
@@ -2958,15 +2959,18 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         defaultValue={getMin(val)}
                         key={`min-${field}-${val}`}
                         onFocus={e=>e.target.select()}
+                        onChange={e=>{
+                          const v=e.target.value.replace(/[^0-9]/g,"").slice(0,2);
+                          e.target.value=v;
+                        }}
                         onBlur={e=>{
-                          const v=e.target.value.replace(/\D/g,"");
+                          const v=e.target.value.replace(/[^0-9]/g,"");
                           if(!v) return;
                           let n=parseInt(v); if(n>59) n=59;
-                          const snapped=[0,15,30,45].reduce((a,b)=>Math.abs(b-n)<Math.abs(a-n)?b:a);
-                          const curHr=parseInt(getHr(draft[field])||9);
+                          e.target.value=String(n).padStart(2,"0");
+                          const curHr=parseInt(getHr(draft[field])||"9");
                           const curAp=getAp(draft[field],fallbackAP);
-                          e.target.value=String(snapped).padStart(2,"0");
-                          setDraft(d=>({...d,[field]:build(curHr,snapped,curAp)}));
+                          setDraft(d=>({...d,[field]:build(curHr,n,curAp)}));
                         }}
                         onKeyDown={e=>{
                           if(e.key==="Enter"){e.preventDefault();e.target.blur();}
@@ -2974,7 +2978,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         style={{width:34,border:"none",outline:"none",fontSize:17,fontWeight:800,color:T.text,background:"transparent",textAlign:"center",padding:"9px 0"}}
                       />
                     </div>
-                    <button type="button" onClick={e=>{e.stopPropagation();const curHr=parseInt(getHr(draft[field])||9);const curMin=parseInt(getMin(draft[field])||0);setDraft(d=>({...d,[field]:build(curHr,curMin,ap==="AM"?"PM":"AM")}));}}
+                    <button type="button"
+                      onClick={e=>{
+                        e.stopPropagation();
+                        const curHr=parseInt(getHr(draft[field])||"9");
+                        const curMin=parseInt(getMin(draft[field])||"0");
+                        const curAp=getAp(draft[field],fallbackAP);
+                        setDraft(d=>({...d,[field]:build(curHr,curMin,curAp==="AM"?"PM":"AM")}));
+                      }}
                       style={{border:"none",borderRadius:999,background:ap?emp.color:T.muted,color:ap?"white":T.sub,fontSize:12,fontWeight:800,padding:"9px 14px",cursor:"pointer",letterSpacing:"0.03em"}}>
                       {ap||fallbackAP}
                     </button>
