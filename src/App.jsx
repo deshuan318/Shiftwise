@@ -2961,10 +2961,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 <div key={field} style={{position:"relative"}}>
                   <label style={{fontSize:11,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.05em"}}>{lbl}</label>
 
-                  <div style={{
+                  <div onClick={openPanel} style={{
                     display:"flex",alignItems:"center",
                     border:`2px solid ${isOpen||filled?emp.color:T.border}`,borderRadius:999,
-                    background:T.surface,transition:"border-color 0.15s",padding:"4px 6px"
+                    background:T.surface,transition:"border-color 0.15s",padding:"4px 6px",cursor:"pointer"
                   }}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"center",flex:1}}>
                       <input id={`tp-hr-${field}`} inputMode="numeric" placeholder="9" value={hr ?? ""}
