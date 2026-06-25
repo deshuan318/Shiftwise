@@ -1,3 +1,4 @@
+// ShiftWise Kiosk — v2.1 (ticker removed)
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 const SUPABASE_URL      = "https://kyrjgfeowmflazywsuir.supabase.co";
@@ -26,10 +27,9 @@ const DATA_LAYER = {
     const bizRows = await kbFetch(`businesses?select=*&id=eq.${bizId}&limit=1`);
     const business = bizRows?.[0];
     if (!business) return null;
-    const [empRows, weekRows, recRows] = await Promise.all([
+    const [empRows, weekRows] = await Promise.all([
       kbFetch(`employees?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`),
       kbFetch(`schedule_weeks?select=*&business_id=eq.${business.id}&order=week_start.asc`),
-      kbFetch(`recognition?select=*&business_id=eq.${business.id}&order=created_at.desc&limit=20`),
     ]);
     const wkIds = (weekRows || []).map(w => w.id);
     const shiftRows = wkIds.length ? await kbFetch(`shifts?select=*&week_id=in.(${wkIds.join(",")})`) : [];
@@ -48,7 +48,6 @@ const DATA_LAYER = {
       businessId: business.id, businessName: business.name || "ShiftWise",
       employees: (empRows || []).map(e => ({ id: e.id, name: e.name, role: e.role || "", pin: e.pin || "", color: e.color || "#2D6A4F", availableDays: e.available_days || [0,1,2,3,4,5,6] })),
       schedule, weeks: (weekRows || []).map(w => w.week_start),
-      recognition: (recRows || []).map(r => ({ id: r.id, at: r.created_at, emoji: r.emoji || "⭐", message: r.message || "", fromName: r.from_name || "", toName: r.to_name || null })),
     };
   },
   async writePunch(punch, businessId) {
@@ -110,15 +109,11 @@ const CSS = `
   input{font-family:'DM Mono',monospace;}
   button{font-family:'DM Sans',system-ui,sans-serif;-webkit-tap-highlight-color:transparent;cursor:pointer;}
   @keyframes fadeIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-  @keyframes ticker{0%{transform:translate3d(0,0,0)}100%{transform:translate3d(-50%,0,0)}}
   @keyframes spin{to{transform:rotate(360deg)}}
   @keyframes blink{0%,100%{border-color:#2D6A4F}50%{border-color:#21262D}}
   @keyframes progress{from{width:100%}to{width:0%}}
   .fade-in{animation:fadeIn 0.3s ease both;}
   .spin{animation:spin 1s linear infinite;}
-  .ticker-outer{overflow:hidden;width:100%;}
-  .ticker-track{display:inline-flex;gap:48px;white-space:nowrap;animation:ticker 16s linear infinite;will-change:transform;backface-visibility:hidden;-webkit-backface-visibility:hidden;}
-  .ticker-track:hover{animation-play-state:paused;}
   .pin-input{width:100%;height:72px;background:#161B22;border:2px solid #21262D;border-radius:14px;color:white;font-size:32px;font-family:'DM Mono',monospace;font-weight:500;letter-spacing:0.3em;text-align:center;outline:none;transition:border-color 0.15s;animation:blink 1.2s ease-in-out infinite;}
   .pin-input:focus{border-color:#2D6A4F;animation:none;}
   .key-btn{width:100%;aspect-ratio:1;background:#161B22;border:1.5px solid #21262D;border-radius:16px;color:white;font-size:26px;font-weight:700;transition:all 0.08s;display:flex;align-items:center;justify-content:center;user-select:none;-webkit-user-select:none;}
@@ -145,29 +140,6 @@ function LiveClock() {
   );
 }
 
-function RecTicker({ items }) {
-  if (!items || items.length===0) return null;
-  // Duplicate for seamless infinite loop — animation moves -50% so both halves cycle
-  // Repeat enough times to fill screen width so loop never looks empty
-  const repeated = items.length < 3 ? [...items,...items,...items,...items] : [...items,...items];
-  const looped = repeated;
-  const Item = ({r,i}) => (
-    <span key={i} style={{color:"#8B949E",fontSize:13,fontWeight:500,display:"inline-flex",alignItems:"center",gap:8,flexShrink:0}}>
-      <span style={{fontSize:16}}>{r.emoji}</span>
-      <span style={{color:"#E6EDF3",fontWeight:600}}>{r.fromName}</span>
-      {r.toName&&<><span style={{color:"#2D6A4F"}}>→</span><span style={{color:"#E6EDF3",fontWeight:600}}>{r.toName}</span></>}
-      <span style={{color:"#8B949E"}}>{r.message}</span>
-      <span style={{color:"#21262D",marginLeft:16,fontSize:16}}>✦</span>
-    </span>
-  );
-  return (
-    <div className="ticker-outer" style={{borderTop:"1px solid #21262D",padding:"12px 0",background:"#0D1117"}}>
-      <div className="ticker-track">
-        {looped.map((r,i)=><Item key={i} r={r} i={i}/>)}
-      </div>
-    </div>
-  );
-}
 
 export default function ShiftWiseKiosk() {
   const [screen,          setScreen]       = useState("idle");
@@ -315,7 +287,6 @@ export default function ShiftWiseKiosk() {
           )}
         </div>
       </div>
-      <RecTicker items={bizData?.recognition}/>
     </div>
   );
 
