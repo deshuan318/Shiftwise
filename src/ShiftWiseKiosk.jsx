@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 const SUPABASE_URL      = "https://kyrjgfeowmflazywsuir.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cmpnZmVvd21mbGF6eXdzdWlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzMzMTQsImV4cCI6MjA5NTA0OTMxNH0.njuDREVF4oIgTYN6wLXKw6Hw_KsFzKPoMabkld_jy0E";
@@ -192,7 +192,7 @@ export default function ShiftWiseKiosk() {
     try {
       if (!bizId) throw new Error("No business ID in URL. Add ?bizId=YOUR_ID to the kiosk URL.");
       const data = await DATA_LAYER.getBusinessData(bizId);
-      if (!data) throw new Error("No business found. Check your bizId parameter or set up your account in the ShiftWise dashboard first.");
+      if (!data) throw new Error("No business found. Check your bizId or set up your account in ShiftWise first.");
       setBizData(data); setLoadError(null);
     } catch(e) { setLoadError(e.message); }
     finally { setLoading(false); }
