@@ -3469,7 +3469,15 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       if (p.type==="in"||p.type==="break_in") inT = new Date(p.time);
       else if (p.type==="out" && inT) { hrs += (new Date(p.time)-inT)/3600000; inT=null; }
     }
-    if (inT) hrs += (Date.now()-inT)/3600000;
+    // Only count "still on shift" for punches from TODAY — never for historical days
+    if (inT) {
+      const punchDate = toLocalDateStr(inT);
+      const todayDate = toLocalDateStr(new Date());
+      if (punchDate === todayDate) {
+        hrs += (Date.now()-inT)/3600000;
+      }
+      // Historical punch with no clock-out — count 0 extra, needs manual correction
+    }
     return parseFloat(hrs.toFixed(2));
   }
 
@@ -3645,6 +3653,19 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         };
         const inTime  = makeISO(dateStr, editIn);
         const outTime = editOut ? makeISO(dateStr, editOut) : null;
+
+        // Remove ALL existing punches for this employee/day before inserting corrected ones
+        setPunches(prev => prev.filter(px => {
+          const sameEmp = px.empId === empId;
+          const sameDay = toLocalDateStr(new Date(px.time)) === dateStr;
+          return !(sameEmp && sameDay);
+        }));
+        if (bizId) {
+          // Delete all existing punches for this employee/day from Supabase
+          const dayStart = new Date(dateStr+"T00:00:00").toISOString();
+          const dayEnd   = new Date(dateStr+"T23:59:59").toISOString();
+          await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} }).catch(e=>console.warn("punch delete failed:", e));
+        }
 
         const inPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"in", time:inTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
         setPunches(p=>[...p, inPunch]);
