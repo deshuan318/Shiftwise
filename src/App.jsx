@@ -56,7 +56,12 @@ async function sbFetch(path, opts={}) {
   });
   if (!res.ok) {
     const e = await res.json().catch(()=>({message:res.statusText}));
-    throw new Error(e.message || e.error || res.statusText);
+    const msg = e.message || e.error || res.statusText || "";
+    // Detect expired session and notify the app to sign out
+    if (res.status === 401 || (res.status === 403 && /jwt|token|expired|invalid/i.test(msg))) {
+      window.dispatchEvent(new CustomEvent("sw:session-expired"));
+    }
+    throw new Error(msg);
   }
   const text = await res.text();
   return text ? JSON.parse(text) : null;
@@ -1357,6 +1362,42 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // Auto-load on mount if session exists
   useEffect(() => {
     if (authState === "loading") { loadAllData(); }
+  }, []);
+
+  // Periodic session check — every 5 minutes verify token is still valid
+  useEffect(() => {
+    if (authState !== "authenticated") return;
+    const interval = setInterval(async () => {
+      try {
+        const session = getSession();
+        if (!session?.access_token) {
+          window.dispatchEvent(new CustomEvent("sw:session-expired"));
+          return;
+        }
+        // Light check — just ping a small endpoint
+        const res = await fetch(`${SUPABASE_URL}/rest/v1/businesses?select=id&limit=1`, {
+          headers: { ...SB_HEADERS, Authorization: `Bearer ${session.access_token}` }
+        });
+        if (res.status === 401 || res.status === 403) {
+          window.dispatchEvent(new CustomEvent("sw:session-expired"));
+        }
+      } catch {}
+    }, 5 * 60 * 1000); // every 5 minutes
+    return () => clearInterval(interval);
+  }, [authState]);
+
+  // Listen for session expiry from sbFetch and auto sign-out
+  useEffect(() => {
+    const handleExpired = () => {
+      clearSession();
+      setAuthState("unauthenticated");
+      setAuthError("You were signed out due to inactivity. Please sign in again.");
+      // Clear app state
+      setEmployees([]); setSchedule({}); setBiz("My Business");
+      setPublished([]); setAuditLog([]); setRecognition([]); setPunches([]);
+    };
+    window.addEventListener("sw:session-expired", handleExpired);
+    return () => window.removeEventListener("sw:session-expired", handleExpired);
   }, []);
 
   // Check if a Pulse reminder is due on load
