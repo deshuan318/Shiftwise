@@ -3638,7 +3638,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     }
 
     async function saveManualTime() {
-      if (!editIn) { showToast("Enter at least a clock-in time"); return; }
+      if (!editIn && !editOut) { showToast("Enter at least a clock-in or clock-out time"); return; }
       if (reasonCode==="other" && !reasonNote.trim()) { showToast("Enter a reason for this adjustment"); return; }
       setSaving(true);
       try {
@@ -3654,27 +3654,42 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const inTime  = makeISO(dateStr, editIn);
         const outTime = editOut ? makeISO(dateStr, editOut) : null;
 
-        // Remove ALL existing punches for this employee/day before inserting corrected ones
-        setPunches(prev => prev.filter(px => {
-          const sameEmp = px.empId === empId;
-          const sameDay = toLocalDateStr(new Date(px.time)) === dateStr;
-          return !(sameEmp && sameDay);
-        }));
-        if (bizId) {
-          // Delete all existing punches for this employee/day from Supabase
-          const dayStart = new Date(dateStr+"T00:00:00").toISOString();
-          const dayEnd   = new Date(dateStr+"T23:59:59").toISOString();
-          await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} }).catch(e=>console.warn("punch delete failed:", e));
-        }
+        const dayStart = new Date(dateStr+"T00:00:00").toISOString();
+        const dayEnd   = new Date(dateStr+"T23:59:59").toISOString();
 
-        const inPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"in", time:inTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
-        setPunches(p=>[...p, inPunch]);
-        if (bizId) {
-          await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"in", punched_at:inTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
-        }
-
-        if (outTime) {
-          const outPunch = { id:(Date.now()+1).toString(), empId, empName:emp.name, type:"out", time:outTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
+        if (editIn) {
+          // Full replacement — clear all existing punches for the day and insert clean pair
+          setPunches(prev => prev.filter(px => {
+            const sameEmp = px.empId === empId;
+            const sameDay = toLocalDateStr(new Date(px.time)) === dateStr;
+            return !(sameEmp && sameDay);
+          }));
+          if (bizId) {
+            await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} }).catch(e=>console.warn("punch delete failed:", e));
+          }
+          const inPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"in", time:inTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
+          setPunches(p=>[...p, inPunch]);
+          if (bizId) {
+            await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"in", punched_at:inTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
+          }
+          if (outTime) {
+            const outPunch = { id:(Date.now()+1).toString(), empId, empName:emp.name, type:"out", time:outTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
+            setPunches(p=>[...p, outPunch]);
+            if (bizId) {
+              await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"out", punched_at:outTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
+            }
+          }
+        } else if (outTime) {
+          // Clock-out only — delete any existing clock-out punches for the day, preserve clock-in
+          setPunches(prev => prev.filter(px => {
+            const sameEmp = px.empId === empId;
+            const sameDay = toLocalDateStr(new Date(px.time)) === dateStr;
+            return !(sameEmp && sameDay && px.type === "out");
+          }));
+          if (bizId) {
+            await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punch_type=eq.out&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} }).catch(e=>console.warn("punch delete failed:", e));
+          }
+          const outPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"out", time:outTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
           setPunches(p=>[...p, outPunch]);
           if (bizId) {
             await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"out", punched_at:outTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
@@ -3787,8 +3802,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                 ))}
               </div>
-              <button onClick={saveManualTime} disabled={saving||!editIn}
-                style={{width:"100%",background:editIn?T.dark:T.muted,color:editIn?"white":T.sub,border:"none",borderRadius:8,padding:"10px 0",fontWeight:700,fontSize:13,cursor:editIn?"pointer":"not-allowed"}}>
+              <button onClick={saveManualTime} disabled={saving||(!editIn&&!editOut)}
+                style={{width:"100%",background:(editIn||editOut)?T.dark:T.muted,color:(editIn||editOut)?"white":T.sub,border:"none",borderRadius:8,padding:"10px 0",fontWeight:700,fontSize:13,cursor:(editIn||editOut)?"pointer":"not-allowed"}}>
                 {saving?"Saving…":"Save time adjustment"}
               </button>
               <div style={{fontSize:10,color:T.sub,marginTop:6,textAlign:"center"}}>Creates an audit trail entry flagged as ADJUSTMENT</div>
