@@ -3647,17 +3647,20 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const reasonLabel = ADJUSTMENT_REASONS.find(r=>r.value===reasonCode)?.label || "Manual adjustment";
         const reasonText  = reasonCode==="other" ? reasonNote.trim() : reasonLabel;
 
-        const makeISO = (dateStr, timeStr) => {
+        // Build ISO string preserving local time — avoids UTC date shift
+        const makeISO = (ds, timeStr) => {
           const [h,m] = timeStr.split(":").map(Number);
-          const d = new Date(dateStr+"T00:00:00");
+          const d = new Date(ds+"T00:00:00");
           d.setHours(h,m,0,0);
-          return d.toISOString();
+          // Format as local ISO to avoid UTC rollover to wrong day
+          const pad = n => String(n).padStart(2,"0");
+          return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
         };
         const inTime  = makeISO(dateStr, editIn);
         const outTime = editOut ? makeISO(dateStr, editOut) : null;
 
-        const dayStart = new Date(dateStr+"T00:00:00").toISOString();
-        const dayEnd   = new Date(dateStr+"T23:59:59").toISOString();
+        const dayStart = dateStr+"T00:00:00";
+        const dayEnd   = dateStr+"T23:59:59";
 
         if (editIn) {
           // Full replacement — clear all existing punches for the day and insert clean pair
