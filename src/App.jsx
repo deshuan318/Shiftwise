@@ -2765,10 +2765,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           const minsStr = Math.round(minsEarly);
           return { ok:false, blocked:true, message:`Too early to clock in. Your shift starts at ${fmt(shift.start)}. Please try again in ${minsStr} minute${minsStr!==1?"s":""}.`, flags:[] };
         }
-        if (minsEarly > 0) flags.push("EARLY");
-        if (nowDec > shift.start + 0.25) flags.push("LATE");
-        var message = flags.includes("EARLY") ? `Clocked in slightly early. Shift starts at ${fmt(shift.start)}.`
-          : flags.includes("LATE") ? `Clocked in late. Shift started at ${fmt(shift.start)}.`
+        // Only flag LATE if more than 10 minutes late — minor variance is noise
+        const minsLate = (nowDec - shift.start) * 60;
+        if (minsLate > 5) flags.push("LATE");
+        var message = flags.includes("LATE")
+          ? `Clocked in ${Math.round(minsLate)} min late. Shift started at ${fmt(shift.start)}.`
           : `Clocked in. Shift: ${fmt(shift.start)} – ${fmt(shift.end)}.`;
       }
     } else {
@@ -3322,7 +3323,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
               {/* 🔔 Alert Bell */}
 {(()=>{
-  const unreviewed = punches.filter(p => p.flags?.length > 0 && !punchReviews[p.id]).length;
+  const ACTIONABLE_FLAGS = ["NO_SHIFT","ADJUSTMENT"];
+  const unreviewed = punches.filter(p => p.flags?.some(f=>ACTIONABLE_FLAGS.includes(f)) && !punchReviews[p.id]).length;
   return (
     <button onClick={()=>setAlertsOpen(p=>!p)}
       style={{position:"relative",background:"transparent",border:"none",cursor:"pointer",padding:"4px 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -3483,7 +3485,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   const pendingFlags = punches.filter(p =>
     p.flags?.length > 0 &&
-    tsWkDates.includes(new Date(p.time).toISOString().split("T")[0]) &&
+    tsWkDates.includes(toLocalDateStr(new Date(p.time))) &&
     !punchReviews[p.id]
   ).length;
 
@@ -3614,11 +3616,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const actual  = calcActualHours(dp);
     const sched   = shiftHrs(shift);
     const diff    = parseFloat((actual-sched).toFixed(2));
-    const flags   = dp.flatMap(p=>p.flags||[]).filter((v,i,a)=>a.indexOf(v)===i);
+    const flags   = dp.flatMap(p=>p.flags||[]).filter((v,i,a)=>a.indexOf(v)===i&&["NO_SHIFT","ADJUSTMENT","LATE","EARLY_OUT"].includes(v));
     const punchId = dp[0]?.id;
     const status  = punchId ? (punchReviews[punchId]||"pending") : null;
 
-    const FLAG_LABELS = {LATE:"Late clock-in",EARLY:"Early clock-in",EARLY_OUT:"Early clock-out",NO_SHIFT:"No shift scheduled",ADJUSTMENT:"Manual adjustment"};
+    const FLAG_LABELS = {LATE:"Late clock-in (10+ min)",EARLY_OUT:"Left early (15+ min)",NO_SHIFT:"No shift scheduled",ADJUSTMENT:"Manual adjustment"};
     const STATUS_COLOR = {reviewed:"#3A9BE8",approved:"#4CAF7D",rejected:"#C0392B",pending:"#E8A93A"};
 
     async function setStatus(val) {
@@ -3862,7 +3864,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 const dp = getDayPunches(emp.id, dateStr);
                 const hasIn  = dp.some(p=>p.type==="in");
                 const hasOut = dp.some(p=>p.type==="out");
-                const hasFlags = dp.some(p=>p.flags?.filter(f=>f!=="ADJUSTMENT").length>0);
+                const hasFlags = dp.some(p=>p.flags?.some(f=>["NO_SHIFT","ADJUSTMENT","LATE","EARLY_OUT"].includes(f)));
                 const punchId = dp[0]?.id;
                 // Only approve if: has both in+out, no flags, not already actioned
                 if (hasIn && hasOut && !hasFlags && punchId && !punchReviews[punchId]) {
@@ -3965,7 +3967,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     const actual     = calcActualHours(dp);
                     const sched      = shiftHrs(shift);
                     const diff       = parseFloat((actual-sched).toFixed(2));
-                    const flags      = dp.flatMap(p=>p.flags||[]).filter(f=>f!=="ADJUSTMENT");
+                    const flags      = dp.flatMap(p=>p.flags||[]).filter(f=>["NO_SHIFT","ADJUSTMENT","LATE","EARLY_OUT"].includes(f));
                     const hasPunch   = dp.length>0;
                     const punchId    = dp[0]?.id;
                     const status     = punchId?(punchReviews[punchId]||"pending"):null;
@@ -6616,7 +6618,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       </div>
 
       {(()=>{
-        const flagged = punches.filter(p=>p.flags&&p.flags.length>0).sort((a,b)=>new Date(b.time)-new Date(a.time));
+        const ACTIONABLE_FLAGS = ["NO_SHIFT","ADJUSTMENT"];
+        const flagged = punches.filter(p=>p.flags?.some(f=>ACTIONABLE_FLAGS.includes(f))).sort((a,b)=>new Date(b.time)-new Date(a.time));
         if (flagged.length===0) return (
           <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,textAlign:"center",color:T.sub}}>
             <div style={{fontSize:40,marginBottom:12}}>✅</div>
