@@ -3429,16 +3429,35 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setDeleting(true);
       try {
         const reasonText = delReason==="other" ? delNote.trim() : (ADJUSTMENT_REASONS.find(r=>r.value===delReason)?.label || "Manager Correction");
+        const token = (()=>{try{const s=JSON.parse(localStorage.getItem("sw_session")||"null");return s?.access_token||"";}catch{return "";}})();
         setPunches(prev => prev.filter(px => px.id !== p.id));
         setPunchReviews(prev => { const n={...prev}; delete n[p.id]; return n; });
         if (bizId) {
+          // Archive the full punch record before deleting it
+          await fetch(`https://kyrjgfeowmflazywsuir.supabase.co/rest/v1/deleted_punches`, {
+            method:"POST",
+            headers:{ apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cmpnZmVvd21mbGF6eXdzdWlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzMzMTQsImV4cCI6MjA5NTA0OTMxNH0.njuDREVF4oIgTYN6wLXKw6Hw_KsFzKPoMabkld_jy0E", Authorization:`Bearer ${token}`, "Content-Type":"application/json", Prefer:"return=minimal" },
+            body: JSON.stringify({
+              business_id: bizId,
+              original_punch_id: p.id,
+              employee_id: emp.id,
+              employee_name: emp.name,
+              punch_type: p.type,
+              punched_at: p.time,
+              flags: p.flags || [],
+              adjustment_reason: p.adjustmentReason || null,
+              delete_reason: reasonText,
+              deleted_by: (()=>{try{const s=JSON.parse(localStorage.getItem("sw_session")||"null");return s?.user?.id||null;}catch{return null;}})(),
+            })
+          }).catch(e=>console.warn("Archive punch failed:", e));
+
           await fetch(`https://kyrjgfeowmflazywsuir.supabase.co/rest/v1/punches?id=eq.${p.id}`, {
             method:"DELETE",
-            headers:{ apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cmpnZmVvd21mbGF6eXdzdWlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzMzMTQsImV4cCI6MjA5NTA0OTMxNH0.njuDREVF4oIgTYN6wLXKw6Hw_KsFzKPoMabkld_jy0E", Authorization:`Bearer ${(()=>{try{const s=JSON.parse(localStorage.getItem("sw_session")||"null");return s?.access_token||"";}catch{return "";}})()}` }
+            headers:{ apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cmpnZmVvd21mbGF6eXdzdWlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzMzMTQsImV4cCI6MjA5NTA0OTMxNH0.njuDREVF4oIgTYN6wLXKw6Hw_KsFzKPoMabkld_jy0E", Authorization:`Bearer ${token}` }
           });
         }
         addAudit("Punch Deleted", `${emp.name} — ${dateStr}: ${typeLabel} at ${new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})} removed (${reasonText})`, {empName:emp.name});
-        showToast("Punch deleted ✓");
+        showToast("Punch deleted — archived for records ✓");
       } catch(e) { showToast("Could not delete: "+e.message); }
       finally { setDeleting(false); }
     }
@@ -3689,16 +3708,23 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const reasonText  = reasonCode==="other" ? reasonNote.trim() : reasonLabel;
 
         // Build ISO string preserving local time — avoids UTC date shift
-        const makeISO = (ds, timeStr) => {
+        const makeISO = (ds, timeStr, dayOffset=0) => {
           const [h,m] = timeStr.split(":").map(Number);
           const d = new Date(ds+"T00:00:00");
+          if (dayOffset) d.setDate(d.getDate()+dayOffset);
           d.setHours(h,m,0,0);
           // Format as local ISO to avoid UTC rollover to wrong day
           const pad = n => String(n).padStart(2,"0");
           return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
         };
+        // If clock-out time is earlier than clock-in time, it's an overnight shift —
+        // the clock-out lands on the following calendar day.
+        const inMins  = editIn ? (()=>{const [h,m]=editIn.split(":").map(Number); return h*60+m;})() : null;
+        const outMins = editOut ? (()=>{const [h,m]=editOut.split(":").map(Number); return h*60+m;})() : null;
+        const isOvernight = inMins!=null && outMins!=null && outMins < inMins;
+
         const inTime  = makeISO(dateStr, editIn);
-        const outTime = editOut ? makeISO(dateStr, editOut) : null;
+        const outTime = editOut ? makeISO(dateStr, editOut, isOvernight ? 1 : 0) : null;
 
         const dayStart = dateStr+"T00:00:00";
         const dayEnd   = dateStr+"T23:59:59";
@@ -3839,7 +3865,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 )}
               </div>
 
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:6}}>
                 {[["Clock in",editIn,setEditIn],["Clock out",editOut,setEditOut]].map(([lbl,val,setter])=>(
                   <div key={lbl}>
                     <label style={{fontSize:10,color:T.sub,display:"block",marginBottom:4,fontWeight:600}}>{lbl}</label>
@@ -3848,6 +3874,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                 ))}
               </div>
+              {(()=>{
+                if (!editIn || !editOut) return null;
+                const [ih,im]=editIn.split(":").map(Number), [oh,om]=editOut.split(":").map(Number);
+                const overnight = (oh*60+om) < (ih*60+im);
+                return overnight ? (
+                  <div style={{background:"#FEF3E2",border:"1px solid #E8A93A40",borderRadius:7,padding:"6px 10px",fontSize:11,color:"#B7780F",marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
+                    <span>🌙</span> Overnight shift detected — clock-out will be saved on the following day
+                  </div>
+                ) : null;
+              })()}
               <button onClick={saveManualTime} disabled={saving||(!editIn&&!editOut)}
                 style={{width:"100%",background:(editIn||editOut)?T.dark:T.muted,color:(editIn||editOut)?"white":T.sub,border:"none",borderRadius:8,padding:"10px 0",fontWeight:700,fontSize:13,cursor:(editIn||editOut)?"pointer":"not-allowed"}}>
                 {saving?"Saving…":"Save time adjustment"}
