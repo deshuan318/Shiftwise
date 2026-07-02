@@ -1019,7 +1019,12 @@ export default function App() {
   const [bizId,       setBizId]       = useState(null);
 
   // ── App state — hydrated from Supabase on load ────────────────────────────
-  const [tab,         setTab]         = useState("grid");
+  const [tab,         setTab]         = useState(() => {
+    // Restore tab from URL hash on load (e.g. #dashboard)
+    const hash = window.location.hash.replace("#","");
+    const valid = ["grid","coverage","insights","dashboard","recognition","settings","feedback"];
+    return valid.includes(hash) ? hash : "grid";
+  });
   const [themeId,     setThemeId]     = useState("fieldwork");
   const T = THEMES[themeId] || THEMES.fieldwork;
   const [biz,         setBiz]         = useState("My Business");
@@ -1362,6 +1367,26 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // Auto-load on mount if session exists
   useEffect(() => {
     if (authState === "loading") { loadAllData(); }
+  }, []);
+
+  // Sync tab changes to browser history
+  useEffect(() => {
+    if (authState !== "authenticated") return;
+    const current = window.location.hash.replace("#","");
+    if (current !== tab) {
+      window.history.pushState({ tab }, "", `#${tab}`);
+    }
+  }, [tab, authState]);
+
+  // Listen for browser back/forward
+  useEffect(() => {
+    const onPop = (e) => {
+      const valid = ["grid","coverage","insights","dashboard","recognition","settings","feedback"];
+      const t = e.state?.tab || window.location.hash.replace("#","");
+      if (valid.includes(t)) setTab(t);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, []);
 
   // Periodic session check — every 5 minutes verify token is still valid
@@ -3707,15 +3732,24 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const reasonLabel = ADJUSTMENT_REASONS.find(r=>r.value===reasonCode)?.label || "Manual adjustment";
         const reasonText  = reasonCode==="other" ? reasonNote.trim() : reasonLabel;
 
-        // Build ISO string preserving local time — avoids UTC date shift
+        // Build a real ISO timestamp WITH the local timezone offset, so the
+        // moment stored in Supabase and the moment reconstructed by `new Date()`
+        // on read-back are identical — no naive-timestamp ambiguity.
+        const getTzOffset = (d) => {
+          const off = -d.getTimezoneOffset(); // minutes, positive = ahead of UTC
+          const sign = off >= 0 ? "+" : "-";
+          const abs = Math.abs(off);
+          const pad = n => String(n).padStart(2,"0");
+          return `${sign}${pad(Math.floor(abs/60))}:${pad(abs%60)}`;
+        };
         const makeISO = (ds, timeStr, dayOffset=0) => {
           const [h,m] = timeStr.split(":").map(Number);
           const d = new Date(ds+"T00:00:00");
           if (dayOffset) d.setDate(d.getDate()+dayOffset);
           d.setHours(h,m,0,0);
-          // Format as local ISO to avoid UTC rollover to wrong day
           const pad = n => String(n).padStart(2,"0");
-          return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
+          const tz = getTzOffset(d);
+          return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00${tz}`;
         };
         // If clock-out time is earlier than clock-in time, it's an overnight shift —
         // the clock-out lands on the following calendar day.
@@ -3723,11 +3757,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const outMins = editOut ? (()=>{const [h,m]=editOut.split(":").map(Number); return h*60+m;})() : null;
         const isOvernight = inMins!=null && outMins!=null && outMins < inMins;
 
-        const inTime  = makeISO(dateStr, editIn);
+        const inTime  = editIn ? makeISO(dateStr, editIn) : null;
         const outTime = editOut ? makeISO(dateStr, editOut, isOvernight ? 1 : 0) : null;
 
-        const dayStart = dateStr+"T00:00:00";
-        const dayEnd   = dateStr+"T23:59:59";
+        // Day window for delete queries — also needs explicit timezone offset
+        const dayStart = makeISO(dateStr, "00:00");
+        const dayEnd   = makeISO(dateStr, "23:59");
 
         if (editIn) {
           // Full replacement — clear all existing punches for the day and insert clean pair
