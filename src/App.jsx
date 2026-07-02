@@ -3390,7 +3390,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               {/* 🔔 Alert Bell */}
 {(()=>{
   const ACTIONABLE_FLAGS = ["NO_SHIFT","ADJUSTMENT"];
-  const unreviewed = punches.filter(p => p.flags?.some(f=>ACTIONABLE_FLAGS.includes(f)) && !punchReviews[p.id]).length;
+  const thirtyDaysAgoBell = new Date(Date.now() - 30*24*60*60*1000);
+  const unreviewed = punches.filter(p =>
+    p.flags?.some(f=>ACTIONABLE_FLAGS.includes(f)) &&
+    !punchReviews[p.id] &&
+    new Date(p.time) > thirtyDaysAgoBell &&
+    employees.some(e=>e.id===p.empId)
+  ).length;
   return (
     <button onClick={()=>setAlertsOpen(p=>!p)}
       style={{position:"relative",background:"transparent",border:"none",cursor:"pointer",padding:"4px 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
@@ -6727,19 +6733,24 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       <div style={{background:T.dark,padding:"16px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
         <div>
           <div style={{color:"white",fontWeight:800,fontSize:16}}>🔔 Alerts</div>
-          <div style={{color:"#666",fontSize:11,marginTop:2}}>Flagged punches requiring review</div>
+          <div style={{color:"#666",fontSize:11,marginTop:2}}>Punch flags · Pulse reminders</div>
         </div>
         <button onClick={()=>setAlertsOpen(false)} style={{background:"rgba(255,255,255,0.1)",border:"none",borderRadius:"50%",width:34,height:34,color:"white",fontSize:20,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
       </div>
 
       {(()=>{
         const ACTIONABLE_FLAGS = ["NO_SHIFT","ADJUSTMENT"];
-        const flagged = punches.filter(p=>p.flags?.some(f=>ACTIONABLE_FLAGS.includes(f))).sort((a,b)=>new Date(b.time)-new Date(a.time));
+        const thirtyDaysAgo = new Date(Date.now() - 30*24*60*60*1000);
+        const flagged = punches.filter(p=>
+          p.flags?.some(f=>ACTIONABLE_FLAGS.includes(f)) &&
+          new Date(p.time) > thirtyDaysAgo &&
+          employees.some(e=>e.id===p.empId) // only show if employee still exists
+        ).sort((a,b)=>new Date(b.time)-new Date(a.time));
         if (flagged.length===0) return (
           <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,textAlign:"center",color:T.sub}}>
             <div style={{fontSize:40,marginBottom:12}}>✅</div>
             <div style={{fontWeight:700,fontSize:15,color:"#888",marginBottom:8}}>No flagged punches</div>
-            <div style={{fontSize:13,lineHeight:1.5}}>When employees clock in late, early, or without a scheduled shift, alerts will appear here.</div>
+            <div style={{fontSize:13,lineHeight:1.5}}>Punch flags and Pulse reminders will appear here. Only NO_SHIFT and manual adjustment punches from the last 30 days are shown.</div>
           </div>
         );
         const FLAG_LABELS = { LATE:"Late Clock-In", EARLY:"Early Clock-In", EARLY_OUT:"Early Clock-Out", NO_SHIFT:"No Shift Scheduled" };
