@@ -6729,7 +6729,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 {alertsOpen&&(
   <>
     <div onClick={()=>setAlertsOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:600}}/>
-    <div style={{position:"fixed",top:0,right:0,bottom:0,width:"min(420px,100vw)",background:T.bg,zIndex:700,display:"flex",flexDirection:"column",boxShadow:"-8px 0 40px rgba(0,0,0,0.18)"}}>
+    <div style={{position:"fixed",top:0,right:0,bottom:0,width:"min(420px,100vw)",background:T.bg,zIndex:700,display:"flex",flexDirection:"column",boxShadow:"-8px 0 40px rgba(0,0,0,0.18)",overflow:"hidden"}}>
       <div style={{background:T.dark,padding:"16px 18px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
         <div>
           <div style={{color:"white",fontWeight:800,fontSize:16}}>🔔 Alerts</div>
@@ -6756,7 +6756,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const FLAG_LABELS = { LATE:"Late Clock-In", EARLY:"Early Clock-In", EARLY_OUT:"Early Clock-Out", NO_SHIFT:"No Shift Scheduled" };
         const FLAG_COLORS = { LATE:"#E8A93A", EARLY:"#3A9BE8", EARLY_OUT:"#E8A93A", NO_SHIFT:"#C0392B" };
         return (
-          <div style={{flex:1,overflowY:"auto",padding:14,display:"flex",flexDirection:"column",gap:10}}>
+          <div style={{flex:1,minHeight:0,overflowY:"auto",padding:14,display:"flex",flexDirection:"column",gap:10}}>
             {/* Mark all reviewed + Clear actioned */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
               <button onClick={()=>{
