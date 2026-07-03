@@ -1831,61 +1831,83 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       }
     }
 
-    // ── Pulse narrative (3-4 sentences) ──────────────────────────────────────
+    // ── Pulse narrative — specific numbers and names from this week ──────────
     const sentences = [];
 
-    // Sentence 1 — labor cost / budget
+    // Pre-compute weekly specifics for richer narrative
+    const salesDays   = hasSales ? (wk.dailyTotals||[]).filter(d=>d.revenue&&d.totalHours>0).sort((a,b)=>b.revenue-a.revenue) : [];
+    const rplhDays    = hasSales ? (wk.dailyTotals||[]).filter(d=>d.revenuePerLaborHour&&d.totalHours>0) : [];
+    const bestRplhDay = rplhDays.reduce((b,d)=>(!b||d.revenuePerLaborHour>b.revenuePerLaborHour)?d:b, null);
+    const worstRplhDay= rplhDays.reduce((w,d)=>(!w||d.revenuePerLaborHour<w.revenuePerLaborHour)?d:w, null);
+    const topSalesDay = salesDays[0];
+    const empBreakdown = wk.employeeBreakdown || [];
+    const topHrsEmp   = [...empBreakdown].sort((a,b)=>b.scheduledHours-a.scheduledHours)[0];
+    const runway      = budget ? budget - totalPay : 0;
+    const weekLabel   = snap.weeks?.[0]?.label || "this week";
+    const dayName     = snap.dayOfWeek || "today";
+
+    // Sentence 1 — labor cost with employee breakdown context
     if (budget) {
-      const runway = budget - totalPay;
       if (totalPay > budget) {
-        sentences.push(`This week's scheduled labor is ${$$(totalPay)}, which is ${$$(Math.abs(runway))} over your ${$$(budget)} budget.`);
+        const overAmt = totalPay - budget;
+        const overPct = Math.round((overAmt/budget)*100);
+        sentences.push(`${weekLabel}: scheduled labor is ${$$(totalPay)} — ${$$(overAmt)} (${overPct}%) over your ${$$(budget)} budget.${topHrsEmp ? ` ${topHrsEmp.name} carries the most hours at ${hrs(topHrsEmp.scheduledHours)} this week.` : ""}`);
       } else {
-        sentences.push(`This week's scheduled labor is ${$$(totalPay)} against a ${$$(budget)} budget, leaving ${$$(runway)} of runway.`);
+        const usedPct = Math.round((totalPay/budget)*100);
+        sentences.push(`${weekLabel}: ${$$(totalPay)} in scheduled labor (${usedPct}% of your ${$$(budget)} budget) across ${staffed} employee${staffed!==1?"s":""} totaling ${hrs(totalHrs)}.${topHrsEmp ? ` ${topHrsEmp.name} leads with ${hrs(topHrsEmp.scheduledHours)}.` : ""}`);
       }
     } else if (totalHrs > 0) {
-      sentences.push(`You have ${totalHrs}h of scheduled labor this week across ${staffed} employee${staffed !== 1 ? "s" : ""}, estimated at ${$$(totalPay)}.`);
+      sentences.push(`${weekLabel}: ${hrs(totalHrs)} scheduled across ${staffed} of ${empCount} employee${empCount!==1?"s":""}, estimated at ${$$(totalPay)}.${topHrsEmp ? ` ${topHrsEmp.name} has the most hours at ${hrs(topHrsEmp.scheduledHours)}.` : ""}`);
     } else {
-      sentences.push(`No shifts are scheduled yet for ${bizName} this week.`);
+      sentences.push(`No shifts are scheduled yet for ${weekLabel}.`);
     }
 
-    // Sentence 2 — revenue efficiency or sales prompt
-    if (hasSales && rplh) {
-      const days = wk.dailyTotals?.filter(d => d.revenuePerLaborHour) || [];
-      const best  = days.reduce((b, d) => (!b || d.revenuePerLaborHour > b.revenuePerLaborHour) ? d : b, null);
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
-      if (best && worst && best.day !== worst.day) {
-        sentences.push(`You're earning ${$$(rplh)} per labor hour on average — ${best.day} leads at ${$$(best.revenuePerLaborHour)}/hr while ${worst.day} lags at ${$$(worst.revenuePerLaborHour)}/hr.`);
-      } else {
-        sentences.push(`With ${$$(wk.totalRevenue)} in sales, you're earning ${$$(rplh)} per labor hour${laborPct ? ` and running a ${laborPct}% labor cost` : ""}.`);
-      }
-    } else if (!hasSales) {
-      sentences.push(`No sales data is loaded yet — import your Square CSV to unlock revenue-per-labor-hour and labor cost % tracking.`);
+    // Sentence 2 — revenue efficiency with specific day data
+    if (hasSales && rplh && bestRplhDay && worstRplhDay && bestRplhDay.day !== worstRplhDay.day) {
+      const spread = bestRplhDay.revenuePerLaborHour - worstRplhDay.revenuePerLaborHour;
+      sentences.push(`Revenue efficiency: ${$$(rplh)}/labor hr on ${$$(wk.totalRevenue||0)} in sales — ${bestRplhDay.day} is your strongest at ${$$(bestRplhDay.revenuePerLaborHour)}/hr (${$$(bestRplhDay.revenue||0)} revenue, ${hrs(bestRplhDay.totalHours||0)} labor), while ${worstRplhDay.day} is weakest at ${$$(worstRplhDay.revenuePerLaborHour)}/hr — a ${$$(Math.round(spread))} spread worth examining.`);
+    } else if (hasSales && rplh) {
+      sentences.push(`With ${$$(wk.totalRevenue||0)} in sales and ${hrs(totalHrs)} of labor, you're generating ${$$(rplh)}/hr${laborPct ? ` at a ${pct(laborPct)} labor cost rate` : ""}.`);
+    } else if (hasSales && !rplh) {
+      sentences.push(`${$$(wk.totalRevenue||0)} in revenue this week — schedule some hours alongside these sales days to unlock revenue-per-labor-hour tracking.`);
+    } else {
+      sentences.push(`Connect Square to see revenue-per-labor-hour and labor cost % — the two numbers that tell you whether your staffing is earning its cost.`);
     }
 
-    // Sentence 3 — biggest risk
-    if (ot.length > 0) {
-      const topOT = ot[0];
-      sentences.push(`Watch overtime — ${topOT.name} is scheduled for ${topOT.hours}h and will trigger overtime pay if not adjusted before end of week.`);
+    // Sentence 3 — most urgent operational issue with specifics
+    if (ot.length > 1) {
+      sentences.push(`Overtime alert: ${ot.map(e=>`${e.name} (${hrs(e.hours)})`).join(", ")} are all above 40h — multiple overtime situations in the same week significantly inflate your actual labor cost.`);
+    } else if (ot.length === 1) {
+      const e = ot[0];
+      const overHrs = parseFloat((e.hours - 40).toFixed(1));
+      sentences.push(`Overtime alert: ${e.name} is at ${hrs(e.hours)} — ${hrs(overHrs)} into overtime. Every hour over 40 costs 1.5× their regular rate; pull a shift or shorten their longest day before week end.`);
     } else if (totalOverage > 3) {
-      const topOver = [...pv].sort((a,b) => b.diff - a.diff)[0];
-      sentences.push(`Punch variance is running high — ${topOver.name} has clocked ${topOver.diff.toFixed(1)}h over their scheduled hours, which will push actual labor costs above estimates.`);
-    } else if (burn?.projectedOver) {
-      sentences.push(`Your full week's scheduled labor is ${$$(burn.spent)} against a ${$$(burn.budget)} budget — ${$$(burn.overBy)} over. You're ${burn.weekPct}% through the week — review shifts in the back half to find hours to cut.`);
+      const topOver = [...pv].sort((a,b)=>b.diff-a.diff).slice(0,2);
+      sentences.push(`Punch variance is running ${hrs(totalOverage)} over scheduled hours total — ${topOver.map(e=>`${e.name} +${hrs(e.diff)}`).join(", ")} — actual labor costs are running higher than your schedule estimates.`);
     } else if (af.missedPunches?.length) {
-      sentences.push(`${af.missedPunches.map(m => m.name).join(" and ")} ${af.missedPunches.length === 1 ? "has" : "have"} a shift today with no punch-in recorded — verify attendance.`);
+      const names = af.missedPunches.map(m=>m.name).join(" and ");
+      sentences.push(`${names} ${af.missedPunches.length===1?"has a":"have"} shift${af.missedPunches.length!==1?"s":""} today with no clock-in recorded as of ${dayName} — verify attendance and add a manual punch if they worked.`);
+    } else if (budget && totalPay > budget) {
+      sentences.push(`To bring labor back under budget, you need to cut ${$$(totalPay - budget)} in scheduled hours — look at your longest days and see if any shifts can be shortened without affecting coverage.`);
     } else if (gapDays > 0) {
-      sentences.push(`You have ${gapDays} day${gapDays > 1 ? "s" : ""} without any staff scheduled during posted business hours — review coverage before the week runs out.`);
+      const uncovDays = (wk.dailyTotals||[]).filter(d=>d.staffCount===0).map(d=>d.day);
+      sentences.push(`Coverage gap: ${uncovDays.join(", ")} ${uncovDays.length===1?"has":"have"} no staff scheduled while your business hours show you're open — either close those days in Settings or add coverage.`);
+    } else if (af.lateArrivals?.length) {
+      const late = af.lateArrivals.slice(0,2).map(a=>`${a.name} (${a.count}×)`).join(", ");
+      sentences.push(`Attendance note: ${late} clocked in late this week — not a crisis but worth a check-in if it becomes a pattern.`);
     }
 
-    // Sentence 4 — forward look or positive
-    if (score >= 75) {
-      sentences.push(`Overall the schedule looks healthy — focus next week on maintaining coverage on your highest-revenue days.`);
-    } else if (hasSales) {
-      const days = wk.dailyTotals?.filter(d => d.revenuePerLaborHour) || [];
-      const worst = days.reduce((w, d) => (!w || d.revenuePerLaborHour < w.revenuePerLaborHour) ? d : w, null);
-      if (worst) {
-        sentences.push(`Your biggest efficiency opportunity is ${worst.day} — consider pulling back staffing there and redirecting hours to higher-revenue days.`);
-      }
+    // Sentence 4 — forward look with specific next-week recommendation
+    if (topSalesDay && score >= 75) {
+      sentences.push(`Going into next week: ${topSalesDay.day} is your highest-revenue day at ${$$(topSalesDay.revenue)} — prioritize filling that day first and build the rest of the schedule around it.`);
+    } else if (topSalesDay && bestRplhDay) {
+      sentences.push(`Next week priority: protect coverage on ${bestRplhDay.day} (your most efficient day at ${$$(bestRplhDay.revenuePerLaborHour)}/hr) and consider trimming hours on ${worstRplhDay?.day||"your slowest day"} where efficiency lags.`);
+    } else if (ot.length > 0) {
+      sentences.push(`Before building next week, resolve this week's overtime first — start ${ot[0].name}'s schedule at a lighter load so the week doesn't compound the problem.`);
+    } else if (!hasSales) {
+      sentences.push(`Connect Square before next week's schedule to see which days earn the most per labor hour — that one number changes how you build the schedule.`);
+    } else {
+      sentences.push(`Schedule is in good shape — stay consistent with coverage on your busiest days and keep an eye on variance as the week closes out.`);
     }
 
     const pulse = sentences.join(" ");
