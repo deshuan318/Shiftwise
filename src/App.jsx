@@ -1571,7 +1571,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       .filter(e => weeks.some(w => eWkH(w.key, e.id) > 40))
       .map(e => ({ name: e.name, hours: Math.max(...weeks.map(w => eWkH(w.key, e.id))) }));
 
-    // ── Budget burn (mid-week pace → projected end) ──────────────────────────
+    // ── Budget burn — scheduled labor vs budget for the week ─────────────────
+    // The scheduled labor IS the full-week commitment — no extrapolation needed.
+    // What matters: total scheduled labor vs budget, and how much of the week has passed.
     const budget = parseFloat(weeklyBudget) || null;
     let budgetBurn = null;
     if (budget && weekSummaries[0]) {
@@ -1581,18 +1583,24 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         return toLocalDateStr(dt);
       }) || [];
       const todayIdx0 = wkDates0.indexOf(todayStr);
-      const daysPassed = todayIdx0 >= 0 ? todayIdx0 + 1 : 7;
-      const dailyRate = daysPassed > 0 ? wk0.totalEstimatedPay / daysPassed : 0;
-      const projectedEnd = parseFloat((dailyRate * 7).toFixed(2));
-      const overBy = parseFloat((projectedEnd - budget).toFixed(2));
+      const daysPassed  = todayIdx0 >= 0 ? todayIdx0 + 1 : 7;
+      const daysInWeek  = 7;
+      const totalScheduled = wk0.totalEstimatedPay;
+      const overBy = parseFloat((totalScheduled - budget).toFixed(2));
+      // Labor committed so far = sum of scheduled shifts on days that have already occurred
+      const laborToDate = wk0.dailyTotals
+        ? wk0.dailyTotals.slice(0, daysPassed).reduce((s,d) => s + (d.totalHours || 0) * 0, 0)
+        : 0;
       budgetBurn = {
-        spent: wk0.totalEstimatedPay,
+        spent:         totalScheduled,           // full week scheduled labor
         budget,
-        projectedEnd,
-        projectedOver: projectedEnd > budget,
-        overBy: overBy > 0 ? overBy : 0,
-        pct: parseFloat(((wk0.totalEstimatedPay / budget) * 100).toFixed(1)),
+        projectedEnd:  totalScheduled,           // no projection needed — this IS the commitment
+        projectedOver: totalScheduled > budget,
+        overBy:        overBy > 0 ? overBy : 0,
+        pct:           parseFloat(((totalScheduled / budget) * 100).toFixed(1)),
         daysPassed,
+        daysInWeek,
+        weekPct:       parseFloat(((daysPassed / daysInWeek) * 100).toFixed(0)),
       };
     }
 
@@ -1862,7 +1870,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const topOver = [...pv].sort((a,b) => b.diff - a.diff)[0];
       sentences.push(`Punch variance is running high — ${topOver.name} has clocked ${topOver.diff.toFixed(1)}h over their scheduled hours, which will push actual labor costs above estimates.`);
     } else if (burn?.projectedOver) {
-      sentences.push(`Mid-week pace puts you on track to finish at ${$$(burn.projectedEnd)} — ${$$(burn.overBy)} over budget — unless you trim hours in the back half of the week.`);
+      sentences.push(`Your full week's scheduled labor is ${$$(burn.spent)} against a ${$$(burn.budget)} budget — ${$$(burn.overBy)} over. You're ${burn.weekPct}% through the week — review shifts in the back half to find hours to cut.`);
     } else if (af.missedPunches?.length) {
       sentences.push(`${af.missedPunches.map(m => m.name).join(" and ")} ${af.missedPunches.length === 1 ? "has" : "have"} a shift today with no punch-in recorded — verify attendance.`);
     } else if (gapDays > 0) {
@@ -1985,10 +1993,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const overPct = Math.round((overAmt / budget) * 100);
         insight = `Scheduled labor is ${$$(totalPay)}, which puts you ${$$(overAmt)} (${overPct}%) over your ${$$(budget)} weekly budget. That gap needs to close before payroll runs — look for overlap shifts or days where coverage exceeds what the schedule actually requires. ${hasSales && laborPct ? `At ${pct(laborPct)} of revenue, labor cost is above the 25–35% target range.` : ""}`;
       } else if (projOver) {
-        insight = `You're at ${$$(totalPay)} against a ${$$(budget)} budget with ${hrs(burn.daysPassed)} days elapsed. At this pace you'll finish the week at ${$$(burn.projectedEnd)} — ${$$(burn.overBy)} over. The back half of the week is your window to course-correct by trimming a shift or two. ${hasSales && laborPct ? `Current labor cost is ${pct(laborPct)} of revenue.` : ""}`;
+        insight = `Scheduled labor is ${$$(totalPay)} against a ${$$(budget)} budget — ${$$(burn.overBy)} over. You're ${burn.weekPct}% through the week (day ${burn.daysPassed} of ${burn.daysInWeek}). Review the remaining shifts and look for overlap or slow days where hours can be trimmed. ${hasSales && laborPct ? `Current labor cost is ${pct(laborPct)} of revenue.` : ""}`;
       } else {
         const usedPct = budget > 0 ? Math.round((totalPay / budget) * 100) : 0;
-        insight = `Labor is running at ${$$(totalPay)} against your ${$$(budget)} budget — ${$$(runway)} of runway remaining (${100 - usedPct}% unused). ${burn ? `Mid-week pace projects you to finish at ${$$(burn.projectedEnd)}, which is under budget.` : ""} ${hasSales && laborPct ? `Your labor cost is ${pct(laborPct)} of revenue, which is ${laborPct <= 35 ? "within" : "above"} the 25–35% target.` : ""}`;
+        insight = `Scheduled labor is ${$$(totalPay)} against your ${$$(budget)} budget — ${$$(runway)} of runway remaining with ${100 - burn?.weekPct || 0}% of the week ahead. ${hasSales && laborPct ? `Your labor cost is ${pct(laborPct)} of revenue, which is ${laborPct <= 35 ? "within" : "above"} the 25–35% target.` : ""}`;
       }
       sections.push({ title: "Labor Cost", icon: "💰", urgency, insight });
     }
