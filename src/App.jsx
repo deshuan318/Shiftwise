@@ -1691,19 +1691,15 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         // Save score to pulse_history
         if (bizId) {
           try {
-            // Try upsert first, fall back to insert if conflict issue
-            const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/pulse_history`, {
+            // Upsert with on_conflict in URL — required by PostgREST
+            const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/pulse_history?on_conflict=business_id,week_start`, {
               method: "POST",
-              headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal", "X-Upsert": `business_id,week_start` },
+              headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
               body: JSON.stringify({ business_id: bizId, score: result.score.value, label: result.score.label, week_start: weekStart, generated_at: now })
             });
+            const saveText = await saveRes.text();
             if (!saveRes.ok) {
-              // Try plain insert
-              await fetch(`${SUPABASE_URL}/rest/v1/pulse_history`, {
-                method: "POST",
-                headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "return=minimal" },
-                body: JSON.stringify({ business_id: bizId, score: result.score.value, label: result.score.label, week_start: weekStart, generated_at: now })
-              });
+              console.warn("pulse_history upsert failed:", saveRes.status, saveText);
             }
             // Reload history
             const rows = await dbGet(`pulse_history?select=*&business_id=eq.${bizId}&order=generated_at.desc&limit=20`);
