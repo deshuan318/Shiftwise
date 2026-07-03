@@ -1127,6 +1127,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const [scoreOpen,      setScoreOpen]      = useState(false);
   const [pulseHistory,   setPulseHistory]   = useState([]); // saved scores from pulse_history table
   const [notifPanelOpen, setNotifPanelOpen] = useState(false);
+  const [pulsePrompt,    setPulsePrompt]    = useState(false); // show pulse-ready modal on login
   const [notifFreq,      setNotifFreq]      = useState(() => { try { return localStorage.getItem("sw_notif_freq")||"login"; } catch { return "login"; } });
   const [notifDay,       setNotifDay]       = useState(() => { try { return localStorage.getItem("sw_notif_day")||"Monday"; } catch { return "Monday"; } });
 
@@ -1449,7 +1450,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       }
       if (isDue) {
         setTimeout(() => {
-          showToast("🧠 Time for your Weekly Pulse — head to Business Insights", 6000);
+          setPulsePrompt(true);
           localStorage.setItem("sw_notif_last_run", now.toISOString());
         }, 2000);
       }
@@ -1690,11 +1691,20 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         // Save score to pulse_history
         if (bizId) {
           try {
-            await fetch(`${SUPABASE_URL}/rest/v1/pulse_history?on_conflict=business_id,week_start`, {
+            // Try upsert first, fall back to insert if conflict issue
+            const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/pulse_history`, {
               method: "POST",
-              headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
-              body: JSON.stringify({ business_id: bizId, score: result.score.value, label: result.score.label, week_start: weekStart })
+              headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal", "X-Upsert": `business_id,week_start` },
+              body: JSON.stringify({ business_id: bizId, score: result.score.value, label: result.score.label, week_start: weekStart, generated_at: now })
             });
+            if (!saveRes.ok) {
+              // Try plain insert
+              await fetch(`${SUPABASE_URL}/rest/v1/pulse_history`, {
+                method: "POST",
+                headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "return=minimal" },
+                body: JSON.stringify({ business_id: bizId, score: result.score.value, label: result.score.label, week_start: weekStart, generated_at: now })
+              });
+            }
             // Reload history
             const rows = await dbGet(`pulse_history?select=*&business_id=eq.${bizId}&order=generated_at.desc&limit=20`);
             setPulseHistory((rows||[]).map(r=>({ id:r.id, score:r.score, label:r.label, weekStart:r.week_start, generatedAt:r.generated_at })));
@@ -6982,6 +6992,35 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         {tab==="feedback" && <FeedbackTab bizId={bizId} T={T} Card={Card} showToast={showToast} addAudit={addAudit} getSession={getSession} dbPost={dbPost}/>}
 
                 <TimePickerModal/>
+
+        {/* PULSE READY MODAL */}
+        {pulsePrompt && (
+          <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:1200,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+            <div style={{background:T.surface,borderRadius:20,width:"100%",maxWidth:400,boxShadow:"0 20px 60px rgba(0,0,0,0.3)",overflow:"hidden"}}>
+              {/* Header */}
+              <div style={{background:T.dark,padding:"20px 24px",textAlign:"center"}}>
+                <div style={{fontSize:40,marginBottom:8}}>🧠</div>
+                <div style={{color:"white",fontWeight:800,fontSize:18,marginBottom:4}}>Your Weekly Pulse is Ready</div>
+                <div style={{color:"#888",fontSize:12,lineHeight:1.5}}>Get your AI-powered scheduling analysis — labor costs, attendance patterns, and what to focus on next week.</div>
+              </div>
+              {/* Body */}
+              <div style={{padding:"20px 24px",display:"flex",flexDirection:"column",gap:10}}>
+                <button onClick={()=>{ setPulsePrompt(false); setTab("insights"); setTimeout(()=>generateInsight(),100); }}
+                  style={{background:T.accent,color:"white",border:"none",borderRadius:12,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+                  <span>🧠</span> Generate My Pulse Now
+                </button>
+                <button onClick={()=>{ setPulsePrompt(false); setTab("insights"); }}
+                  style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 0",fontWeight:700,fontSize:13,cursor:"pointer"}}>
+                  Go to Insights →
+                </button>
+                <button onClick={()=>setPulsePrompt(false)}
+                  style={{background:"transparent",color:T.sub,border:"none",fontSize:12,cursor:"pointer",padding:"4px 0"}}>
+                  Remind me later
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* MOBILE BOTTOM NAV */}
         <nav className="bottom-nav">
