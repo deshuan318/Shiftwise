@@ -3687,14 +3687,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const [reasonCode, setReasonCode] = useState("missed_punch");
     const [reasonNote, setReasonNote] = useState("");
 
+    // Always start blank — the punch log above already shows existing times.
+    // The adjust form is for entering corrections, not editing existing values.
     useEffect(()=>{
       if (!tsOpenCell) return;
-      const dp = getDayPunches(tsOpenCell.empId, tsOpenCell.dateStr);
-      const inP  = dp.find(p=>p.type==="in");
-      const outP = [...dp].reverse().find(p=>p.type==="out");
-      const toHHMM = isoStr => { const d=new Date(isoStr); return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0"); };
-      setEditIn(inP ? toHHMM(inP.time) : "");
-      setEditOut(outP ? toHHMM(outP.time) : "");
+      setEditIn("");
+      setEditOut("");
+      setReasonCode("missed_punch");
+      setReasonNote("");
     }, [tsOpenCell?.empId, tsOpenCell?.dateStr]);
 
     if (!tsOpenCell) return null;
