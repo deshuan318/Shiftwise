@@ -6744,7 +6744,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const flagged = punches.filter(p=>
           p.flags?.some(f=>ACTIONABLE_FLAGS.includes(f)) &&
           new Date(p.time) > thirtyDaysAgo &&
-          employees.some(e=>e.id===p.empId) // only show if employee still exists
+          employees.some(e=>e.id===p.empId) &&
+          !punchReviews[p.id] // hide already-actioned punches
         ).sort((a,b)=>new Date(b.time)-new Date(a.time));
         if (flagged.length===0) return (
           <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,textAlign:"center",color:T.sub}}>
