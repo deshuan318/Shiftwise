@@ -5926,65 +5926,63 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       </Card>
                     )}
 
-                    {/* Score History */}
-                    {pulseHistory.length > 0 && (
-                      <Card T={T} style={{padding:"16px 20px"}}>
-                        <div style={{fontWeight:800, fontSize:14, color:T.text, marginBottom:14, display:"flex", alignItems:"center", gap:8}}>
-                          <span>📈</span> Score History
-                          <span style={{fontSize:11, color:T.sub, fontWeight:500, marginLeft:"auto"}}>{pulseHistory.length} week{pulseHistory.length!==1?"s":""} tracked</span>
-                        </div>
-                        <div style={{display:"flex", flexDirection:"column", gap:6}}>
-                          {pulseHistory.slice(0,8).map((h,i)=>{
-                            const color = h.score>=75?"#4CAF7D":h.score>=50?"#E8A93A":h.score>=30?"#C0392B":"#7B0000";
-                            const bg    = h.score>=75?"#F0FFF4":h.score>=50?"#FEF3E2":h.score>=30?"#FDECEA":"#FDECEA";
-                            const isCurrent = i===0;
-                            const weekDate = h.weekStart ? new Date(h.weekStart+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "—";
-                            const genDate  = h.generatedAt ? new Date(h.generatedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "—";
-                            const prevScore = pulseHistory[i+1]?.score;
-                            const delta = prevScore != null ? h.score - prevScore : null;
-                            return (
-                              <div key={h.id||i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:10,background:isCurrent?bg:T.muted,border:`1px solid ${isCurrent?color+"40":T.border}`}}>
-                                {/* Score badge */}
-                                <div style={{width:48,height:48,borderRadius:10,background:isCurrent?color:T.border,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                                  <span style={{fontSize:18,fontWeight:900,color:"white",lineHeight:1}}>{h.score}</span>
-                                </div>
-                                {/* Info */}
-                                <div style={{flex:1,minWidth:0}}>
-                                  <div style={{display:"flex",alignItems:"center",gap:6}}>
-                                    <span style={{fontWeight:700,fontSize:13,color:isCurrent?color:T.text}}>{h.label}</span>
-                                    {isCurrent && <span style={{fontSize:9,fontWeight:700,color:color,background:bg,border:`1px solid ${color}30`,borderRadius:4,padding:"1px 5px"}}>THIS WEEK</span>}
-                                  </div>
-                                  <div style={{fontSize:11,color:T.sub,marginTop:2}}>Week of {weekDate} · Generated {genDate}</div>
-                                </div>
-                                {/* Delta */}
-                                {delta!=null && (
-                                  <div style={{fontSize:13,fontWeight:800,color:delta>0?"#4CAF7D":delta<0?"#C0392B":T.sub,flexShrink:0}}>
-                                    {delta>0?`+${delta}`:delta<0?`${delta}`:"—"}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                        {pulseHistory.length===1 && (
-                          <div style={{fontSize:11,color:T.sub,textAlign:"center",marginTop:10,padding:"8px",background:T.muted,borderRadius:8}}>
-                            Generate your Pulse weekly to build your score history and track trends over time.
-                          </div>
-                        )}
-                      </Card>
-                    )}
-
-                    {/* First-time prompt if no history */}
-                    {pulseHistory.length===0 && insight && (
-                      <Card T={T} style={{padding:"14px 18px",background:T.muted,border:`1px dashed ${T.border}`}}>
-                        <div style={{fontSize:12,color:T.sub,textAlign:"center",lineHeight:1.6}}>
-                          📈 <strong>Score history will appear here</strong> — generate your Pulse weekly to track your scheduling health over time.
-                        </div>
-                      </Card>
-                    )}
 
 
                   </div>
+                )}
+
+                {/* Score History — always visible when data exists */}
+                {pulseHistory.length > 0 && (
+                  <Card T={T} style={{padding:"16px 20px"}}>
+                    <div style={{fontWeight:800, fontSize:14, color:T.text, marginBottom:14, display:"flex", alignItems:"center", gap:8}}>
+                      <span>📈</span> Score History
+                      <span style={{fontSize:11, color:T.sub, fontWeight:500, marginLeft:"auto"}}>{pulseHistory.length} week{pulseHistory.length!==1?"s":""} tracked</span>
+                    </div>
+                    <div style={{display:"flex", flexDirection:"column", gap:6}}>
+                      {pulseHistory.slice(0,8).map((h,i)=>{
+                        const color = h.score>=75?"#4CAF7D":h.score>=50?"#E8A93A":h.score>=30?"#C0392B":"#7B0000";
+                        const bg    = h.score>=75?"#F0FFF4":h.score>=50?"#FEF3E2":h.score>=30?"#FDECEA":"#FDECEA";
+                        const isCurrent = i===0;
+                        const weekDate = h.weekStart ? new Date(h.weekStart+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "—";
+                        const genDate  = h.generatedAt ? new Date(h.generatedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "—";
+                        const prevScore = pulseHistory[i+1]?.score;
+                        const delta = prevScore != null ? h.score - prevScore : null;
+                        return (
+                          <div key={h.id||i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:10,background:isCurrent?bg:T.muted,border:`1px solid ${isCurrent?color+"40":T.border}`}}>
+                            <div style={{width:48,height:48,borderRadius:10,background:isCurrent?color:T.border,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                              <span style={{fontSize:18,fontWeight:900,color:"white",lineHeight:1}}>{h.score}</span>
+                            </div>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                                <span style={{fontWeight:700,fontSize:13,color:isCurrent?color:T.text}}>{h.label}</span>
+                                {isCurrent && <span style={{fontSize:9,fontWeight:700,color:color,background:bg,border:`1px solid ${color}30`,borderRadius:4,padding:"1px 5px"}}>THIS WEEK</span>}
+                              </div>
+                              <div style={{fontSize:11,color:T.sub,marginTop:2}}>Week of {weekDate} · Generated {genDate}</div>
+                            </div>
+                            {delta!=null && (
+                              <div style={{fontSize:13,fontWeight:800,color:delta>0?"#4CAF7D":delta<0?"#C0392B":T.sub,flexShrink:0}}>
+                                {delta>0?`+${delta}`:delta<0?`${delta}`:"—"}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {pulseHistory.length===1 && (
+                      <div style={{fontSize:11,color:T.sub,textAlign:"center",marginTop:10,padding:"8px",background:T.muted,borderRadius:8}}>
+                        Generate your Pulse weekly to build your score history and track trends over time.
+                      </div>
+                    )}
+                  </Card>
+                )}
+
+                {/* First-time prompt */}
+                {pulseHistory.length===0 && (
+                  <Card T={T} style={{padding:"14px 18px",background:T.muted,border:`1px dashed ${T.border}`}}>
+                    <div style={{fontSize:12,color:T.sub,textAlign:"center",lineHeight:1.6}}>
+                      📈 <strong>Score history will appear here</strong> — generate your Pulse weekly to track your scheduling health over time.
+                    </div>
+                  </Card>
                 )}
               </div>
             );
