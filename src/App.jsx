@@ -5932,6 +5932,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 )}
 
                 {/* Score History — always visible when data exists */}
+                {/* DEBUG: pulseHistory count = {pulseHistory.length} */}
+                <div style={{fontSize:10,color:"red",padding:"4px 8px"}}>DEBUG: {pulseHistory.length} history rows loaded</div>
                 {pulseHistory.length > 0 && (
                   <Card T={T} style={{padding:"16px 20px"}}>
                     <div style={{fontWeight:800, fontSize:14, color:T.text, marginBottom:14, display:"flex", alignItems:"center", gap:8}}>
