@@ -93,7 +93,7 @@ const fmt = v => {
   return `${hr}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 };
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end - s.start).toFixed(2))));
-const getSunday = ds => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()-d.getDay()); return d.toISOString().split("T")[0]; };
+const getSunday = ds => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()-d.getDay()); const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
 const toLocalDateStr = d => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
 const addDays = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
 const weekDatesFromSunday = s => { const sun=new Date(s+"T00:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return d; }); };
@@ -1003,7 +1003,7 @@ function FeedbackTab({ bizId, T, Card, showToast, addAudit, getSession, dbPost }
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function App() {
-  const defaultSun = useMemo(() => getSunday(new Date().toISOString().split("T")[0]), []);
+  const defaultSun = useMemo(() => getSunday(toLocalDateStr(new Date())), []);
 
   // ── Auth state ────────────────────────────────────────────────────────────
   const [authState,   setAuthState]   = useState(() => {
@@ -1079,7 +1079,7 @@ export default function App() {
   const [dragWidgetId,   setDragWidgetId]   = useState(null);
   const [dragOverWidgetId, setDragOverWidgetId] = useState(null);
   const [punches,        setPunches]        = useState([]);
-const [tsWeekStart, setTsWeekStart] = useState(()=>getSunday(new Date().toISOString().split("T")[0]));
+const [tsWeekStart, setTsWeekStart] = useState(()=>getSunday(toLocalDateStr(new Date())));
 const [coverageWeek, setCoverageWeek] = useState(()=>getSunday(toLocalDateStr(new Date())));
 const [coverageDay,  setCoverageDay]  = useState(()=>toLocalDateStr(new Date()));
 const [tsOpenCell, setTsOpenCell] = useState(null);
@@ -1276,7 +1276,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
       // 5. Set week dates - always default to current week, single-week mode
       {
-        const todaySun = getSunday(new Date().toISOString().split("T")[0]);
+        const todaySun = getSunday(toLocalDateStr(new Date()));
         setWk1Start(todaySun);
         setActiveWeek(todaySun);
         setPrintWeek(todaySun);
