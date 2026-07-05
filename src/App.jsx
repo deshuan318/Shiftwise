@@ -116,7 +116,7 @@ const toLocalDateStr = d => {
   parts.forEach(({type,value}) => { p[type]=value; });
   return `${p.year}-${p.month}-${p.day}`;
 };
-const addDays = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()+n); return toLocalDateStr(d); };
+const addDays = (ds,n) => { const d = new Date(ds+"T12:00:00"); d.setDate(d.getDate()+n); return toLocalDateStr(d); };
 const weekDatesFromSunday = s => { const sun=new Date(s+"T12:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun.getTime()+i*24*60*60*1000); return d; }); };
 const dl = d => { if(!d) return ""; const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
 const toInputDate = d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt); };
@@ -142,7 +142,7 @@ const FILTERS = [
   { key:"next90",    label:"Next 90 Days",   kind:"forecast" },
 ];
 
-const addMonths = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setMonth(d.getMonth()+n); return toLocalDateStr(d); };
+const addMonths = (ds,n) => { const d = new Date(ds+"T12:00:00"); d.setMonth(d.getMonth()+n); return toLocalDateStr(d); };
 const datesInRange = (startStr,endStr) => { const out=[]; let cur=startStr; while(cur<=endStr){ out.push(cur); cur=addDays(cur,1); } return out; };
 
 // Returns an array of YYYY-MM-DD date strings for the given filter.
@@ -3821,7 +3821,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const makeISO = (ds, timeStr, dayOffset=0) => {
           const [h,m] = timeStr.split(":").map(Number);
           // Build date using CST interpretation
-          const d = new Date(ds+"T00:00:00");
+          const d = new Date(ds+"T12:00:00");
           if (dayOffset) d.setDate(d.getDate()+dayOffset);
           const pad = n => String(n).padStart(2,"0");
           const dateStr2 = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
