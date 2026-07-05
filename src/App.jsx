@@ -94,7 +94,17 @@ const fmt = v => {
 };
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end - s.start).toFixed(2))));
 const getSunday = ds => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()-d.getDay()); const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
-const toLocalDateStr = d => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
+const APP_TZ = "America/Chicago"; // ShiftWise always operates in Central Time
+const toLocalDateStr = d => {
+  // Always interpret dates in Central Time regardless of browser timezone
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TZ,
+    year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(d);
+  const p = {};
+  parts.forEach(({type,value}) => { p[type]=value; });
+  return `${p.year}-${p.month}-${p.day}`;
+};
 const addDays = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()+n); return toLocalDateStr(d); };
 const weekDatesFromSunday = s => { const sun=new Date(s+"T00:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return d; }); };
 const dl = d => { if(!d) return ""; const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
@@ -3781,21 +3791,32 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         // Build a real ISO timestamp WITH the local timezone offset, so the
         // moment stored in Supabase and the moment reconstructed by `new Date()`
         // on read-back are identical — no naive-timestamp ambiguity.
-        const getTzOffset = (d) => {
-          const off = -d.getTimezoneOffset(); // minutes, positive = ahead of UTC
-          const sign = off >= 0 ? "+" : "-";
-          const abs = Math.abs(off);
+        // Always use Central Time offset for manual punch timestamps
+        const getCSTOffset = (ds, timeStr) => {
+          // Use Intl to determine the correct CST/CDT offset for this datetime
+          const testDate = new Date(`${ds}T${timeStr}:00`);
+          const cstStr = testDate.toLocaleString("en-US", {timeZone:"America/Chicago",hour12:false,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
+          const utcMs = testDate.getTime();
+          // Get CST time parts
+          const parts = new Intl.DateTimeFormat("en-US",{timeZone:"America/Chicago",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(testDate);
+          const p = {}; parts.forEach(({type,value})=>{ p[type]=value; });
+          const cstMs = new Date(`${p.year}-${p.month}-${p.day}T${p.hour === "24" ? "00" : p.hour}:${p.minute}:00`).getTime();
+          const offMins = Math.round((utcMs - cstMs) / 60000);
+          const sign = offMins >= 0 ? "-" : "+"; // UTC-5 means offset is -300 mins
+          const abs = Math.abs(offMins);
           const pad = n => String(n).padStart(2,"0");
           return `${sign}${pad(Math.floor(abs/60))}:${pad(abs%60)}`;
         };
         const makeISO = (ds, timeStr, dayOffset=0) => {
           const [h,m] = timeStr.split(":").map(Number);
+          // Build date using CST interpretation
           const d = new Date(ds+"T00:00:00");
           if (dayOffset) d.setDate(d.getDate()+dayOffset);
-          d.setHours(h,m,0,0);
           const pad = n => String(n).padStart(2,"0");
-          const tz = getTzOffset(d);
-          return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00${tz}`;
+          const dateStr2 = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+          const timeStr2 = `${pad(h)}:${pad(m)}`;
+          const tz = getCSTOffset(dateStr2, timeStr2);
+          return `${dateStr2}T${timeStr2}:00${tz}`;
         };
         // If clock-out time is earlier than clock-in time, it's an overnight shift —
         // the clock-out lands on the following calendar day.
