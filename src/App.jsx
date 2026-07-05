@@ -95,10 +95,10 @@ const fmt = v => {
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end - s.start).toFixed(2))));
 const getSunday = ds => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()-d.getDay()); const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
 const toLocalDateStr = d => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
-const addDays = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()+n); return d.toISOString().split("T")[0]; };
+const addDays = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()+n); return toLocalDateStr(d); };
 const weekDatesFromSunday = s => { const sun=new Date(s+"T00:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return d; }); };
 const dl = d => { if(!d) return ""; const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
-const toInputDate = d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toISOString().split("T")[0]; };
+const toInputDate = d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt); };
 
 // ── REPORTING FILTERS — shared time-range engine for Sales/Labor/Forecast ──
 // Every widget (stat card, trend chart, comparison, forecast) asks one of
@@ -121,14 +121,14 @@ const FILTERS = [
   { key:"next90",    label:"Next 90 Days",   kind:"forecast" },
 ];
 
-const addMonths = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setMonth(d.getMonth()+n); return d.toISOString().split("T")[0]; };
+const addMonths = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setMonth(d.getMonth()+n); return toLocalDateStr(d); };
 const datesInRange = (startStr,endStr) => { const out=[]; let cur=startStr; while(cur<=endStr){ out.push(cur); cur=addDays(cur,1); } return out; };
 
 // Returns an array of YYYY-MM-DD date strings for the given filter.
 // `anchor` defaults to today, but can be set to a specific Sunday (e.g.
 // payWeek) so "thisWeek" can represent whatever week is being viewed.
 function getFilterDates(filterKey, salesData, anchor) {
-  const today = anchor || new Date().toISOString().split("T")[0];
+  const today = anchor || toLocalDateStr(new Date());
   switch (filterKey) {
     case "yesterday": return [addDays(today,-1)];
     case "last7":     return datesInRange(addDays(today,-6), today);
@@ -1059,7 +1059,7 @@ export default function App() {
   const SHIFT_TYPES = shiftTypes;
   const [recognition, setRecognition] = useState([]);
   const [schedView,    setSchedView]   = useState("weekly");
-  const [activeDay,    setActiveDay]   = useState(() => new Date().toISOString().split("T")[0]);
+  const [activeDay,    setActiveDay]   = useState(() => toLocalDateStr(new Date()));
   const [actionsOpen,  setActionsOpen] = useState(false);
   const [templates,    setTemplates]   = useState([]);
   const [salesData,   setSalesData]   = useState([]);
@@ -3575,13 +3575,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const tsWkDates = Array.from({length:7},(_,i)=>{
     const d = new Date(tsWeekStart+"T00:00:00");
     d.setDate(d.getDate()+i);
-    return d.toISOString().split("T")[0];
+    return toLocalDateStr(d);
   });
   const tsWkLabel = `${dl(new Date(tsWeekStart+"T00:00:00"))} – ${dl(new Date(tsWkDates[6]+"T00:00:00"))}`;
 
   const tsSchedKey = Object.keys(schedule).find(wk => {
     const sun = new Date(wk+"T00:00:00");
-    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return d.toISOString().split("T")[0]; });
+    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return toLocalDateStr(d); });
     return dates[0] === tsWeekStart;
   }) || null;
 
@@ -3591,7 +3591,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   function getDayPunches(empId, dateStr) {
     return punches.filter(p => {
-      const pd = new Date(p.time).toISOString().split("T")[0];
+      const pd = toLocalDateStr(new Date(p.time));
       return p.empId === empId && pd === dateStr;
     }).sort((a,b) => new Date(a.time)-new Date(b.time));
   }
@@ -4228,7 +4228,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                     <span style={{color:T.accent,fontWeight:700,fontSize:12}}>{snap.totalApprovedHrs.toFixed(1)}h · ${snap.totalApprovedPay.toFixed(0)}</span>
                     <button onClick={()=>{
-                      const wkDates = Array.from({length:7},(_,i)=>{ const d=new Date(snap.weekStart+"T00:00:00"); d.setDate(d.getDate()+i); return d.toISOString().split("T")[0]; });
+                      const wkDates = Array.from({length:7},(_,i)=>{ const d=new Date(snap.weekStart+"T00:00:00"); d.setDate(d.getDate()+i); return toLocalDateStr(d); });
                       exportTimesheetCSV(wkDates, snap.label, snap.employees, snap.reviewStatuses);
                     }} style={{background:T.accent,color:"white",border:"none",borderRadius:7,padding:"5px 12px",fontWeight:700,fontSize:11,cursor:"pointer"}}>Export CSV ↓</button>
                     <button onClick={()=>{ if(window.confirm("Delete this saved timesheet?")) setTimesheetHistory(p=>p.filter(s=>s.id!==snap.id)); }}
@@ -4416,7 +4416,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 const dayDate = new Date(activeDay+"T00:00:00");
                 const prevDay = addDays(activeDay,-1);
                 const nextDay = addDays(activeDay,1);
-                const wkForDay = weeks.find(wk => wk.dates.some(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toISOString().split("T")[0]===activeDay; }));
+                const wkForDay = weeks.find(wk => wk.dates.some(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt)===activeDay; }));
                 const wkKey = wkForDay?.key || null; // null = activeDay not in any scheduled week
                 return (
                   <div>
@@ -4502,9 +4502,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 return (
                   <div>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-                      <button onClick={()=>{ const d=new Date(year,month-1,1); setWk1Start(getSunday(d.toISOString().split("T")[0])); }} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 14px",fontWeight:700,fontSize:13,cursor:"pointer",color:T.text}}>← Prev</button>
+                      <button onClick={()=>{ const d=new Date(year,month-1,1); setWk1Start(getSunday(toLocalDateStr(d))); }} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 14px",fontWeight:700,fontSize:13,cursor:"pointer",color:T.text}}>← Prev</button>
                       <div style={{fontWeight:800,fontSize:18,color:T.text}}>{monthName}</div>
-                      <button onClick={()=>{ const d=new Date(year,month+1,1); setWk1Start(getSunday(d.toISOString().split("T")[0])); }} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 14px",fontWeight:700,fontSize:13,cursor:"pointer",color:T.text}}>Next →</button>
+                      <button onClick={()=>{ const d=new Date(year,month+1,1); setWk1Start(getSunday(toLocalDateStr(d))); }} style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 14px",fontWeight:700,fontSize:13,cursor:"pointer",color:T.text}}>Next →</button>
                     </div>
                     <div style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadowMd,overflow:"hidden"}}>
                       <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",background:T.dark}}>
@@ -4516,9 +4516,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           const dayNum = i+1;
                           const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(dayNum).padStart(2,"0")}`;
                           const dayOfWeek = new Date(dateStr+"T00:00:00").getDay();
-                          const isToday = dateStr===new Date().toISOString().split("T")[0];
+                          const isToday = dateStr===toLocalDateStr(new Date());
                           const isActive = dateStr===activeDay;
-                          const wkForDay = weeks.find(wk=>wk.dates.some(d=>{ const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toISOString().split("T")[0]===dateStr; }));
+                          const wkForDay = weeks.find(wk=>wk.dates.some(d=>{ const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt)===dateStr; }));
                           const wkKey = wkForDay?.key;
                           const shiftsToday = wkKey ? employees.filter(e=>{ const availDays=e.availableDays??[0,1,2,3,4,5,6]; return availDays.includes(dayOfWeek)&&getShift(wkKey,e.id,dayOfWeek); }) : [];
                           return (
@@ -5211,7 +5211,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           {tab==="dashboard" && (
             <div style={{display:"flex",flexDirection:"column",gap:16}}>
               {(()=>{
-                const paySun=getSunday(new Date().toISOString().split("T")[0]);
+                const paySun=getSunday(toLocalDateStr(new Date()));
                 const pwDates=weekDatesFromSunday(payWeek);
                 const pwLabel=dl(pwDates[0])+" – "+dl(pwDates[6]);
                 const pwHrs=employees.reduce((s,e)=>s+DAYS.reduce((d,_,i)=>d+eDayH(payWeek,e.id,i),0),0);
