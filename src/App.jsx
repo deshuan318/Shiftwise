@@ -3434,7 +3434,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     p.flags?.some(f=>ACTIONABLE_FLAGS.includes(f)) &&
     !punchReviews[p.id] &&
     new Date(p.time) > thirtyDaysAgoBell &&
-    employees.some(e=>e.id===p.empId)
+    employees.some(e=>e.id===p.empId) &&
+    p.flags?.includes("NO_SHIFT") // only NO_SHIFT needs bell alert — ADJUSTMENT is auto-approved now
   ).length;
   return (
     <button onClick={()=>setAlertsOpen(p=>!p)}
@@ -3809,47 +3810,60 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const dayStart = makeISO(dateStr, "00:00");
         const dayEnd   = makeISO(dateStr, "23:59");
 
-        if (editIn) {
-          // Full replacement — clear all existing punches for the day and insert clean pair
-          setPunches(prev => prev.filter(px => {
-            const sameEmp = px.empId === empId;
-            const sameDay = toLocalDateStr(new Date(px.time)) === dateStr;
-            return !(sameEmp && sameDay);
-          }));
+        const insertPunch = async (type, time) => {
+          const punch = { id:(Date.now()+Math.random()).toString(), empId, empName:emp.name, type, time, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
+          setPunches(p=>[...p, punch]);
+          let savedId = punch.id;
+          if (bizId) {
+            const saved = await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:type, punched_at:time, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
+            if (saved?.[0]?.id) savedId = saved[0].id;
+          }
+          return savedId;
+        };
+
+        const autoApprove = async (punchId) => {
+          setPunchReviews(prev=>({...prev,[punchId]:"approved"}));
+          if (bizId) {
+            await fetch(`${SUPABASE_URL}/rest/v1/punch_reviews?on_conflict=punch_id`, {
+              method:"POST",
+              headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`, Prefer:"resolution=merge-duplicates,return=minimal"},
+              body:JSON.stringify({business_id:bizId, punch_id:punchId, status:"approved", reviewed_by:getSession()?.user?.id||null})
+            }).catch(e=>console.warn("auto-approve failed:", e));
+          }
+        };
+
+        if (editIn && editOut) {
+          // Both entered — replace all punches for the day with clean pair
+          setPunches(prev => prev.filter(px => !(px.empId===empId && toLocalDateStr(new Date(px.time))===dateStr)));
           if (bizId) {
             await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} }).catch(e=>console.warn("punch delete failed:", e));
           }
-          const inPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"in", time:inTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
-          setPunches(p=>[...p, inPunch]);
+          const inId  = await insertPunch("in",  inTime);
+          const outId = await insertPunch("out", outTime);
+          await autoApprove(inId);
+          await autoApprove(outId);
+
+        } else if (editIn) {
+          // Clock-in only — replace existing clock-in, preserve clock-out
+          setPunches(prev => prev.filter(px => !(px.empId===empId && toLocalDateStr(new Date(px.time))===dateStr && px.type==="in")));
           if (bizId) {
-            await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"in", punched_at:inTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
+            await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punch_type=eq.in&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} }).catch(e=>console.warn("punch delete failed:", e));
           }
-          if (outTime) {
-            const outPunch = { id:(Date.now()+1).toString(), empId, empName:emp.name, type:"out", time:outTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
-            setPunches(p=>[...p, outPunch]);
-            if (bizId) {
-              await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"out", punched_at:outTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
-            }
-          }
-        } else if (outTime) {
-          // Clock-out only — delete any existing clock-out punches for the day, preserve clock-in
-          setPunches(prev => prev.filter(px => {
-            const sameEmp = px.empId === empId;
-            const sameDay = toLocalDateStr(new Date(px.time)) === dateStr;
-            return !(sameEmp && sameDay && px.type === "out");
-          }));
+          const inId = await insertPunch("in", inTime);
+          await autoApprove(inId);
+
+        } else if (editOut) {
+          // Clock-out only — replace existing clock-out, preserve clock-in
+          setPunches(prev => prev.filter(px => !(px.empId===empId && toLocalDateStr(new Date(px.time))===dateStr && px.type==="out")));
           if (bizId) {
             await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punch_type=eq.out&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} }).catch(e=>console.warn("punch delete failed:", e));
           }
-          const outPunch = { id:Date.now().toString(), empId, empName:emp.name, type:"out", time:outTime, scheduled:shift||null, flags:["ADJUSTMENT"], adjustmentReason:reasonText };
-          setPunches(p=>[...p, outPunch]);
-          if (bizId) {
-            await dbPost("punches", { business_id:bizId, employee_id:empId, employee_name:emp.name, punch_type:"out", punched_at:outTime, scheduled_start:shift?.start||null, scheduled_end:shift?.end||null, flags:["ADJUSTMENT"], adjustment_reason:reasonText });
-          }
+          const outId = await insertPunch("out", outTime);
+          await autoApprove(outId);
         }
 
-        addAudit("Manual Time Entry", `${emp.name} — ${dateStr}: ${editIn}${editOut?" – "+editOut:""} (${reasonText})`, {empName:emp.name});
-        showToast("Time adjustment saved ✓");
+        addAudit("Manual Time Entry", `${emp.name} — ${dateStr}: ${editIn||""}${editOut?" – "+editOut:""} (${reasonText}) — auto-approved`, {empName:emp.name});
+        showToast("Time adjustment saved & approved ✓");
         setTsOpenCell(null);
       } catch(e) { showToast("Could not save: "+e.message); }
       finally { setSaving(false); }
@@ -5932,8 +5946,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 )}
 
                 {/* Score History — always visible when data exists */}
-                {/* DEBUG: pulseHistory count = {pulseHistory.length} */}
-                <div style={{fontSize:10,color:"red",padding:"4px 8px"}}>DEBUG: {pulseHistory.length} history rows loaded</div>
                 {pulseHistory.length > 0 && (
                   <Card T={T} style={{padding:"16px 20px"}}>
                     <div style={{fontWeight:800, fontSize:14, color:T.text, marginBottom:14, display:"flex", alignItems:"center", gap:8}}>
