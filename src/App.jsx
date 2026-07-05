@@ -93,7 +93,18 @@ const fmt = v => {
   return `${hr}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 };
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end - s.start).toFixed(2))));
-const getSunday = ds => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()-d.getDay()); const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
+const getSunday = ds => {
+  // Get day-of-week in CST using noon to avoid any midnight UTC shift
+  const d = new Date(ds+"T12:00:00");
+  const dowStr = new Intl.DateTimeFormat("en-US",{timeZone:"America/Chicago",weekday:"short"}).format(d);
+  const dow = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].indexOf(dowStr);
+  // Subtract days to get to Sunday — work in UTC to avoid DST issues
+  const result = new Date(d.getTime() - dow*24*60*60*1000);
+  // Format using CST to get the correct local date
+  const parts = new Intl.DateTimeFormat("en-US",{timeZone:"America/Chicago",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(result);
+  const p = {}; parts.forEach(({type,value})=>{p[type]=value;});
+  return `${p.year}-${p.month}-${p.day}`;
+};
 const APP_TZ = "America/Chicago"; // ShiftWise always operates in Central Time
 const toLocalDateStr = d => {
   // Always interpret dates in Central Time regardless of browser timezone
@@ -106,7 +117,7 @@ const toLocalDateStr = d => {
   return `${p.year}-${p.month}-${p.day}`;
 };
 const addDays = (ds,n) => { const d = new Date(ds+"T00:00:00"); d.setDate(d.getDate()+n); return toLocalDateStr(d); };
-const weekDatesFromSunday = s => { const sun=new Date(s+"T00:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return d; }); };
+const weekDatesFromSunday = s => { const sun=new Date(s+"T12:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun.getTime()+i*24*60*60*1000); return d; }); };
 const dl = d => { if(!d) return ""; const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
 const toInputDate = d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt); };
 
@@ -3583,15 +3594,15 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     );
   }
   const tsWkDates = Array.from({length:7},(_,i)=>{
-    const d = new Date(tsWeekStart+"T00:00:00");
-    d.setDate(d.getDate()+i);
+    const d = new Date(tsWeekStart+"T12:00:00"); // noon avoids UTC midnight shift
+    d.setUTCDate(d.getUTCDate()+i);
     return toLocalDateStr(d);
   });
   const tsWkLabel = `${dl(new Date(tsWeekStart+"T00:00:00"))} – ${dl(new Date(tsWkDates[6]+"T00:00:00"))}`;
 
   const tsSchedKey = Object.keys(schedule).find(wk => {
     const sun = new Date(wk+"T00:00:00");
-    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return toLocalDateStr(d); });
+    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun.getTime()+i*24*60*60*1000); return toLocalDateStr(d); });
     return dates[0] === tsWeekStart;
   }) || null;
 
@@ -4249,7 +4260,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                     <span style={{color:T.accent,fontWeight:700,fontSize:12}}>{snap.totalApprovedHrs.toFixed(1)}h · ${snap.totalApprovedPay.toFixed(0)}</span>
                     <button onClick={()=>{
-                      const wkDates = Array.from({length:7},(_,i)=>{ const d=new Date(snap.weekStart+"T00:00:00"); d.setDate(d.getDate()+i); return toLocalDateStr(d); });
+                      const wkDates = Array.from({length:7},(_,i)=>{ const d=new Date(snap.weekStart+"T12:00:00"); d.setUTCDate(d.getUTCDate()+i); return toLocalDateStr(d); });
                       exportTimesheetCSV(wkDates, snap.label, snap.employees, snap.reviewStatuses);
                     }} style={{background:T.accent,color:"white",border:"none",borderRadius:7,padding:"5px 12px",fontWeight:700,fontSize:11,cursor:"pointer"}}>Export CSV ↓</button>
                     <button onClick={()=>{ if(window.confirm("Delete this saved timesheet?")) setTimesheetHistory(p=>p.filter(s=>s.id!==snap.id)); }}
