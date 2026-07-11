@@ -2737,7 +2737,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         weekId = rows?.[0]?.id;
         if (weekId) setWeekMap(p => ({...p, [wk]: weekId}));
       }
-      if (!weekId) return;
+      if (!weekId) { console.warn("No weekId for week:", wk, "weekMap:", weekMap); return; }
 
       if (shift === null) {
         await dbDelete("shifts?week_id=eq." + weekId + "&employee_id=eq." + eid + "&day_index=eq." + di);
