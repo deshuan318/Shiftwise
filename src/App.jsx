@@ -2167,9 +2167,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
     // ── Next week focus — specific and actionable ──────────────────────────────
     let nextWeekFocus = "";
-    const salesDays = hasSales ? (wk.dailyTotals||[]).filter(d=>d.revenue && d.totalHours>0).sort((a,b)=>b.revenue-a.revenue) : [];
-    const topSalesDay = salesDays[0];
-    const bottomSalesDay = salesDays[salesDays.length-1];
+    // salesDays, topSalesDay, bottomSalesDay already declared above in pulse narrative
 
     if (ot.length > 0) {
       nextWeekFocus = `Before building next week's schedule, resolve this week's overtime. ${ot[0].name} finishing over 40h means next week needs to start with a lighter load for them. Redistribute their hours across the team if the coverage is still needed — don't just cut the shift and leave a gap.`;
