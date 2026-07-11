@@ -1148,7 +1148,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const [scoreOpen,      setScoreOpen]      = useState(false);
   const [pulseHistory,   setPulseHistory]   = useState([]); // saved scores from pulse_history table
   const [notifPanelOpen, setNotifPanelOpen] = useState(false);
-  const [pulsePrompt,    setPulsePrompt]    = useState(false); // show pulse-ready modal on login
+  const [pulsePrompt,    setPulsePrompt]    = useState(false);
+  const [pulseHistOpen,  setPulseHistOpen]  = useState(false); // show pulse-ready modal on login
   const [notifFreq,      setNotifFreq]      = useState(() => { try { return localStorage.getItem("sw_notif_freq")||"login"; } catch { return "login"; } });
   const [notifDay,       setNotifDay]       = useState(() => { try { return localStorage.getItem("sw_notif_day")||"Monday"; } catch { return "Monday"; } });
 
@@ -1704,7 +1705,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // AI INSIGHT GENERATOR — calls Claude with the business snapshot.
   // The prompt and API call are data-source agnostic.
   // ─────────────────────────────────────────────────────────────────────────
-  async function generateInsight() {
+  async function generateInsight(fromNotification=false) {
     if (insightLoading) return;
     setInsightLoading(true);
     setInsightError(null);
@@ -1718,20 +1719,17 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const weekStart = wk1Start;
         setInsight({ ...result, generatedAt: now, snapshot });
         // Save score to pulse_history
-        if (bizId) {
+        // Only save to history when triggered from the scheduled notification — not manual runs
+        if (bizId && fromNotification) {
           try {
-            // Upsert with on_conflict in URL — required by PostgREST
             const saveRes = await fetch(`${SUPABASE_URL}/rest/v1/pulse_history?on_conflict=business_id,week_start`, {
               method: "POST",
               headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
               body: JSON.stringify({ business_id: bizId, score: result.score.value, label: result.score.label, week_start: weekStart, generated_at: now })
             });
-            const saveText = await saveRes.text();
             if (!saveRes.ok) {
-              console.warn("pulse_history upsert failed:", saveRes.status, saveText);
-              showToast(`Score save failed (${saveRes.status}): ${saveText.slice(0,80)}`);
-            } else {
-              console.log("pulse_history saved OK for week:", weekStart);
+              const saveText = await saveRes.text();
+              console.warn("pulse_history save failed:", saveRes.status, saveText);
             }
             // Reload history
             const rows = await dbGet(`pulse_history?select=*&business_id=eq.${bizId}&order=generated_at.desc&limit=20`);
@@ -5675,6 +5673,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     </p>
                   </div>
                   <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+                    {pulseHistory.length > 0 && (
+                      <button onClick={()=>setPulseHistOpen(p=>!p)}
+                        title="Score history"
+                        style={{background:pulseHistOpen?T.accent:T.muted,border:`1px solid ${pulseHistOpen?T.accent:T.border}`,borderRadius:9,height:38,padding:"0 14px",display:"flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:pulseHistOpen?"white":T.sub,cursor:"pointer",transition:"all 0.15s"}}>
+                        📈 History
+                      </button>
+                    )}
                     <button onClick={()=>setNotifPanelOpen(p=>!p)}
                       title="Notification preferences"
                       style={{background:notifPanelOpen?T.accent:T.muted,border:`1px solid ${notifPanelOpen?T.accent:T.border}`,borderRadius:9,width:38,height:38,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,cursor:"pointer",transition:"all 0.15s",position:"relative"}}>
@@ -5698,6 +5703,51 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     </button>
                   </div>
                 </div>
+
+                {/* Pulse Score History panel */}
+                {pulseHistOpen && pulseHistory.length > 0 && (
+                  <Card T={T} style={{padding:"16px 20px"}}>
+                    <div style={{fontWeight:800,fontSize:14,color:T.text,marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                      <span>📈 Score History</span>
+                      <span style={{fontSize:11,color:T.sub,fontWeight:500}}>{pulseHistory.length} week{pulseHistory.length!==1?"s":""} tracked</span>
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      {pulseHistory.slice(0,8).map((h,i)=>{
+                        const color = h.score>=75?"#4CAF7D":h.score>=50?"#E8A93A":h.score>=30?"#C0392B":"#7B0000";
+                        const bg    = h.score>=75?"#F0FFF4":h.score>=50?"#FEF3E2":h.score>=30?"#FDECEA":"#FDECEA";
+                        const isCurrent = i===0;
+                        const weekDate = h.weekStart ? new Date(h.weekStart+"T12:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "—";
+                        const genDate  = h.generatedAt ? new Date(h.generatedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "—";
+                        const prevScore = pulseHistory[i+1]?.score;
+                        const delta = prevScore != null ? h.score - prevScore : null;
+                        return (
+                          <div key={h.id||i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:10,background:isCurrent?bg:T.muted,border:`1px solid ${isCurrent?color+"40":T.border}`}}>
+                            <div style={{width:44,height:44,borderRadius:10,background:isCurrent?color:T.border,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                              <span style={{fontSize:16,fontWeight:900,color:"white",lineHeight:1}}>{h.score}</span>
+                            </div>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{display:"flex",alignItems:"center",gap:6}}>
+                                <span style={{fontWeight:700,fontSize:13,color:isCurrent?color:T.text}}>{h.label}</span>
+                                {isCurrent && <span style={{fontSize:9,fontWeight:700,color:color,background:bg,border:`1px solid ${color}30`,borderRadius:4,padding:"1px 5px"}}>THIS WEEK</span>}
+                              </div>
+                              <div style={{fontSize:11,color:T.sub,marginTop:2}}>Week of {weekDate} · Saved {genDate}</div>
+                            </div>
+                            {delta!=null && (
+                              <div style={{fontSize:13,fontWeight:800,color:delta>0?"#4CAF7D":delta<0?"#C0392B":T.sub,flexShrink:0}}>
+                                {delta>0?`+${delta}`:delta<0?`${delta}`:"—"}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {pulseHistory.length===1 && (
+                      <div style={{fontSize:11,color:T.sub,textAlign:"center",marginTop:10,padding:"8px",background:T.muted,borderRadius:8}}>
+                        Generate your Pulse from the weekly notification to build your score history.
+                      </div>
+                    )}
+                  </Card>
+                )}
 
                 {/* Notification preferences panel */}
                 {notifPanelOpen && (
@@ -5986,59 +6036,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                 )}
 
-                {/* Score History — always visible when data exists */}
-                {pulseHistory.length > 0 && (
-                  <Card T={T} style={{padding:"16px 20px"}}>
-                    <div style={{fontWeight:800, fontSize:14, color:T.text, marginBottom:14, display:"flex", alignItems:"center", gap:8}}>
-                      <span>📈</span> Score History
-                      <span style={{fontSize:11, color:T.sub, fontWeight:500, marginLeft:"auto"}}>{pulseHistory.length} week{pulseHistory.length!==1?"s":""} tracked</span>
-                    </div>
-                    <div style={{display:"flex", flexDirection:"column", gap:6}}>
-                      {pulseHistory.slice(0,8).map((h,i)=>{
-                        const color = h.score>=75?"#4CAF7D":h.score>=50?"#E8A93A":h.score>=30?"#C0392B":"#7B0000";
-                        const bg    = h.score>=75?"#F0FFF4":h.score>=50?"#FEF3E2":h.score>=30?"#FDECEA":"#FDECEA";
-                        const isCurrent = i===0;
-                        const weekDate = h.weekStart ? new Date(h.weekStart+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "—";
-                        const genDate  = h.generatedAt ? new Date(h.generatedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "—";
-                        const prevScore = pulseHistory[i+1]?.score;
-                        const delta = prevScore != null ? h.score - prevScore : null;
-                        return (
-                          <div key={h.id||i} style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",borderRadius:10,background:isCurrent?bg:T.muted,border:`1px solid ${isCurrent?color+"40":T.border}`}}>
-                            <div style={{width:48,height:48,borderRadius:10,background:isCurrent?color:T.border,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                              <span style={{fontSize:18,fontWeight:900,color:"white",lineHeight:1}}>{h.score}</span>
-                            </div>
-                            <div style={{flex:1,minWidth:0}}>
-                              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                                <span style={{fontWeight:700,fontSize:13,color:isCurrent?color:T.text}}>{h.label}</span>
-                                {isCurrent && <span style={{fontSize:9,fontWeight:700,color:color,background:bg,border:`1px solid ${color}30`,borderRadius:4,padding:"1px 5px"}}>THIS WEEK</span>}
-                              </div>
-                              <div style={{fontSize:11,color:T.sub,marginTop:2}}>Week of {weekDate} · Generated {genDate}</div>
-                            </div>
-                            {delta!=null && (
-                              <div style={{fontSize:13,fontWeight:800,color:delta>0?"#4CAF7D":delta<0?"#C0392B":T.sub,flexShrink:0}}>
-                                {delta>0?`+${delta}`:delta<0?`${delta}`:"—"}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                    {pulseHistory.length===1 && (
-                      <div style={{fontSize:11,color:T.sub,textAlign:"center",marginTop:10,padding:"8px",background:T.muted,borderRadius:8}}>
-                        Generate your Pulse weekly to build your score history and track trends over time.
-                      </div>
-                    )}
-                  </Card>
-                )}
 
-                {/* First-time prompt */}
-                {pulseHistory.length===0 && (
-                  <Card T={T} style={{padding:"14px 18px",background:T.muted,border:`1px dashed ${T.border}`}}>
-                    <div style={{fontSize:12,color:T.sub,textAlign:"center",lineHeight:1.6}}>
-                      📈 <strong>Score history will appear here</strong> — generate your Pulse weekly to track your scheduling health over time.
-                    </div>
-                  </Card>
-                )}
               </div>
             );
           })()}
@@ -7145,7 +7143,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               </div>
               {/* Body */}
               <div style={{padding:"20px 24px",display:"flex",flexDirection:"column",gap:10}}>
-                <button onClick={()=>{ setPulsePrompt(false); setTab("insights"); setTimeout(()=>generateInsight(),100); }}
+                <button onClick={()=>{ setPulsePrompt(false); setTab("insights"); setTimeout(()=>generateInsight(true),100); }}
                   style={{background:T.accent,color:"white",border:"none",borderRadius:12,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
                   <span>🧠</span> Generate My Pulse Now
                 </button>
