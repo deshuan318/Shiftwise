@@ -3896,6 +3896,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
         addAudit("Manual Time Entry", `${emp.name} — ${dateStr}: ${editIn||""}${editOut?" – "+editOut:""} (${reasonText}) — auto-approved`, {empName:emp.name});
         showToast("Time adjustment saved & approved ✓");
+        if (bizId) {
+          const fresh = await dbGet(`punches?select=*&business_id=eq.${bizId}&order=punched_at.desc&limit=200`);
+          setPunches((fresh||[]).map(r=>({ id:r.id, empId:r.employee_id, empName:r.employee_name, type:r.punch_type, time:r.punched_at?.replace(" ","T").replace("+00","Z")||r.punched_at, scheduled:r.scheduled_start?{start:parseFloat(r.scheduled_start),end:parseFloat(r.scheduled_end)}:null, flags:r.flags||[], adjustmentReason:r.adjustment_reason||null })));
+        }
         setTsOpenCell(null);
       } catch(e) { showToast("Could not save: "+e.message); }
       finally { setSaving(false); }
