@@ -89,8 +89,7 @@ function getTodayShift(schedule, weeks, empId) {
   const now = new Date(), todayStr = toLocalDateStr(now);
   const todayIdx = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].indexOf(new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,weekday:"short"}).format(now));
   for (const wkStart of weeks) {
-    const sun = new Date(wkStart+"T00:00:00");
-    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun+"T12:00:00"); d.setUTCDate(d.getUTCDate()+i); return toLocalDateStr(d); });
+    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(wkStart+"T12:00:00"); d.setUTCDate(d.getUTCDate()+i); return toLocalDateStr(d); });
     if (!dates.includes(todayStr)) continue;
     const shift = schedule?.[wkStart]?.[empId]?.[todayIdx];
     if (shift) return { shift, dayIdx: todayIdx };
