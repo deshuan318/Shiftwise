@@ -2742,16 +2742,20 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       if (shift === null) {
         await dbDelete("shifts?week_id=eq." + weekId + "&employee_id=eq." + eid + "&day_index=eq." + di);
       } else {
-        await dbUpsert("shifts", [{
-          business_id:  bizId,
-          week_id:      weekId,
-          employee_id:  eid,
-          day_index:    di,
-          start_dec:    shift.start,
-          end_dec:      shift.end,
-          shift_types:  Array.isArray(shift.type) ? shift.type : [shift.type || "regular"],
-          notes:        shift.notes || "",
-        }]);
+        await sbFetch("shifts?on_conflict=week_id,employee_id,day_index", {
+          method:"POST",
+          body:JSON.stringify([{
+            business_id:  bizId,
+            week_id:      weekId,
+            employee_id:  eid,
+            day_index:    di,
+            start_dec:    shift.start,
+            end_dec:      shift.end,
+            shift_types:  Array.isArray(shift.type) ? shift.type : [shift.type || "regular"],
+            notes:        shift.notes || "",
+          }]),
+          headers:{"Prefer":"resolution=merge-duplicates,return=minimal"}
+        });
       }
     } catch(e) { console.warn("Shift save failed:", e); }
   }
