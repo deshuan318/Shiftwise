@@ -4225,7 +4225,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                                 const topFlag = flags[0];
                                 const fc = {NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[topFlag]||"#E8A93A";
                                 const fi = {NO_SHIFT:"🔴",LATE:"🟡",EARLY_OUT:"🟠",ADJUSTMENT:"🔵"}[topFlag]||"⚠";
-                                return <div style={{fontSize:8,color:fc,fontWeight:700}}>{fi} {topFlag==="NO_SHIFT"?"NO SHIFT":topFlag==="LATE"?"LATE":topFlag==="EARLY_OUT"?"EARLY OUT":"MANUAL"}</div>;
+                                return <div style={{fontSize:10,color:fc,fontWeight:800,background:fc+"18",borderRadius:4,padding:"2px 5px",marginTop:2,letterSpacing:"0.02em"}}>{fi} {topFlag==="NO_SHIFT"?"No Shift":topFlag==="LATE"?"Late":topFlag==="EARLY_OUT"?"Early Out":"Manual"}</div>;
                               })()}
                               {status&&<div style={{fontSize:8,fontWeight:700,color:statusColor,textTransform:"uppercase",marginTop:1,letterSpacing:"0.04em"}}>{status}</div>}
                             </>
