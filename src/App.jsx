@@ -6645,17 +6645,17 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           </div>
 
                           {/* Table */}
-                          <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed"}}>
+                          <table style={{width:"100%",borderCollapse:"collapse",tableLayout:"fixed",fontSize:11}}>
                             <colgroup>
-                              <col style={{width:"14%"}}/>
-                              {DAYS.map(d=><col key={d} style={{width:"12%"}}/>)}
-                              <col style={{width:"4%"}}/>
+                              <col style={{width:"16%"}}/>
+                              {DAYS.map(d=><col key={d} style={{width:"11%"}}/>)}
+                              <col style={{width:"7%"}}/>
                             </colgroup>
                             <thead>
                               <tr style={{background:"#1C1C1C"}}>
-                                <th style={{padding:"12px 16px",color:"white",textAlign:"left",fontWeight:800,fontSize:12,letterSpacing:"0.05em",textTransform:"uppercase"}}>Employee</th>
+                                <th style={{padding:"10px 10px",color:"white",textAlign:"left",fontWeight:800,fontSize:11,letterSpacing:"0.05em",textTransform:"uppercase"}}>Employee</th>
                                 {DAYS.map((d,i)=>(
-                                  <th key={d} style={{padding:"12px 8px",color:"white",textAlign:"center",fontWeight:700,fontSize:12,borderLeft:"1px solid #333"}}>
+                                  <th key={d} style={{padding:"8px 4px",color:"white",textAlign:"center",fontWeight:700,fontSize:11,borderLeft:"1px solid #333"}}>
                                     <div style={{fontSize:13,fontWeight:800}}>{d}</div>
                                     <div style={{fontSize:10,color:"#aaa",fontWeight:400,marginTop:2}}>
                                       {wkDates[i].toLocaleDateString("en-US",{month:"short",day:"numeric"})}
@@ -6672,7 +6672,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                                 return (
                                   <tr key={emp.id} style={{background:ei%2===0?"white":"#FAFAFA",borderBottom:"1px solid #E8E4DF"}}>
                                     {/* Employee name */}
-                                    <td style={{padding:"14px 16px",borderRight:"2px solid #E8E4DF",verticalAlign:"middle"}}>
+                                    <td style={{padding:"10px 10px",borderRight:"2px solid #E8E4DF",verticalAlign:"middle"}}>
                                       <div style={{display:"flex",alignItems:"center",gap:10}}>
                                         <div style={{width:32,height:32,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:900,fontSize:14,flexShrink:0}}>
                                           {emp.name?emp.name[0].toUpperCase():"?"}
@@ -6692,19 +6692,18 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                                       const availDays = emp.availableDays ?? [0,1,2,3,4,5,6];
                                       const isOff = !availDays.includes(di);
                                       return (
-                                        <td key={di} style={{padding:"10px 8px",textAlign:"center",borderLeft:"1px solid #E8E4DF",verticalAlign:"middle",background:isOff?"#F8F6F3":shift?st.color+"0D":"white"}}>
+                                        <td key={di} style={{padding:"6px 4px",textAlign:"center",borderLeft:"1px solid #E8E4DF",verticalAlign:"middle",background:isOff?"#F8F6F3":shift?st.color+"0D":"white"}}>
                                           {shift ? (
                                             <div>
-                                              <div style={{fontSize:14,fontWeight:900,color:"#1C1C1C",lineHeight:1.1}}>{fmt(shift.start)}</div>
-                                              <div style={{fontSize:12,color:"#555",margin:"3px 0",fontWeight:600}}>to {fmt(shift.end)}</div>
-                                              <div style={{display:"inline-block",background:st.color,color:"white",borderRadius:4,padding:"2px 6px",fontSize:9,fontWeight:800,letterSpacing:"0.04em",textTransform:"uppercase"}}>{st.label}</div>
-                                              <div style={{fontSize:11,fontWeight:700,color:"#1C1C1C",marginTop:4}}>{h}h</div>
-                                              {shift.notes&&<div style={{fontSize:9,color:"#888",marginTop:3,fontStyle:"italic",lineHeight:1.3}}>{shift.notes}</div>}
+                                              <div style={{fontSize:11,fontWeight:900,color:"#1C1C1C",lineHeight:1.2}}>{fmt(shift.start)}</div>
+                                              <div style={{fontSize:10,color:"#555",margin:"1px 0",fontWeight:600}}>to {fmt(shift.end)}</div>
+                                              <div style={{display:"inline-block",background:st.color,color:"white",borderRadius:3,padding:"1px 4px",fontSize:8,fontWeight:800,letterSpacing:"0.03em",textTransform:"uppercase"}}>{st.label}</div>
+                                              <div style={{fontSize:10,fontWeight:700,color:"#1C1C1C",marginTop:2}}>{h}h</div>
                                             </div>
                                           ) : isOff ? (
-                                            <div style={{fontSize:10,color:"#CCC",fontStyle:"italic"}}>—</div>
+                                            <div style={{fontSize:10,color:"#CCC"}}>—</div>
                                           ) : (
-                                            <div style={{fontSize:11,color:"#DDD",fontStyle:"italic"}}>Off</div>
+                                            <div style={{fontSize:10,color:"#DDD"}}>Off</div>
                                           )}
                                         </td>
                                       );
