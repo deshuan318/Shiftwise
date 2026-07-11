@@ -3885,43 +3885,20 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           }
         };
 
-        if (editIn && editOut) {
-          // Both entered — replace all punches for the day with clean pair
-          setPunches(prev => prev.filter(px => !(px.empId===empId && toLocalDateStr(new Date(px.time))===dateStr)));
-          if (bizId) {
-            await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} }).catch(e=>console.warn("punch delete failed:", e));
-          }
-          const inId  = await insertPunch("in",  inTime);
-          const outId = await insertPunch("out", outTime);
-          await autoApprove(inId);
-          await autoApprove(outId);
-
-        } else if (editIn) {
-          // Clock-in only — replace existing clock-in, preserve clock-out
-          setPunches(prev => prev.filter(px => !(px.empId===empId && toLocalDateStr(new Date(px.time))===dateStr && px.type==="in")));
-          if (bizId) {
-            await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punch_type=eq.in&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} }).catch(e=>console.warn("punch delete failed:", e));
-          }
+        // Just insert — never auto-delete existing punches
+        // Managers handle duplicates manually via per-row delete with reason
+        if (editIn) {
           const inId = await insertPunch("in", inTime);
           await autoApprove(inId);
-
-        } else if (editOut) {
-          // Clock-out only — replace existing clock-out, preserve clock-in
-          setPunches(prev => prev.filter(px => !(px.empId===empId && toLocalDateStr(new Date(px.time))===dateStr && px.type==="out")));
-          if (bizId) {
-            await sbFetch(`punches?business_id=eq.${bizId}&employee_id=eq.${empId}&punch_type=eq.out&punched_at=gte.${dayStart}&punched_at=lte.${dayEnd}`, { method:"DELETE", headers:{...SB_HEADERS, Authorization:`Bearer ${getToken()}`} }).catch(e=>console.warn("punch delete failed:", e));
-          }
+        }
+        if (editOut) {
           const outId = await insertPunch("out", outTime);
           await autoApprove(outId);
         }
 
         addAudit("Manual Time Entry", `${emp.name} — ${dateStr}: ${editIn||""}${editOut?" – "+editOut:""} (${reasonText}) — auto-approved`, {empName:emp.name});
         showToast("Time adjustment saved & approved ✓");
-        if (bizId) {
-          const fresh = await dbGet(`punches?select=*&business_id=eq.${bizId}&order=punched_at.desc&limit=200`);
-          setPunches((fresh||[]).map(r=>({ id:r.id, empId:r.employee_id, empName:r.employee_name, type:r.punch_type, time:r.punched_at?.replace(" ","T").replace("+00","Z")||r.punched_at, scheduled:r.scheduled_start?{start:parseFloat(r.scheduled_start),end:parseFloat(r.scheduled_end)}:null, flags:r.flags||[], adjustmentReason:r.adjustment_reason||null })));
-        }
-        setTsOpenCell(null);
+        setEditIn(""); setEditOut(""); setReasonCode("missed_punch"); setReasonNote("");
       } catch(e) { showToast("Could not save: "+e.message); }
       finally { setSaving(false); }
     }
