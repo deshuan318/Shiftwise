@@ -74,10 +74,15 @@ const toLocalDateStr = d => {
 };
 const toCSTPunchTime = () => {
   const now = new Date();
-  const parts = new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).formatToParts(now);
-  const p = {}; parts.forEach(({type,value})=>{p[type]=value;});
-  const h = p.hour === "24" ? "00" : p.hour;
-  return `${p.year}-${p.month}-${p.day}T${h}:${p.minute}:${p.second}`;
+  // Format each part in CST separately to avoid any hour=24 issues
+  const fmt2 = (part) => new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,[part]:"2-digit"}).format(now).padStart(2,"0");
+  const year  = new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,year:"numeric"}).format(now);
+  const month = new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,month:"2-digit"}).format(now);
+  const day   = new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,day:"2-digit"}).format(now);
+  const hour  = new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,hour:"2-digit",hour12:false}).format(now).padStart(2,"0").replace("24","00");
+  const min   = new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,minute:"2-digit"}).format(now).padStart(2,"0");
+  const sec   = new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,second:"2-digit"}).format(now).padStart(2,"0");
+  return `${year}-${month}-${day}T${hour}:${min}:${sec}`;
 };
 
 function getTodayShift(schedule, weeks, empId) {
