@@ -3591,28 +3591,39 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       </div>
     );
   }
-  const tsWkDates = Array.from({length:7},(_,i)=>{
+  const tsWkDates = useMemo(() => Array.from({length:7},(_,i)=>{
     const d = new Date(tsWeekStart+"T12:00:00"); // noon avoids UTC midnight shift
     d.setUTCDate(d.getUTCDate()+i);
     return toLocalDateStr(d);
-  });
+  }), [tsWeekStart]);
   const tsWkLabel = `${dl(new Date(tsWeekStart+"T00:00:00"))} – ${dl(new Date(tsWkDates[6]+"T00:00:00"))}`;
 
-  const tsSchedKey = Object.keys(schedule).find(wk => {
+  const tsSchedKey = useMemo(() => Object.keys(schedule).find(wk => {
     const sun = new Date(wk+"T00:00:00");
     const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun.getTime()+i*24*60*60*1000); return toLocalDateStr(d); });
     return dates[0] === tsWeekStart;
-  }) || null;
+  }) || null, [schedule, tsWeekStart]);
 
   function getTsShift(empId, di) {
     return tsSchedKey ? (schedule?.[tsSchedKey]?.[empId]?.[di] || null) : null;
   }
 
-  function getDayPunches(empId, dateStr) {
-    return punches.filter(p => {
+  const punchMap = useMemo(() => {
+    const map = {};
+    for (const p of punches) {
       const pd = toLocalDateStr(new Date(p.time));
-      return p.empId === empId && pd === dateStr;
-    }).sort((a,b) => new Date(a.time)-new Date(b.time));
+      const key = `${p.empId}|${pd}`;
+      if (!map[key]) map[key] = [];
+      map[key].push(p);
+    }
+    for (const key of Object.keys(map)) {
+      map[key].sort((a,b) => new Date(a.time)-new Date(b.time));
+    }
+    return map;
+  }, [punches]);
+
+  function getDayPunches(empId, dateStr) {
+    return punchMap[`${empId}|${dateStr}`] || [];
   }
 
   function calcActualHours(dayPunches) {
@@ -3633,11 +3644,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     return parseFloat(hrs.toFixed(2));
   }
 
-  const pendingFlags = punches.filter(p =>
+  const pendingFlags = useMemo(() => punches.filter(p =>
     p.flags?.length > 0 &&
     tsWkDates.includes(toLocalDateStr(new Date(p.time))) &&
     !punchReviews[p.id]
-  ).length;
+  ).length, [punches, tsWkDates, punchReviews]);
 
   const totalApprovedHrs = employees.reduce((s,emp) =>
     s + tsWkDates.reduce((ds,dateStr) => {
