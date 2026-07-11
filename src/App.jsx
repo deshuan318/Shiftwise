@@ -3205,14 +3205,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           {draft.start&&draft.end&&!canSave&&(
             <div style={{background:"#FEF3E2",border:"1px solid #F39C12",borderRadius:8,padding:"8px 12px",marginBottom:12,fontSize:12,color:"#E67E22",fontWeight:600}}>End time must be after start time</div>
           )}
-          {canSave&&(
-            <div style={{background:T.muted,borderRadius:10,padding:"12px 16px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div style={{background:T.muted,borderRadius:10,padding:"12px 16px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",opacity:canSave?1:0,pointerEvents:canSave?"auto":"none",transition:"opacity 0.15s"}}>
               <div><div style={{fontSize:10,color:T.sub,marginBottom:2,textTransform:"uppercase",letterSpacing:"0.05em"}}>Hours</div>
                 <div style={{fontWeight:800,fontSize:30,color:emp.color,lineHeight:1}}>{h}h</div></div>
               <div style={{textAlign:"right"}}><div style={{fontSize:10,color:T.sub,marginBottom:2,textTransform:"uppercase",letterSpacing:"0.05em"}}>Est. Pay</div>
                 <div style={{fontWeight:800,fontSize:22,color:T.text}}>${pay.toFixed(2)}</div></div>
             </div>
-          )}
           <div style={{marginBottom:14}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
               <label style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.05em"}}>Shift Type</label>
@@ -3255,8 +3253,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           </div>
 
           {/* ── Apply to multiple days ── */}
-          {canSave && (
-            <div style={{marginBottom:16,padding:"12px 14px",background:T.muted,borderRadius:10,border:`1px solid ${T.border}`}}>
+          <div style={{marginBottom:16,padding:"12px 14px",background:T.muted,borderRadius:10,border:`1px solid ${T.border}`,display:canSave?"block":"none"}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                 <label style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.05em"}}>
                   Also apply to
@@ -3304,7 +3301,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 </div>
               )}
             </div>
-          )}
 
           <div style={{display:"grid",gridTemplateColumns:existing?"1fr 2fr":"1fr",gap:10}}>
             {existing&&<button onClick={remove} style={{background:"#FDECEA",color:"#C0392B",border:"none",borderRadius:10,padding:"13px 0",fontSize:13,fontWeight:700,cursor:"pointer"}}>Remove</button>}
