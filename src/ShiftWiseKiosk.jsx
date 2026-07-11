@@ -51,11 +51,12 @@ const DATA_LAYER = {
     };
   },
   async writePunch(punch, businessId) {
-    await kbFetch("punches", { method: "POST", body: JSON.stringify({ business_id: businessId, employee_id: punch.empId, employee_name: punch.empName, punch_type: punch.type, punched_at: punch.time || new Date().toISOString(), scheduled_start: punch.scheduled?.start ?? null, scheduled_end: punch.scheduled?.end ?? null, flags: punch.flags || [] }) });
+    await kbFetch("punches", { method: "POST", body: JSON.stringify({ business_id: businessId, employee_id: punch.empId, employee_name: punch.empName, punch_type: punch.type, punched_at: punch.time || toCSTPunchTime(), scheduled_start: punch.scheduled?.start ?? null, scheduled_end: punch.scheduled?.end ?? null, flags: punch.flags || [] }) });
   },
   async getTodayPunchesForEmp(empId) {
     const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-    const rows = await kbFetch(`punches?select=*&employee_id=eq.${empId}&punched_at=gte.${todayStart.toISOString()}&order=punched_at.asc`);
+    const todayCST = toLocalDateStr(new Date());
+    const rows = await kbFetch(`punches?select=*&employee_id=eq.${empId}&punched_at=gte.${todayCST}T00:00:00&order=punched_at.asc`);
     return (rows || []).map(r => ({ id: r.id, type: r.punch_type, time: r.punched_at, scheduled: r.scheduled_start ? { start: parseFloat(r.scheduled_start), end: parseFloat(r.scheduled_end) } : null, flags: r.flags || [] }));
   },
 };
@@ -65,13 +66,26 @@ const fmt = v => { if (v == null) return ""; const h = Math.floor(v), m = Math.r
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end-s.start).toFixed(2))));
 const nowDecimal = () => { const n = new Date(); return n.getHours() + n.getMinutes()/60; };
 // Local-date-safe "YYYY-MM-DD" — avoids UTC rollover shifting the date late in the day
-const toLocalDateStr = d => { const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,"0"),day=String(d.getDate()).padStart(2,"0"); return `${y}-${m}-${day}`; };
+const APP_TZ = "America/Chicago";
+const toLocalDateStr = d => {
+  const parts = new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(d);
+  const p = {}; parts.forEach(({type,value})=>{p[type]=value;});
+  return `${p.year}-${p.month}-${p.day}`;
+};
+const toCSTPunchTime = () => {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).formatToParts(now);
+  const p = {}; parts.forEach(({type,value})=>{p[type]=value;});
+  const h = p.hour === "24" ? "00" : p.hour;
+  return `${p.year}-${p.month}-${p.day}T${h}:${p.minute}:${p.second}`;
+};
 
 function getTodayShift(schedule, weeks, empId) {
-  const now = new Date(), todayStr = toLocalDateStr(now), todayIdx = now.getDay();
+  const now = new Date(), todayStr = toLocalDateStr(now);
+  const todayIdx = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].indexOf(new Intl.DateTimeFormat("en-US",{timeZone:APP_TZ,weekday:"short"}).format(now));
   for (const wkStart of weeks) {
     const sun = new Date(wkStart+"T00:00:00");
-    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun); d.setDate(sun.getDate()+i); return toLocalDateStr(d); });
+    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun+"T12:00:00"); d.setUTCDate(d.getUTCDate()+i); return toLocalDateStr(d); });
     if (!dates.includes(todayStr)) continue;
     const shift = schedule?.[wkStart]?.[empId]?.[todayIdx];
     if (shift) return { shift, dayIdx: todayIdx };
