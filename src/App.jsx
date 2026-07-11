@@ -2785,6 +2785,49 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const eTotalH = eid => weeks.reduce((s,w)=>s+eWkH(w.key,eid),0);
   const eTotalP = emp => weeks.reduce((s,w)=>s+eWkP(w.key,emp),0);
 
+  // Global punch lookup map — O(1) getDayPunches access
+  const punchMap = useMemo(() => {
+    const map = {};
+    for (const p of punches) {
+      const pd = toLocalDateStr(new Date(p.time));
+      const key = `${p.empId}|${pd}`;
+      if (!map[key]) map[key] = [];
+      map[key].push(p);
+    }
+    for (const key of Object.keys(map)) {
+      map[key].sort((a,b) => new Date(a.time)-new Date(b.time));
+    }
+    return map;
+  }, [punches]);
+
+  function getDayPunches(empId, dateStr) {
+    return punchMap[`${empId}|${dateStr}`] || [];
+  }
+
+  const tsWkDates = useMemo(() => Array.from({length:7},(_,i)=>{
+    const d = new Date(tsWeekStart+"T12:00:00");
+    d.setUTCDate(d.getUTCDate()+i);
+    return toLocalDateStr(d);
+  }), [tsWeekStart]);
+
+  const tsWkLabel = useMemo(() => {
+    const d0 = new Date(tsWeekStart+"T12:00:00");
+    const d6 = new Date(tsWeekStart+"T12:00:00"); d6.setUTCDate(d6.getUTCDate()+6);
+    return `${dl(d0)} – ${dl(d6)}`;
+  }, [tsWeekStart]);
+
+  const tsSchedKey = useMemo(() => Object.keys(schedule).find(wk => {
+    const sun = new Date(wk+"T00:00:00");
+    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun.getTime()+i*24*60*60*1000); return toLocalDateStr(d); });
+    return dates[0] === tsWeekStart;
+  }) || null, [schedule, tsWeekStart]);
+
+  const pendingFlags = useMemo(() => punches.filter(p =>
+    p.flags?.length > 0 &&
+    tsWkDates.includes(toLocalDateStr(new Date(p.time))) &&
+    !punchReviews[p.id]
+  ).length, [punches, tsWkDates, punchReviews]);
+
   const grandPay    = useMemo(()=>employees.reduce((s,e)=>s+eTotalP(e),0),   [employees,schedule,weeks]);
   const grandHrs    = useMemo(()=>employees.reduce((s,e)=>s+eTotalH(e.id),0),[employees,schedule,weeks]);
   const activeWkPay = useMemo(()=>activeWeek?employees.reduce((s,e)=>s+eWkP(activeWeek,e),0):0,[employees,schedule,activeWeek]);
@@ -3591,40 +3634,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       </div>
     );
   }
-  const tsWkDates = useMemo(() => Array.from({length:7},(_,i)=>{
-    const d = new Date(tsWeekStart+"T12:00:00"); // noon avoids UTC midnight shift
-    d.setUTCDate(d.getUTCDate()+i);
-    return toLocalDateStr(d);
-  }), [tsWeekStart]);
-  const tsWkLabel = `${dl(new Date(tsWeekStart+"T00:00:00"))} – ${dl(new Date(tsWkDates[6]+"T00:00:00"))}`;
 
-  const tsSchedKey = useMemo(() => Object.keys(schedule).find(wk => {
-    const sun = new Date(wk+"T00:00:00");
-    const dates = Array.from({length:7},(_,i)=>{ const d=new Date(sun.getTime()+i*24*60*60*1000); return toLocalDateStr(d); });
-    return dates[0] === tsWeekStart;
-  }) || null, [schedule, tsWeekStart]);
 
   function getTsShift(empId, di) {
     return tsSchedKey ? (schedule?.[tsSchedKey]?.[empId]?.[di] || null) : null;
   }
 
-  const punchMap = useMemo(() => {
-    const map = {};
-    for (const p of punches) {
-      const pd = toLocalDateStr(new Date(p.time));
-      const key = `${p.empId}|${pd}`;
-      if (!map[key]) map[key] = [];
-      map[key].push(p);
-    }
-    for (const key of Object.keys(map)) {
-      map[key].sort((a,b) => new Date(a.time)-new Date(b.time));
-    }
-    return map;
-  }, [punches]);
 
-  function getDayPunches(empId, dateStr) {
-    return punchMap[`${empId}|${dateStr}`] || [];
-  }
 
   function calcActualHours(dayPunches) {
     let hrs = 0, inT = null;
@@ -3644,11 +3660,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     return parseFloat(hrs.toFixed(2));
   }
 
-  const pendingFlags = useMemo(() => punches.filter(p =>
-    p.flags?.length > 0 &&
-    tsWkDates.includes(toLocalDateStr(new Date(p.time))) &&
-    !punchReviews[p.id]
-  ).length, [punches, tsWkDates, punchReviews]);
+
 
   const totalApprovedHrs = employees.reduce((s,emp) =>
     s + tsWkDates.reduce((ds,dateStr) => {
