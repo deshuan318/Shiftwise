@@ -3793,7 +3793,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const punchId = dp[0]?.id;
     const status  = punchId ? (punchReviews[punchId]||"pending") : null;
 
-    const FLAG_LABELS = {LATE:"Late clock-in (10+ min)",EARLY_OUT:"Left early (15+ min)",NO_SHIFT:"No shift scheduled",ADJUSTMENT:"Manual adjustment"};
+    const FLAG_LABELS  = {NO_SHIFT:"No Shift",LATE:"Late Clock-In",EARLY_OUT:"Left Early",ADJUSTMENT:"Manual Entry"};
+    const FLAG_COLORS  = {NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"};
+    const FLAG_ICONS   = {NO_SHIFT:"🔴",LATE:"🟡",EARLY_OUT:"🟠",ADJUSTMENT:"🔵"};
     const STATUS_COLOR = {reviewed:"#3A9BE8",approved:"#4CAF7D",rejected:"#C0392B",pending:"#E8A93A"};
 
     async function setStatus(val) {
@@ -3945,8 +3947,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 <div style={{fontSize:10,fontWeight:700,color:"#E67E22",textTransform:"uppercase",letterSpacing:"0.06em",marginBottom:6}}>⚠ Flags</div>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                   {flags.map((f,i)=>(
-                    <span key={i} style={{background:"#E8A93A22",color:"#B7780F",border:"1px solid #E8A93A44",borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>
-                      {FLAG_LABELS[f]||f}
+                    <span key={i} style={{background:(FLAG_COLORS[f]||"#E8A93A")+"22",color:FLAG_COLORS[f]||"#E8A93A",border:`1px solid ${(FLAG_COLORS[f]||"#E8A93A")}44`,borderRadius:6,padding:"2px 8px",fontSize:11,fontWeight:700}}>
+                      {FLAG_ICONS[f]||""} {FLAG_LABELS[f]||f}
                     </span>
                   ))}
                 </div>
@@ -4190,8 +4192,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           onClick={()=>(hasPunch||shift)&&setTsOpenCell({empId:emp.id,dateStr,dayIdx:di})}
                           style={{
                             borderRadius:8, padding:"5px 4px", minHeight:54,
-                            border:`1.5px solid ${hasFlag?"#E8A93A":status==="approved"?"#4CAF7D40":status==="rejected"?"#C0392B40":(!hasPunch&&shift&&dateStr<toLocalDateStr(new Date()))?"#E8A93A50":hasPunch?T.border:"transparent"}`,
-                            background:hasFlag?"#FEF3E215":status==="approved"?"#F0FFF420":status==="rejected"?"#FDECEA15":(!hasPunch&&shift&&dateStr<toLocalDateStr(new Date()))?"#FEF3E210":hasPunch?T.surface:"transparent",
+                            border:`1.5px solid ${hasFlag?(()=>{const f=flags[0];return({NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[f]||"#E8A93A")+"80"})():status==="approved"?"#4CAF7D40":status==="rejected"?"#C0392B40":(!hasPunch&&shift&&dateStr<toLocalDateStr(new Date()))?"#E8A93A50":hasPunch?T.border:"transparent"}`,
+                            background:hasFlag?(()=>{const f=flags[0];return({NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[f]||"#E8A93A")+"11"})():status==="approved"?"#F0FFF420":status==="rejected"?"#FDECEA15":(!hasPunch&&shift&&dateStr<toLocalDateStr(new Date()))?"#FEF3E210":hasPunch?T.surface:"transparent",
                             cursor:(hasPunch||shift)?"pointer":"default",
                             display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
                             transition:"all 0.12s",
@@ -4219,7 +4221,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                               {inP&&<div style={{fontSize:9,color:T.sub,fontWeight:600}}>{new Date(inP.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</div>}
                               {outP&&<div style={{fontSize:9,color:T.sub}}>{new Date(outP.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</div>}
                               <div style={{fontWeight:800,fontSize:11,color:diff>0.25?"#E8A93A":diff<-0.25?"#C0392B":T.text,marginTop:2}}>{actual.toFixed(1)}h</div>
-                              {hasFlag&&<div style={{fontSize:8,color:"#E8A93A",fontWeight:700}}>⚠ FLAG</div>}
+                              {hasFlag&&(()=>{
+                                const topFlag = flags[0];
+                                const fc = {NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[topFlag]||"#E8A93A";
+                                const fi = {NO_SHIFT:"🔴",LATE:"🟡",EARLY_OUT:"🟠",ADJUSTMENT:"🔵"}[topFlag]||"⚠";
+                                return <div style={{fontSize:8,color:fc,fontWeight:700}}>{fi} {topFlag==="NO_SHIFT"?"NO SHIFT":topFlag==="LATE"?"LATE":topFlag==="EARLY_OUT"?"EARLY OUT":"MANUAL"}</div>;
+                              })()}
                               {status&&<div style={{fontSize:8,fontWeight:700,color:statusColor,textTransform:"uppercase",marginTop:1,letterSpacing:"0.04em"}}>{status}</div>}
                             </>
                           )}
@@ -6896,8 +6903,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             <div style={{fontSize:13,lineHeight:1.5}}>Punch flags and Pulse reminders will appear here. Only NO_SHIFT and manual adjustment punches from the last 30 days are shown.</div>
           </div>
         );
-        const FLAG_LABELS = { LATE:"Late Clock-In", EARLY:"Early Clock-In", EARLY_OUT:"Early Clock-Out", NO_SHIFT:"No Shift Scheduled" };
-        const FLAG_COLORS = { LATE:"#E8A93A", EARLY:"#3A9BE8", EARLY_OUT:"#E8A93A", NO_SHIFT:"#C0392B" };
+        const FLAG_LABELS = { NO_SHIFT:"No Shift", LATE:"Late Clock-In", EARLY_OUT:"Left Early", ADJUSTMENT:"Manual Entry" };
+        const FLAG_COLORS = { NO_SHIFT:"#C0392B", LATE:"#E8A93A", EARLY_OUT:"#E07020", ADJUSTMENT:"#3A9BE8" };
+        const FLAG_ICONS  = { NO_SHIFT:"🔴", LATE:"🟡", EARLY_OUT:"🟠", ADJUSTMENT:"🔵" };
         return (
           <div style={{flex:1,minHeight:0,overflowY:"auto",padding:14,display:"flex",flexDirection:"column",gap:10}}>
             {/* Mark all reviewed + Clear actioned */}
@@ -6935,7 +6943,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               const statusColor = status==="approved"?"#4CAF7D":status==="rejected"?"#C0392B":status==="reviewed"?"#3A9BE8":"#E8A93A";
               const pd = new Date(p.time);
               return (
-                <div key={p.id} style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,overflow:"hidden",border:`1px solid ${status==="pending"?"#E8A93A30":T.border}`}}>
+                <div key={p.id} style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,overflow:"hidden",border:`1px solid ${status==="pending"?"#E8A93A30":T.border}`,borderLeft:`4px solid ${FLAG_COLORS[p.flags?.find(f=>FLAG_COLORS[f])]||"#E8A93A"}`}}>
                   <div style={{display:"flex",alignItems:"center",gap:12,padding:"13px 14px"}}>
                     <div style={{width:36,height:36,borderRadius:"50%",background:emp?.color||T.muted,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:13,flexShrink:0}}>
                       {emp?.name?emp.name[0].toUpperCase():"?"}
@@ -6948,7 +6956,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:5}}>
                         {p.flags.map(f=>(
                           <span key={f} style={{background:(FLAG_COLORS[f]||"#888")+"22",color:FLAG_COLORS[f]||"#888",border:`1px solid ${(FLAG_COLORS[f]||"#888")}44`,borderRadius:5,padding:"2px 7px",fontSize:10,fontWeight:700}}>
-                            {FLAG_LABELS[f]||f}
+                            {FLAG_ICONS[f]||""} {FLAG_LABELS[f]||f}
                           </span>
                         ))}
                       </div>
