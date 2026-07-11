@@ -237,7 +237,7 @@ export default function ShiftWiseKiosk() {
       message = flags.includes("EARLY_OUT") ? `Clocked out early. Shift ends at ${fmt(todayData.shift.end)}.` : "Clocked out. Have a great rest of your day!";
     }
 
-    const punch = { empId:emp.id, empName:emp.name, type:action, time:now.toISOString(), scheduled:todayData?.shift||null, flags };
+    const punch = { empId:emp.id, empName:emp.name, type:action, time:toCSTPunchTime(), scheduled:todayData?.shift||null, flags };
     try {
       await DATA_LAYER.writePunch(punch,bizData.businessId);
       setMatchedEmp(emp);
