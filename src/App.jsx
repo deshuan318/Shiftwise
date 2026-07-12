@@ -3146,7 +3146,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         inputMode="numeric"
                         placeholder="9"
                         defaultValue={getHr(val)}
-                        key={`hr-${field}-${val}`}
+                        key={`hr-${field}`}
                         onFocus={e=>e.target.select()}
                         onChange={e=>{
                           const v=e.target.value.replace(/[^0-9]/g,"").slice(0,2);
@@ -3168,7 +3168,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         inputMode="numeric"
                         placeholder="00"
                         defaultValue={getMin(val)}
-                        key={`min-${field}-${val}`}
+                        key={`min-${field}`}
                         onFocus={e=>e.target.select()}
                         onBlur={e=>{
                           const v=e.target.value.replace(/[^0-9]/g,"");
@@ -3251,7 +3251,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           </div>
 
           {/* ── Apply to multiple days ── */}
-          <div style={{marginBottom:16,padding:"12px 14px",background:T.muted,borderRadius:10,border:`1px solid ${T.border}`,display:canSave?"block":"none"}}>
+          <div style={{marginBottom:16,padding:"12px 14px",background:T.muted,borderRadius:10,border:`1px solid ${T.border}`,visibility:canSave?"visible":"hidden",height:canSave?"auto":0,overflow:"hidden",marginBottom:canSave?16:0}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                 <label style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.05em"}}>
                   Also apply to
@@ -6573,7 +6573,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   const scheduledEmps = employees.filter(e => eWkH(wk.key,e.id) > 0);
 
                   return (
-                    <div>
+                    <div style={{background:"#F4F5F2",margin:"-16px",padding:"16px",minHeight:"100%"}}>
                       {/* Controls bar */}
                       <Card T={T} style={{padding:"16px 18px",marginBottom:16,overflow:"visible"}}>
                         <div style={{display:"flex",gap:12,flexWrap:"wrap",alignItems:"flex-end"}}>
