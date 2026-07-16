@@ -1465,6 +1465,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       }
     } catch(err) {
       setAuthError(err.message);
+      setAuthState("unauthenticated");
     }
   }
 
