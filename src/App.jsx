@@ -1564,6 +1564,24 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setDaysOpen(business.days_open ?? [0,1,2,3,4,5,6]);
       setWeeklyBudget(business.weekly_budget ?? null);
       if (business.cash_mode) setCashMode(true);
+
+      if (business.is_demo) {
+        // Cedar & Sage's seeded data lives in June 2026, not the real live
+        // date. Without this, every "current week" default (Coverage,
+        // Timesheet, Pulse) points at an empty real-world week and shows
+        // nothing. June 14 is the seeded "current reference" week.
+        // (wk1Start/activeWeek/printWeek are handled below in the existing
+        // "always default to current week" block, which is also demo-aware.)
+        const DEMO_CURRENT_WEEK = "2026-06-14";
+        const DEMO_TODAY = "2026-06-17"; // a Wednesday inside that week
+        setWk2Start(addDays(DEMO_CURRENT_WEEK, 7));
+        setPayWeek(DEMO_CURRENT_WEEK);
+        setActiveDay(DEMO_TODAY);
+        setTsWeekStart(DEMO_CURRENT_WEEK);
+        setCoverageWeek(DEMO_CURRENT_WEEK);
+        setCoverageDay(DEMO_TODAY);
+      }
+
       checkSquareStatus(business.id);
       try {
         const w = await dbGet(`dashboard_widgets?business_id=eq.${business.id}&order=sort_order.asc`);
@@ -1610,7 +1628,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
       // 5. Set week dates - always default to current week, single-week mode
       {
-        const todaySun = getSunday(toLocalDateStr(new Date()));
+        const todaySun = business.is_demo ? "2026-06-14" : getSunday(toLocalDateStr(new Date()));
         setWk1Start(todaySun);
         setActiveWeek(todaySun);
         setPrintWeek(todaySun);
