@@ -38,6 +38,10 @@ const DEMO_OWNER_ID = "aeee94c4-64af-44ab-abda-7d72da38fd0b";
 // Ties a cloned demo business_id to this specific browser tab/session only —
 // so multiple people sharing the demo login each land in their own sandbox.
 const DEMO_BIZ_SESSION_KEY = "sw_demo_biz_id";
+// The "virtual today" for demo sessions — Cedar & Sage's seeded data lives in
+// June 2026, not the real live date. Used anywhere a report/filter needs a
+// date anchor (flag patterns, report builder) so defaults land on real data.
+const DEMO_TODAY_ANCHOR = "2026-06-20";
 
 // Session stored in localStorage (auth token only — not business data)
 const SW_SESSION_KEY = "sw_session";
@@ -1166,6 +1170,7 @@ export default function App() {
   const [authError,   setAuthError]   = useState("");
   const [authBizName, setAuthBizName] = useState("");
   const [bizId,       setBizId]       = useState(null);
+  const [isDemoBiz,   setIsDemoBiz]   = useState(false);
 
   // ── App state — hydrated from Supabase on load ────────────────────────────
   const [tab,         setTab]         = useState(() => {
@@ -1311,7 +1316,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     if (!bizId) return;
     setFlagReportLoading(true);
     try {
-      const dates = getFilterDates(key, salesData);
+      const dates = getFilterDates(key, salesData, isDemoBiz ? DEMO_TODAY_ANCHOR : undefined);
       const startDate = dates[0], endDate = dates[dates.length-1];
       const { rows, truncated } = await fetchPunchesForRange(bizId, startDate, endDate);
       const stats = computeFlagPatterns(rows);
@@ -1380,7 +1385,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     if (rbPreset === "custom") {
       startDate = rbCustomStart; endDate = rbCustomEnd;
     } else {
-      const dates = getFilterDates(rbPreset, salesData);
+      const dates = getFilterDates(rbPreset, salesData, isDemoBiz ? DEMO_TODAY_ANCHOR : undefined);
       startDate = dates[0]; endDate = dates[dates.length-1];
     }
     setRbLoading(true);
@@ -1576,6 +1581,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setDaysOpen(business.days_open ?? [0,1,2,3,4,5,6]);
       setWeeklyBudget(business.weekly_budget ?? null);
       if (business.cash_mode) setCashMode(true);
+
+      setIsDemoBiz(!!business.is_demo);
 
       if (business.is_demo) {
         // Cedar & Sage's seeded data lives in June 2026, not the real live
@@ -4114,7 +4121,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     {key:"insights",    icon:"🧠", label:"Insights"},
     {key:"dashboard",   icon:"💵", label:"Dashboard"},
     {key:"settings",    icon:"⚙️", label:"Settings"},
-    {key:"feedback",    icon:"💬", label:"Feedback"},
+    ...(isDemoBiz ? [] : [{key:"feedback", icon:"💬", label:"Feedback"}]),
   ];
 
   // ── LOGIN SCREEN ───────────────────────────────────────────────────────────
@@ -8223,7 +8230,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         )}
 
         {/* FEEDBACK TAB */}
-        {tab==="feedback" && <FeedbackTab bizId={bizId} T={T} Card={Card} showToast={showToast} addAudit={addAudit} getSession={getSession} dbPost={dbPost}/>}
+        {tab==="feedback" && !isDemoBiz && <FeedbackTab bizId={bizId} T={T} Card={Card} showToast={showToast} addAudit={addAudit} getSession={getSession} dbPost={dbPost}/>}
 
                 <TimePickerModal/>
 
