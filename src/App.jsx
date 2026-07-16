@@ -1427,6 +1427,29 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // ─────────────────────────────────────────────────────────────────────────
   // AUTH FUNCTIONS
   // ─────────────────────────────────────────────────────────────────────────
+
+  // Resolves this tab's demo sandbox business_id — reusing the cached one if
+  // it still exists, or cloning a fresh one if it's missing/stale (e.g. was
+  // already destroyed by a prior idle-timeout/logout but sessionStorage still
+  // remembers it). This makes demo sign-in self-healing rather than failing.
+  async function resolveDemoBusinessId() {
+    let demoBizId = sessionStorage.getItem(DEMO_BIZ_SESSION_KEY);
+    if (demoBizId) {
+      const rows = await dbGet(`businesses?select=id&id=eq.${demoBizId}&limit=1`);
+      if (!rows?.[0]) demoBizId = null; // stale — was destroyed, clone fresh below
+    }
+    if (!demoBizId) {
+      const cloneRes = await fetch("/api/demo-login", { method: "POST" });
+      const cloneData = await cloneRes.json();
+      if (!cloneRes.ok || !cloneData.business_id) {
+        throw new Error(cloneData.error || "Could not create demo sandbox");
+      }
+      demoBizId = cloneData.business_id;
+      sessionStorage.setItem(DEMO_BIZ_SESSION_KEY, demoBizId);
+    }
+    return demoBizId;
+  }
+
  async function handleSignIn(e) {
     if(e?.preventDefault) e.preventDefault();
     setAuthError("");
@@ -1447,18 +1470,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setAuthState("loading");
 
       if (data.user?.id === DEMO_OWNER_ID) {
-        // Demo login: reuse this tab's sandbox if it already claimed one this
-        // session, otherwise clone a fresh Cedar & Sage copy for this tab only.
-        let demoBizId = sessionStorage.getItem(DEMO_BIZ_SESSION_KEY);
-        if (!demoBizId) {
-          const cloneRes = await fetch("/api/demo-login", { method: "POST" });
-          const cloneData = await cloneRes.json();
-          if (!cloneRes.ok || !cloneData.business_id) {
-            throw new Error(cloneData.error || "Could not create demo sandbox");
-          }
-          demoBizId = cloneData.business_id;
-          sessionStorage.setItem(DEMO_BIZ_SESSION_KEY, demoBizId);
-        }
+        const demoBizId = await resolveDemoBusinessId();
         await loadAllData(demoBizId);
       } else {
         await loadAllData();
@@ -1723,29 +1735,30 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const s = getSession();
       if (s?.user?.id === DEMO_OWNER_ID) {
         // Demo user refreshing the tab: reuse this tab's already-cloned
-        // sandbox rather than the normal owner_id lookup (which would grab
-        // the oldest demo clone across every tab, not this one's).
-        const demoBizId = sessionStorage.getItem(DEMO_BIZ_SESSION_KEY);
-        if (demoBizId) {
-          loadAllData(demoBizId);
-        } else {
-          // No sandbox claimed yet this tab (shouldn't normally happen post-login,
-          // but fail safe rather than loading a stranger's sandbox) — sign out.
-          clearSession();
-          setAuthState("unauthenticated");
-        }
+        // sandbox, or clone a fresh one if it's missing/stale — rather than
+        // the normal owner_id lookup (which would grab the oldest demo clone
+        // across every tab, not this one's).
+        resolveDemoBusinessId()
+          .then(demoBizId => loadAllData(demoBizId))
+          .catch(() => { clearSession(); setAuthState("unauthenticated"); });
       } else {
         loadAllData();
       }
     }
   }, []);
 
-  // ── Demo sandbox cleanup backstops ──────────────────────────────────────
-  // handleSignOut (explicit logout) is the primary reset trigger, but not
-  // everyone hits it — some people just close the tab. These two effects
-  // catch the rest: an idle timer for people who walk away, and a best-effort
-  // fetch on tab-close (not guaranteed to fire, especially on mobile — the
-  // idle timer is the real safety net for those cases).
+  // ── Demo sandbox cleanup backstop ──────────────────────────────────────
+  // handleSignOut (explicit logout) is the primary reset trigger. An idle
+  // timer catches people who walk away without signing out.
+  //
+  // NOTE: a client-side "destroy on tab close" hook (pagehide/beforeunload)
+  // was tried here and removed — pagehide fires on ordinary page refresh as
+  // well as actual tab close, with no reliable way to tell them apart. That
+  // meant refreshing the page silently destroyed the live sandbox while
+  // sessionStorage still pointed at it, bouncing the user back to login.
+  // A scheduled cleanup job (hourly cron hitting a "delete anything idle
+  // past N hours" endpoint) is the correct backstop for truly-abandoned
+  // tabs — not a client-side unload event.
   useEffect(() => {
     const s = getSession();
     if (authState !== "authenticated" || s?.user?.id !== DEMO_OWNER_ID) return;
@@ -1768,27 +1781,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       clearTimeout(idleTimer);
       activityEvents.forEach(evt => window.removeEventListener(evt, resetIdleTimer));
     };
-  }, [authState]);
-
-  useEffect(() => {
-    const s = getSession();
-    if (authState !== "authenticated" || s?.user?.id !== DEMO_OWNER_ID) return;
-
-    const destroyOnClose = () => {
-      const demoBizId = sessionStorage.getItem(DEMO_BIZ_SESSION_KEY);
-      if (!demoBizId) return;
-      // keepalive lets this fetch survive the page unloading; not guaranteed
-      // to complete on every browser/OS, hence the idle-timer backstop above.
-      fetch("/api/demo-logout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ business_id: demoBizId }),
-        keepalive: true,
-      }).catch(() => {});
-    };
-
-    window.addEventListener("pagehide", destroyOnClose);
-    return () => window.removeEventListener("pagehide", destroyOnClose);
   }, [authState]);
   useEffect(() => {
     if (authState !== "authenticated") return;
