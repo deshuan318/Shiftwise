@@ -41,7 +41,7 @@ const DEMO_BIZ_SESSION_KEY = "sw_demo_biz_id";
 // The "virtual today" for demo sessions — Cedar & Sage's seeded data lives in
 // June 2026, not the real live date. Used anywhere a report/filter needs a
 // date anchor (flag patterns, report builder) so defaults land on real data.
-const DEMO_TODAY_ANCHOR = "2026-06-20";
+const DEMO_TODAY_ANCHOR = "2026-06-17";
 
 // Session stored in localStorage (auth token only — not business data)
 const SW_SESSION_KEY = "sw_session";
@@ -1898,7 +1898,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // database queries. The AI call below remains completely unchanged.
   // ─────────────────────────────────────────────────────────────────────────
   function buildBusinessSnapshot() {
-    const today = new Date();
+    const today = isDemoBiz ? new Date(DEMO_TODAY_ANCHOR+"T12:00:00") : new Date();
     const todayStr = toLocalDateStr(today);
 
     // Build per-week summaries
@@ -3443,6 +3443,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     catch(e) { console.warn("Business save failed:", e); }
   }
 
+  // The "today" every date-comparison in the UI should use — real today for
+  // real businesses, the fixed demo anchor for Cedar & Sage (whose seeded
+  // data lives in June 2026, not whenever this is actually being viewed).
+  const demoToday = isDemoBiz ? DEMO_TODAY_ANCHOR : toLocalDateStr(new Date());
+
   const weeks = useMemo(() => {
     const base = [{ key:wk1Start, label:"Week 1", dates:weekDatesFromSunday(wk1Start) }];
     if (weekMode==="2") base.push({ key:wk2Start, label:"Week 2", dates:weekDatesFromSunday(wk2Start) });
@@ -4909,6 +4914,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         </div>
         <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,7)))}
           style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
+        {/* TEMP DEBUG — remove after diagnosing demoToday issue */}
+        <div style={{background:"#000",color:"#0f0",fontFamily:"monospace",fontSize:11,padding:"4px 8px",borderRadius:6}}>
+          isDemoBiz={String(isDemoBiz)} | demoToday={demoToday} | tsWeekStart={tsWeekStart}
+        </div>
       </div>
 
       {/* Grid */}
@@ -4973,8 +4982,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           onClick={()=>(hasPunch||shift)&&setTsOpenCell({empId:emp.id,dateStr,dayIdx:di})}
                           style={{
                             borderRadius:8, padding:"4px 3px", minHeight:46,
-                            border:`1.5px solid ${hasFlag?(()=>{const f=flags[0];return({NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[f]||"#E8A93A")+"80"})():status==="approved"?"#4CAF7D40":status==="rejected"?"#C0392B40":(!hasPunch&&shift&&dateStr<toLocalDateStr(new Date()))?"#E8A93A50":hasPunch?T.border:"transparent"}`,
-                            background:hasFlag?(()=>{const f=flags[0];return({NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[f]||"#E8A93A")+"11"})():status==="approved"?"#F0FFF420":status==="rejected"?"#FDECEA15":(!hasPunch&&shift&&dateStr<toLocalDateStr(new Date()))?"#FEF3E210":hasPunch?T.surface:"transparent",
+                            border:`1.5px solid ${hasFlag?(()=>{const f=flags[0];return({NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[f]||"#E8A93A")+"80"})():status==="approved"?"#4CAF7D40":status==="rejected"?"#C0392B40":(!hasPunch&&shift&&dateStr<demoToday)?"#E8A93A50":hasPunch?T.border:"transparent"}`,
+                            background:hasFlag?(()=>{const f=flags[0];return({NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[f]||"#E8A93A")+"11"})():status==="approved"?"#F0FFF420":status==="rejected"?"#FDECEA15":(!hasPunch&&shift&&dateStr<demoToday)?"#FEF3E210":hasPunch?T.surface:"transparent",
                             cursor:(hasPunch||shift)?"pointer":"default",
                             display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
                             transition:"all 0.12s",
@@ -4983,7 +4992,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                             <span style={{color:T.border,fontSize:11}}>—</span>
                           ) : !hasPunch&&shift ? (
                             <div style={{opacity:0.6,display:"flex",flexDirection:"column",alignItems:"center",gap:1}}>
-                              {dateStr < toLocalDateStr(new Date()) ? (
+                              {dateStr < demoToday ? (
                                 <>
                                   <span style={{fontSize:12}}>⚠️</span>
                                   <div style={{fontSize:8,fontWeight:800,color:"#E8A93A"}}>CORRECTION</div>
@@ -5338,7 +5347,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           const dayNum = i+1;
                           const dateStr = `${year}-${String(month+1).padStart(2,"0")}-${String(dayNum).padStart(2,"0")}`;
                           const dayOfWeek = new Date(dateStr+"T00:00:00").getDay();
-                          const isToday = dateStr===toLocalDateStr(new Date());
+                          const isToday = dateStr===demoToday;
                           const isActive = dateStr===activeDay;
                           const wkForDay = weeks.find(wk=>wk.dates.some(d=>{ const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt)===dateStr; }));
                           const wkKey = wkForDay?.key;
@@ -6033,7 +6042,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           {tab==="dashboard" && (
             <div style={{display:"flex",flexDirection:"column",gap:12}}>
               {(()=>{
-                const paySun=getSunday(toLocalDateStr(new Date()));
+                const paySun=getSunday(demoToday);
                 const pwDates=weekDatesFromSunday(payWeek);
                 const pwLabel=dl(pwDates[0])+" – "+dl(pwDates[6]);
                 const pwHrs=employees.reduce((s,e)=>s+DAYS.reduce((d,_,i)=>d+eDayH(payWeek,e.id,i),0),0);
