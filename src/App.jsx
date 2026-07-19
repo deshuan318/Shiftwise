@@ -4092,7 +4092,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           </div>
 
           {/* ── Apply to multiple days ── */}
-          <div style={{marginBottom:16,padding:"10px 12px",background:T.muted,borderRadius:10,border:`1px solid ${T.border}`,visibility:canSave?"visible":"hidden",height:canSave?"auto":0,overflow:"hidden",marginBottom:canSave?16:0}}>
+          <div style={{padding:"10px 12px",background:T.muted,borderRadius:10,border:`1px solid ${T.border}`,visibility:canSave?"visible":"hidden",height:canSave?"auto":0,overflow:"hidden",marginBottom:canSave?16:0}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                 <label style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.05em"}}>
                   Also apply to
