@@ -1761,16 +1761,15 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   // ── Demo sandbox cleanup backstop ──────────────────────────────────────
   // handleSignOut (explicit logout) is the primary reset trigger. An idle
-  // timer catches people who walk away without signing out.
+  // timer catches people who walk away without signing out. A daily Vercel
+  // Cron job (api/demo-cleanup.js) catches everything else — anyone who
+  // just closes the tab, whose heartbeat (below) simply stops updating.
   //
   // NOTE: a client-side "destroy on tab close" hook (pagehide/beforeunload)
   // was tried here and removed — pagehide fires on ordinary page refresh as
   // well as actual tab close, with no reliable way to tell them apart. That
   // meant refreshing the page silently destroyed the live sandbox while
   // sessionStorage still pointed at it, bouncing the user back to login.
-  // A scheduled cleanup job (hourly cron hitting a "delete anything idle
-  // past N hours" endpoint) is the correct backstop for truly-abandoned
-  // tabs — not a client-side unload event.
   useEffect(() => {
     const s = getSession();
     if (authState !== "authenticated" || s?.user?.id !== DEMO_OWNER_ID) return;
@@ -1794,6 +1793,29 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       activityEvents.forEach(evt => window.removeEventListener(evt, resetIdleTimer));
     };
   }, [authState]);
+
+  // Heartbeat: tells the server this demo sandbox is still actively being
+  // viewed. Stops the moment the tab closes (nothing left to run the
+  // interval) — the daily cron job treats a stale heartbeat as "abandoned"
+  // and cleans it up, without needing the browser to say goodbye.
+  useEffect(() => {
+    const s = getSession();
+    if (authState !== "authenticated" || s?.user?.id !== DEMO_OWNER_ID || !bizId) return;
+
+    const HEARTBEAT_INTERVAL_MS = 4 * 60 * 1000; // 4 minutes
+    const sendHeartbeat = () => {
+      fetch("/api/demo-heartbeat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ business_id: bizId }),
+      }).catch(() => {}); // best-effort — a missed beat just means slightly earlier cleanup eligibility
+    };
+
+    sendHeartbeat();
+    const interval = setInterval(sendHeartbeat, HEARTBEAT_INTERVAL_MS);
+    return () => clearInterval(interval);
+
+  }, [authState, bizId]);
   useEffect(() => {
     if (authState !== "authenticated") return;
     const current = window.location.hash.replace("#","");

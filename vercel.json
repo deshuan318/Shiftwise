@@ -1,11 +1,8 @@
 {
-  "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
-  ],
   "crons": [
     {
-      "path": "/api/square-sync-cron",
-      "schedule": "0 8 * * *"
+      "path": "/api/demo-cleanup",
+      "schedule": "0 9 * * *"
     }
   ]
 }
