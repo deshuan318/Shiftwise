@@ -5572,9 +5572,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
           {/* COVERAGE */}
           {tab==="coverage" && (()=>{
-            const today = new Date();
-            const todayStr = toLocalDateStr(today);
-            const nowDec = today.getHours() + today.getMinutes()/60;
+            // Demo-aware "today" — same pattern used elsewhere for Cedar &
+            // Sage, so Coverage doesn't compare against the real live date.
+            const today = isDemoBiz ? new Date(DEMO_TODAY_ANCHOR+"T12:00:00") : new Date();
+            const todayStr = demoToday;
+            const nowDec = isDemoBiz ? 12 : (today.getHours() + today.getMinutes()/60);
 
             // Derive week dates from coverageWeek
             const covWkDates = Array.from({length:7},(_,i)=>{
@@ -5597,12 +5599,15 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             const isToday   = covDayStr === todayStr;
 
             // ── Helpers ──────────────────────────────────────────────────────
+            // `schedule` state is keyed directly by each week's week_start date
+            // (see loadAllData step 7) — every seeded week is present at once,
+            // regardless of what the Schedule tab's own selector happens to be
+            // pointed at. Computing the key straight from the date (rather than
+            // searching the Schedule tab's separate 1-2 week `weeks` array, as
+            // this used to do) means Coverage works correctly for ANY week that
+            // has shift data, not just whichever one Schedule also has open.
             function weekKeyForDate(dateStr) {
-              for (const wk of weeks) {
-                const dates = wk.dates.map(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt); });
-                if (dates.includes(dateStr)) return { weekKey: wk.key, dayIdx: dates.indexOf(dateStr) };
-              }
-              return null;
+              return { weekKey: getSunday(dateStr), dayIdx: new Date(dateStr+"T00:00:00").getDay() };
             }
 
             const covWk = weekKeyForDate(covDayStr);
@@ -6011,11 +6016,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       <span style={{color:"#666", fontSize:11, marginLeft:10}}>Based on clock-in data</span>
                     </div>
                     {employees.map((emp, i) => {
-                      // Calculate actual hours from punches for the active week
-                      const wkKey = activeWeek || wk1Start;
-                      const wkDates = (weeks.find(w=>w.key===wkKey)?.dates || []).map(d=>{
-                        const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt);
-                      });
+                      // Calculate actual hours from punches for the CURRENTLY
+                      // VIEWED coverage week — this previously read `activeWeek
+                      // || wk1Start` (the Schedule tab's own week state), which
+                      // is why every week looked identical here regardless of
+                      // which week Coverage was actually navigated to.
+                      const wkKey = coverageWeek;
+                      const wkDates = covWkDates;
                       const empPunches = punches.filter(p => {
                         const pd = toLocalDateStr(new Date(p.time));
                         return p.empId === emp.id && wkDates.includes(pd);
