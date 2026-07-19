@@ -4916,7 +4916,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
         {/* TEMP DEBUG — remove after diagnosing demoToday issue */}
         <div style={{background:"#000",color:"#0f0",fontFamily:"monospace",fontSize:11,padding:"4px 8px",borderRadius:6}}>
-          isDemoBiz={String(isDemoBiz)} | demoToday={demoToday} | tsWeekStart={tsWeekStart}
+          isDemoBiz={String(isDemoBiz)} | demoToday={demoToday} | tsWeekStart={tsWeekStart} | bizId={bizId} | employees.length={employees.length}
         </div>
       </div>
 
