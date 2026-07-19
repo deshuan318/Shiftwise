@@ -5633,7 +5633,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               const clockedIn = lastPunchEntry?.type === "in" || lastPunchEntry?.type === "break_in";
               const clockedOut = lastPunchEntry?.type === "out";
 
-              // Determine status
+              // Determine status. Late/missed only make sense when the day
+              // being VIEWED is actually today (or in the past) — this
+              // previously applied "late" to any day regardless, so a future
+              // shift (e.g. June 21 while demoToday is June 17) would show
+              // "180m late" for a shift that hasn't happened yet.
               let status = "scheduled";
               if (openEntry) {
                 status = openEntry.status === "claimed" ? "claimed" : "open";
@@ -5641,11 +5645,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 status = "completed";
               } else if (clockedIn) {
                 status = "active";
-              } else if (nowDec > shift.start + 0.25 && !clockedIn && !clockedOut) {
-                status = "late";
-              } else if (nowDec > shift.end) {
-                status = "missed";
+              } else if (covDayStr < todayStr) {
+                status = "missed"; // past day, shift never got a punch
+              } else if (covDayStr === todayStr) {
+                if (nowDec > shift.end) status = "missed";
+                else if (nowDec > shift.start + 0.25) status = "late";
+                // else: today, but shift hasn't started yet — stays "scheduled"
               }
+              // covDayStr > todayStr (a future day) stays "scheduled"
 
               // Actual hours from punches
               let actualHours = 0;
