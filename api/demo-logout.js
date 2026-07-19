@@ -56,6 +56,7 @@ export default async function handler(req, res) {
     await sbDelete('shifts', business_id);
     await sbDelete('schedule_weeks', business_id);
     await sbDelete('employees', business_id);
+    await sbDelete('dashboard_widgets', business_id);
 
     const res2 = await fetch(`${SUPABASE_URL}/rest/v1/businesses?id=eq.${business_id}`, {
       method: 'DELETE',

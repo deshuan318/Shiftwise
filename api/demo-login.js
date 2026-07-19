@@ -159,6 +159,14 @@ export default async function handler(req, res) {
       });
     await sbInsert('punch_reviews', newReviews);
 
+    // 10. Clone dashboard_widgets (no employee refs, straightforward copy)
+    const widgets = await sbGet(`dashboard_widgets?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
+    const newWidgets = widgets.map((w) => {
+      const { id, created_at: _ca, ...rest } = w;
+      return { ...rest, id: randomUUID(), business_id: newBusinessId };
+    });
+    await sbInsert('dashboard_widgets', newWidgets);
+
     return res.status(200).json({ business_id: newBusinessId });
   } catch (err) {
     console.error('Demo clone failed:', err);
