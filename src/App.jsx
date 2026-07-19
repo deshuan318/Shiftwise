@@ -2263,6 +2263,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const bestRplhDay = rplhDays.reduce((b,d)=>(!b||d.revenuePerLaborHour>b.revenuePerLaborHour)?d:b, null);
     const worstRplhDay= rplhDays.reduce((w,d)=>(!w||d.revenuePerLaborHour<w.revenuePerLaborHour)?d:w, null);
     const topSalesDay = salesDays[0];
+    // Lowest-revenue day of the week worked, for the "focus" narrative below.
+    // (Was previously referenced but never declared — a stale comment claimed
+    // it was "already declared above," causing a ReferenceError once real
+    // sales data actually reached this code path.)
+    const bottomSalesDay = salesDays.length > 1 ? salesDays[salesDays.length - 1] : null;
     const empBreakdown = wk.employeeBreakdown || [];
     const topHrsEmp   = [...empBreakdown].sort((a,b)=>b.scheduledHours-a.scheduledHours)[0];
     const runway      = budget ? budget - totalPay : 0;
