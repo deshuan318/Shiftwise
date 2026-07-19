@@ -1440,8 +1440,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   async function resolveDemoBusinessId() {
     let demoBizId = sessionStorage.getItem(DEMO_BIZ_SESSION_KEY);
     if (demoBizId) {
-      const rows = await dbGet(`businesses?select=id&id=eq.${demoBizId}&limit=1`);
-      if (!rows?.[0]) demoBizId = null; // stale — was destroyed, clone fresh below
+      // Check the sandbox actually completed cloning, not just that the
+      // business row exists — a clone that failed partway through (e.g.
+      // the employees insert step erroring) still leaves a real businesses
+      // row behind, which would otherwise pass this check and get reused
+      // forever as a broken, empty sandbox.
+      const empRows = await dbGet(`employees?select=id&business_id=eq.${demoBizId}&limit=1`);
+      if (!empRows?.[0]) demoBizId = null; // incomplete/stale — clone fresh below
     }
     if (!demoBizId) {
       const cloneRes = await fetch("/api/demo-login", { method: "POST" });
@@ -4914,10 +4919,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         </div>
         <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,7)))}
           style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
-        {/* TEMP DEBUG — remove after diagnosing demoToday issue */}
-        <div style={{background:"#000",color:"#0f0",fontFamily:"monospace",fontSize:11,padding:"4px 8px",borderRadius:6}}>
-          isDemoBiz={String(isDemoBiz)} | demoToday={demoToday} | tsWeekStart={tsWeekStart} | bizId={bizId} | employees.length={employees.length}
-        </div>
       </div>
 
       {/* Grid */}

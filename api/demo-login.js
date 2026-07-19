@@ -36,8 +36,9 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY env vars' });
   }
 
+  let newBusinessId;
   try {
-    const newBusinessId = randomUUID();
+    newBusinessId = randomUUID();
 
     // 1. Clone the business row
     const [templateBiz] = await sbGet(`businesses?id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
@@ -161,6 +162,19 @@ export default async function handler(req, res) {
     return res.status(200).json({ business_id: newBusinessId });
   } catch (err) {
     console.error('Demo clone failed:', err);
+    // Best-effort cleanup: if the business row was created but a later step
+    // failed, delete it rather than leaving a broken, incomplete sandbox
+    // behind for resolveDemoBusinessId() to mistakenly reuse later.
+    if (newBusinessId) {
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/businesses?id=eq.${newBusinessId}`, {
+          method: 'DELETE',
+          headers: { ...HEADERS, Prefer: 'return=minimal' },
+        });
+      } catch (cleanupErr) {
+        console.error('Failed to clean up partial clone:', cleanupErr);
+      }
+    }
     return res.status(500).json({ error: 'Failed to create demo sandbox', details: err.message });
   }
 }
