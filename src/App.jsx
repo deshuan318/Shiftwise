@@ -4328,7 +4328,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               {/* 🔔 Alert Bell */}
 {(()=>{
   const ACTIONABLE_FLAGS = ["NO_SHIFT","ADJUSTMENT"];
-  const thirtyDaysAgoBell = new Date(Date.now() - 30*24*60*60*1000);
+  // Demo-aware "now" — otherwise the 30-day lookback compares against the
+  // real live date, and Cedar & Sage's seeded flags (April-June 2026) fall
+  // outside that window entirely, so the badge never shows anything.
+  const bellNow = isDemoBiz ? new Date(DEMO_TODAY_ANCHOR+"T12:00:00") : new Date();
+  const thirtyDaysAgoBell = new Date(bellNow - 30*24*60*60*1000);
   const unreviewed = punches.filter(p =>
     p.flags?.some(f=>ACTIONABLE_FLAGS.includes(f)) &&
     !punchReviews[p.id] &&
