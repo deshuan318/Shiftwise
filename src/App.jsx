@@ -4671,8 +4671,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           const pad = n => String(n).padStart(2,"0");
           const dateStr2 = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
           const timeStr2 = `${pad(h)}:${pad(m)}`;
-          const tz = getCSTOffset(dateStr2, timeStr2);
-          return `${dateStr2}T${timeStr2}:00-05:00`;
+          // punched_at is `timestamp without time zone` — it stores exactly what we
+          // send, no conversion. Appending an offset here would make Postgres resolve
+          // it to an absolute instant first and store THAT as the naive value,
+          // silently shifting the wall-clock time (this was the bug: manual edits
+          // were landing ~5 hours later than what was actually typed).
+          return `${dateStr2}T${timeStr2}:00`;
         };
         // If clock-out time is earlier than clock-in time, it's an overnight shift —
         // the clock-out lands on the following calendar day.
