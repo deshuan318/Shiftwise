@@ -3952,9 +3952,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     function remove() { setShift(weekKey,empId,dayIdx,null); setOpenCell(null); }
 
     return (
-      <div onClick={()=>setOpenCell(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
-        <div onClick={e=>e.stopPropagation()} style={{background:"white",borderRadius:"20px 20px 0 0",padding:"20px 20px calc(20px + env(safe-area-inset-bottom,0px))",width:"100%",maxWidth:500,boxShadow:"0 -12px 48px rgba(0,0,0,0.2)",borderTop:`4px solid ${emp.color}`}}>
-          <div style={{width:36,height:4,borderRadius:2,background:"#E0DAD2",margin:"0 auto 16px"}}/>
+      <div onClick={()=>setOpenCell(null)} className="time-picker-overlay" style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
+        <style>{`
+          @media (min-width: 768px) {
+            .time-picker-overlay { align-items: center !important; padding: 20px; box-sizing: border-box; }
+            .time-picker-sheet { border-radius: 20px !important; box-shadow: 0 24px 64px rgba(0,0,0,0.28) !important; max-height: 85vh; overflow-y: auto; }
+            .time-picker-grabber { display: none !important; }
+          }
+        `}</style>
+        <div onClick={e=>e.stopPropagation()} className="time-picker-sheet" style={{background:"white",borderRadius:"20px 20px 0 0",padding:"20px 20px calc(20px + env(safe-area-inset-bottom,0px))",width:"100%",maxWidth:500,boxShadow:"0 -12px 48px rgba(0,0,0,0.2)",borderTop:`4px solid ${emp.color}`}}>
+          <div className="time-picker-grabber" style={{width:36,height:4,borderRadius:2,background:"#E0DAD2",margin:"0 auto 16px"}}/>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
               <div style={{width:38,height:38,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:15,flexShrink:0}}>
@@ -4092,7 +4099,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           </div>
 
           {/* ── Apply to multiple days ── */}
-          <div style={{padding:"10px 12px",background:T.muted,borderRadius:10,border:`1px solid ${T.border}`,visibility:canSave?"visible":"hidden",height:canSave?"auto":0,overflow:"hidden",marginBottom:canSave?16:0}}>
+          <div style={{marginBottom:16,padding:"10px 12px",background:T.muted,borderRadius:10,border:`1px solid ${T.border}`,visibility:canSave?"visible":"hidden",height:canSave?"auto":0,overflow:"hidden",marginBottom:canSave?16:0}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                 <label style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.05em"}}>
                   Also apply to
@@ -4671,12 +4678,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           const pad = n => String(n).padStart(2,"0");
           const dateStr2 = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
           const timeStr2 = `${pad(h)}:${pad(m)}`;
-          // punched_at is `timestamp without time zone` — it stores exactly what we
-          // send, no conversion. Appending an offset here would make Postgres resolve
-          // it to an absolute instant first and store THAT as the naive value,
-          // silently shifting the wall-clock time (this was the bug: manual edits
-          // were landing ~5 hours later than what was actually typed).
-          return `${dateStr2}T${timeStr2}:00`;
+          const tz = getCSTOffset(dateStr2, timeStr2);
+          return `${dateStr2}T${timeStr2}:00-05:00`;
         };
         // If clock-out time is earlier than clock-in time, it's an overnight shift —
         // the clock-out lands on the following calendar day.
