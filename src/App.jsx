@@ -716,6 +716,7 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
         weekly_budget:  budgetNum > 0 ? budgetNum : null,
         setup_complete: true,
       });
+      let insertedEmps = [];
       if (employees.length > 0) {
         const rows = employees.map(e => ({
           business_id:  bizId,
@@ -724,9 +725,37 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
           hourly_rate:  e.rate,
           color:        SETUP_AV_COLORS[employees.indexOf(e) % SETUP_AV_COLORS.length],
         }));
-        await dbPost("employees", rows);
+        insertedEmps = (await dbPost("employees", rows)) || [];
       }
-      onComplete();
+
+      // Seed a starter example week so the Schedule tab isn't blank on first
+      // landing. This is a forward-looking draft the owner can edit or clear —
+      // never fabricated punch/timesheet history, since that touches real
+      // employee pay records and would be a real data-integrity problem.
+      let seeded = false;
+      if (insertedEmps.length > 0 && daysOpen.length > 0) {
+        try {
+          const weekStartStr = getSunday(toLocalDateStr(new Date()));
+          const weekRows = await dbUpsert("schedule_weeks", [{ business_id: bizId, week_start: weekStartStr, label: "Week" }]);
+          const weekId = weekRows?.[0]?.id;
+          if (weekId) {
+            const shiftRows = daysOpen.map((dayIdx, i) => {
+              const emp = insertedEmps[i % insertedEmps.length];
+              return {
+                business_id: bizId, week_id: weekId, employee_id: emp.id, day_index: dayIdx,
+                start_dec: 9, end_dec: 17, shift_types: ["regular"], notes: "",
+              };
+            });
+            await sbFetch("shifts?on_conflict=week_id,employee_id,day_index", {
+              method: "POST", body: JSON.stringify(shiftRows),
+              headers: { "Prefer": "resolution=merge-duplicates,return=minimal" },
+            });
+            seeded = true;
+          }
+        } catch(seedErr) { console.warn("Starter week seed failed (non-blocking):", seedErr); }
+      }
+
+      onComplete(seeded);
     } catch(err) {
       console.error("Setup error:", err);
       setSaveErr("Something went wrong. Please try again.");
@@ -4323,10 +4352,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         initialStep={Number.isInteger(resumeStep) ? resumeStep : undefined}
         squareConnected={squareConnected}
         onConnectSquare={handleConnectSquare}
-        onComplete={async () => {
+        onComplete={async (seeded) => {
           try { localStorage.removeItem("sw_setup_step"); } catch {}
           await loadAllData();
           setSetupComplete(true);
+          if (seeded) showToast("We added an example week to your schedule — feel free to edit or clear it ✓", 6000);
         }}
       />
     );
