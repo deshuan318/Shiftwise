@@ -7722,6 +7722,27 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       </div>
                     </Card>
                     <Card T={T} style={{padding:"14px 16px"}}>
+                      <SectionLabel T={T}>Your Kiosk Link</SectionLabel>
+                      <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.6}}>
+                        Open this on the tablet, laptop, or POS device you'll use for clock-ins. Bookmark it once — employees never need to type anything but their PIN.
+                      </p>
+                      <div style={{background:T.muted,borderRadius:9,padding:"11px 14px",fontSize:12,color:T.text,fontFamily:"monospace",wordBreak:"break-all",marginBottom:10}}>
+                        {`${window.location.origin}/kiosk?bizId=${bizId}`}
+                      </div>
+                      <div style={{display:"flex",gap:8}}>
+                        <button onClick={()=>{
+                          const url = `${window.location.origin}/kiosk?bizId=${bizId}`;
+                          navigator.clipboard?.writeText(url).then(()=>showToast("Kiosk link copied ✓")).catch(()=>showToast(url, 6000));
+                        }} style={{flex:1,background:"transparent",border:`1px solid ${T.border}`,borderRadius:9,padding:"11px 0",fontWeight:700,fontSize:13,color:T.text,cursor:"pointer"}}>
+                          Copy Link
+                        </button>
+                        <button onClick={()=>window.open(`${window.location.origin}/kiosk?bizId=${bizId}`, "_blank")}
+                          style={{flex:1,background:T.accent,color:"white",border:"none",borderRadius:9,padding:"11px 0",fontWeight:700,fontSize:13,cursor:"pointer"}}>
+                          Open Kiosk →
+                        </button>
+                      </div>
+                    </Card>
+                    <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Employee Clock-In PINs</SectionLabel>
                       <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Set each employee's PIN in the Team Roster. They use it to clock in and out on the kiosk.</p>
                       <button onClick={()=>setSettingsSection("roster")}
