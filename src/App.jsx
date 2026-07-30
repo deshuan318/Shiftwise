@@ -1053,7 +1053,7 @@ function FeedbackTab({ bizId, T, Card, showToast, addAudit, getSession, dbPost }
       setFbMessage("");
       addAudit("Feedback Submitted", `${fbType} · ${fbArea}`);
     } catch(e) {
-      showToast("Could not submit: " + e.message, 5000);
+      showError(friendlyError(e, "Couldn't submit that feedback — try again."));
     } finally {
       setFbSaving(false);
     }
@@ -1309,7 +1309,35 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   const printRef = useRef();
 
-  const showToast = (msg, dur=3000) => { setToast(msg); setTimeout(()=>setToast(null),dur); };
+  const showToast = (msg, dur=3000, type="success") => { setToast({msg, type}); setTimeout(()=>setToast(null),dur); };
+  const showError = (msg, dur=5000) => showToast(msg, dur, "error");
+
+  // Translates raw Supabase/Postgres/network errors into plain-English messages.
+  // `fallback` is what shows when the error doesn't match a known pattern —
+  // always specific to the action being attempted, never a generic "error occurred".
+  function friendlyError(err, fallback) {
+    const raw = (err && (err.message || err.error_description || err.error || String(err))) || "";
+    const msg = raw.toLowerCase();
+    if (!navigator.onLine || msg.includes("failed to fetch") || msg.includes("networkerror") || msg.includes("network request failed")) {
+      return "You're offline — this will save once you're back online.";
+    }
+    if (msg.includes("duplicate key") || msg.includes("already exists") || msg.includes("unique constraint")) {
+      return "That already exists — try a different name or value.";
+    }
+    if (msg.includes("foreign key") || msg.includes("violates foreign key")) {
+      return "Couldn't complete that — something it depends on may have been deleted. Try refreshing the page.";
+    }
+    if (msg.includes("permission denied") || msg.includes("row-level security") || msg.includes("rls") || msg.includes("jwt")) {
+      return "Your session may have expired — try refreshing the page and signing in again.";
+    }
+    if (msg.includes("timeout") || msg.includes("timed out")) {
+      return "That took too long to save — check your connection and try again.";
+    }
+    if (msg.includes("payload too large") || msg.includes("too large")) {
+      return "That's too large to save — try a smaller file or fewer items at once.";
+    }
+    return fallback || "Something went wrong saving this — try again.";
+  }
 
   async function runFlagReport(filterKey) {
     const key = filterKey || flagReportRange;
@@ -1322,7 +1350,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const stats = computeFlagPatterns(rows);
       setFlagReportData({ ...stats, startDate, endDate, filterKey: key, punchesScanned: rows.length, truncated });
     } catch (e) {
-      showToast("Could not load flag report: " + e.message, 5000);
+      showError(friendlyError(e, "Couldn't load that report — try again."));
     } finally {
       setFlagReportLoading(false);
     }
@@ -1395,7 +1423,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const result = await runCustomReport(activeIds, null, sourceFilters, rbGrouping, startDate, endDate);
       setRbResult({ ...result, startDate, endDate });
     } catch (e) {
-      showToast("Could not run report: " + e.message, 5000);
+      showError(friendlyError(e, "Couldn't run that report — try again."));
     } finally {
       setRbLoading(false);
     }
@@ -1734,7 +1762,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setAuthError(
         isExpired
           ? "You were signed out due to inactivity. Please sign in again."
-          : "Could not load your data: " + err.message
+          : friendlyError(err, "Couldn't load your data. Try refreshing the page — if that doesn't work, sign out and back in.")
       );
       if (isExpired) clearSession();
       setAuthState("unauthenticated");
@@ -2697,7 +2725,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           // Write to Supabase
           if (bizId) {
             const rows = merged.map(d=>({ business_id:bizId, sale_date:d.date, revenue:d.revenue, transactions:d.transactions||0 }));
-            dbUpsert("sales_data", rows).catch(e=>console.warn("Sales data write failed:", e));
+            dbUpsert("sales_data", rows).catch(e=>{ console.warn("Sales data write failed:", e); showError(friendlyError(e, "That import didn't save to the server — try uploading again.")); });
           }
           return merged;
         });
@@ -2705,7 +2733,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         showToast(`${result.length} days of sales data imported ✓`, 4000);
         addAudit("Sales Data Imported", `${result.length} days from Square — ${result[0].date} to ${result[result.length-1].date}`);
       } catch(err) {
-        alert("Could not read this file.\n\n" + err.message);
+        showError(friendlyError(err, "Couldn't read that file — make sure it's a Square CSV export and try again."), 6000);
       }
     };
     reader.readAsText(file);
@@ -3152,7 +3180,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       showToast(`Square sales synced ✓${data.daysSynced ? ` (${data.daysSynced} days)` : ""}`, 4000);
       addAudit("Square Sync", `Synced sales data from Square${data.daysSynced ? ` — ${data.daysSynced} days` : ""}`);
     } catch(err) {
-      showToast("Square sync failed: " + err.message, 5000);
+      showError(friendlyError(err, "Square sync failed — try again."));
     } finally {
       setSquareSyncing(false);
     }
@@ -3174,7 +3202,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       showToast("Square disconnected");
       addAudit("Square Disconnected", "Square integration disconnected");
     } catch(err) {
-      showToast("Could not disconnect: " + err.message, 5000);
+      showError(friendlyError(err, "Couldn't disconnect Square — try again."));
     }
   }
 
@@ -3200,7 +3228,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setNewWidget({ data_source:"sales", time_range:"last7", display:"stat", color:null, size:"sm", show_axis:true, show_legend:true });
       showToast("Widget added ✓");
     } catch(e) {
-      showToast("Could not add widget: " + e.message, 5000);
+      showError(friendlyError(e, "Couldn't add that widget — try again."));
     } finally {
       setWidgetSaving(false);
     }
@@ -3222,7 +3250,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     setDragWidgetId(null); setDragOverWidgetId(null);
     try {
       await Promise.all(updated.map(w => dbPatch(`dashboard_widgets?id=eq.${w.id}`, { sort_order: w.sort_order })));
-    } catch(e) { console.warn("Reorder save failed:", e); }
+    } catch(e) { console.warn("Reorder save failed:", e); showError(friendlyError(e, "Widget order didn't save — it may reset on reload.")); }
   }
 
   // Sets a widget to an explicit size (used by the size picker popover)
@@ -3231,13 +3259,13 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     setWidgets(prev => prev.map(item => item.id===id ? {...item, grid_w:w, grid_h:h} : item));
     setSizeMenuFor(null);
     try { await dbPatch(`dashboard_widgets?id=eq.${id}`, { grid_w:w, grid_h:h }); }
-    catch(e) { console.warn("Resize save failed:", e); }
+    catch(e) { console.warn("Resize save failed:", e); showError(friendlyError(e, "Widget size didn't save — it may reset on reload.")); }
   }
 
   async function removeWidget(id) {
     setWidgets(prev => prev.filter(w => w.id !== id));
     try { await dbDelete(`dashboard_widgets?id=eq.${id}`); }
-    catch(e) { console.warn("Widget delete failed:", e); }
+    catch(e) { console.warn("Widget delete failed:", e); showError(friendlyError(e, "Couldn't remove that widget — try again.")); }
   }
 
   // Resolves a widget config into the underlying Sales/Labor/Forecast data
@@ -3463,7 +3491,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const merged = Object.values(map).sort((a,b)=>a.date.localeCompare(b.date));
       if (bizId) {
         const row = { business_id: bizId, sale_date: date, revenue: isNaN(num)?0:num, transactions: 0, source: 'cash' };
-        dbUpsert('sales_data', [row]).catch(()=>{});
+        dbUpsert('sales_data', [row]).catch(e => { console.warn("Cash entry save failed:", e); showError(friendlyError(e, "That cash entry didn't save — try again.")); });
       }
       return merged;
     });
@@ -3472,7 +3500,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   async function saveBizSettings(fields) {
     if (!bizId) return;
     try { await dbPatch(`businesses?id=eq.${bizId}`, fields); }
-    catch(e) { console.warn("Business save failed:", e); }
+    catch(e) { console.warn("Business save failed:", e); showError(friendlyError(e, "Couldn't save that setting — try again.")); }
   }
 
   // The "today" every date-comparison in the UI should use — real today for
@@ -3596,7 +3624,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           headers:{"Prefer":"resolution=merge-duplicates,return=minimal"}
         });
       }
-    } catch(e) { console.warn("Shift save failed:", e); }
+    } catch(e) { console.warn("Shift save failed:", e); showError(friendlyError(e, "Couldn't save that shift — try again.")); }
   }
 
   function toggleShift(wk,eid,di) {
@@ -3697,7 +3725,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setEmployees(p=>[...p, appEmp]);
       setEditEmpId(newEmp.id);
       addAudit("Employee Added", "New employee created — name pending");
-    } catch(e) { showToast("Could not add employee: " + e.message); }
+    } catch(e) { showError(friendlyError(e, "Couldn't add that employee — try again.")); }
   }
 
   const updEmp = (id, f) => {
@@ -3716,7 +3744,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     if (f.availableHours !== undefined) dbFields.available_hours = parseFloat(f.availableHours)||40;
     if (f.notes          !== undefined) dbFields.notes           = f.notes;
     if (Object.keys(dbFields).length > 0) {
-      dbPatch(`employees?id=eq.${id}`, dbFields).catch(e => console.warn("Employee update failed:", e));
+      dbPatch(`employees?id=eq.${id}`, dbFields).catch(e => { console.warn("Employee update failed:", e); showError(friendlyError(e, "Couldn't save that employee change — try again.")); });
     }
   };
 
@@ -3727,7 +3755,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     setSchedule(p=>{ const n=JSON.parse(JSON.stringify(p)); Object.keys(n).forEach(wk=>delete n[wk][id]); return n; });
     if(editEmpId===id) setEditEmpId(null);
     // Supabase: cascades to shifts automatically via foreign key
-    dbDelete(`employees?id=eq.${id}`).catch(e => console.warn("Employee delete failed:", e));
+    dbDelete(`employees?id=eq.${id}`).catch(e => { console.warn("Employee delete failed:", e); showError(friendlyError(e, "Couldn't delete that employee — try again.")); });
   }
 
   function getTodayShift(empId) {
@@ -3856,7 +3884,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     // Write to Supabase
     if (bizId) {
       dbPost("published_schedules", { business_id:bizId, label, week_start:wk1Start, schedule_data:entry.scheduleData, employee_snapshot:entry.employeeSnapshot, budget:parseFloat(weeklyBudget)||null })
-        .catch(e => console.warn("Publish write failed:", e));
+        .catch(e => { console.warn("Publish write failed:", e); showError(friendlyError(e, "The schedule didn't actually save to the server — try publishing again.")); });
     }
   }
 
@@ -4099,7 +4127,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           </div>
 
           {/* ── Apply to multiple days ── */}
-          <div style={{marginBottom:16,padding:"10px 12px",background:T.muted,borderRadius:10,border:`1px solid ${T.border}`,visibility:canSave?"visible":"hidden",height:canSave?"auto":0,overflow:"hidden",marginBottom:canSave?16:0}}>
+          <div style={{padding:"10px 12px",background:T.muted,borderRadius:10,border:`1px solid ${T.border}`,visibility:canSave?"visible":"hidden",height:canSave?"auto":0,overflow:"hidden",marginBottom:canSave?16:0}}>
               <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
                 <label style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.05em"}}>
                   Also apply to
@@ -4439,7 +4467,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         }
         addAudit("Punch Deleted", `${emp.name} — ${dateStr}: ${typeLabel} at ${new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})} removed (${reasonText})`, {empName:emp.name});
         showToast("Punch deleted — archived for records ✓");
-      } catch(e) { showToast("Could not delete: "+e.message); }
+      } catch(e) { showError(friendlyError(e, "Couldn't delete that punch — try again.")); }
       finally { setDeleting(false); }
     }
 
@@ -4636,7 +4664,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             method: "POST",
             headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
             body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
-          }).catch(e=>console.warn("punch_reviews upsert failed:", e));
+          }).catch(e=>{ console.warn("punch_reviews upsert failed:", e); showError(friendlyError(e, "Couldn't save that review status — try again.")); });
         }
       });
       setTsOpenCell(null);
@@ -4678,8 +4706,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           const pad = n => String(n).padStart(2,"0");
           const dateStr2 = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
           const timeStr2 = `${pad(h)}:${pad(m)}`;
-          const tz = getCSTOffset(dateStr2, timeStr2);
-          return `${dateStr2}T${timeStr2}:00-05:00`;
+          // punched_at is `timestamp without time zone` — it stores exactly what we
+          // send, no conversion. Appending an offset here would make Postgres resolve
+          // it to an absolute instant first and store THAT as the naive value,
+          // silently shifting the wall-clock time (this was the bug: manual edits
+          // were landing ~5 hours later than what was actually typed).
+          return `${dateStr2}T${timeStr2}:00`;
         };
         // If clock-out time is earlier than clock-in time, it's an overnight shift —
         // the clock-out lands on the following calendar day.
@@ -4730,7 +4762,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         addAudit("Manual Time Entry", `${emp.name} — ${dateStr}: ${editIn||""}${editOut?" – "+editOut:""} (${reasonText}) — auto-approved`, {empName:emp.name});
         showToast("Time adjustment saved & approved ✓");
         setEditIn(""); setEditOut(""); setReasonCode("missed_punch"); setReasonNote("");
-      } catch(e) { showToast("Could not save: "+e.message); }
+      } catch(e) { showError(friendlyError(e, "Couldn't save that time entry — try again.")); }
       finally { setSaving(false); }
     }
 
@@ -4922,7 +4954,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     body:JSON.stringify({business_id:bizId, punch_id:pid, status, reviewed_by:getSession()?.user?.id||null})
                   })
                 ));
-              } catch(e) { console.warn("Approve all failed:", e); }
+                showToast(`${Object.keys(updates).length} punch${Object.keys(updates).length===1?"":"es"} approved ✓`);
+              } catch(e) { console.warn("Approve all failed:", e); showError(friendlyError(e, "Some punches may not have been approved — refresh to check.")); }
             }
             addAudit("Bulk Approved", `${Object.keys(updates).length} clean punches approved for week of ${tsWkLabel}`);
             showToast(`${Object.keys(updates).length} punches approved ✓`);
@@ -6321,7 +6354,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                               Import CSV
                               <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
                             </label>
-                            <button onClick={()=>{ if(window.confirm("Clear all imported sales data?")) { setSalesData([]); if(bizId) dbDelete(`sales_data?business_id=eq.${bizId}`).catch(()=>{}); }; }}
+                            <button onClick={()=>{ if(window.confirm("Clear all imported sales data?")) { setSalesData([]); if(bizId) dbDelete(`sales_data?business_id=eq.${bizId}`).catch(e=>{ console.warn("Clear sales data failed:", e); showError(friendlyError(e, "Couldn't clear that data — try again.")); }); }; }}
                               style={{background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
                               Clear Data
                             </button>
@@ -8083,7 +8116,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       method: "POST",
                       headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
                       body: JSON.stringify({ business_id: bizId, punch_id: pid, status, reviewed_by: getSession()?.user?.id || null })
-                    }).catch(e=>console.warn("punch_reviews insert failed:", e));
+                    }).catch(e=>{ console.warn("punch_reviews insert failed:", e); showError(friendlyError(e, "Some review updates may not have saved — refresh to check.")); });
                   });
                 }
                 showToast("All alerts marked as reviewed ✓");
@@ -8140,7 +8173,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                             method: "POST",
                             headers: { ...SB_HEADERS, Authorization: `Bearer ${getToken()}`, Prefer: "resolution=merge-duplicates,return=minimal" },
                             body: JSON.stringify({ business_id: bizId, punch_id: p.id, status: val, reviewed_by: getSession()?.user?.id || null })
-                          }).catch(e=>console.warn("punch_reviews insert failed:", e));
+                          }).catch(e=>{ console.warn("punch_reviews insert failed:", e); showError(friendlyError(e, "Couldn't save that review status — try again.")); });
                         }
                       }}
                         style={{background:status===val?color+"22":T.surface,color:status===val?color:T.sub,border:"none",padding:"9px 0",fontSize:11,fontWeight:700,cursor:"pointer",transition:"all 0.12s"}}>
@@ -8337,8 +8370,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
         {/* TOAST */}
         {toast&&(
-          <div style={{position:"fixed",bottom:"calc(72px + env(safe-area-inset-bottom, 0px))",left:"50%",transform:"translateX(-50%)",background:T.dark,color:"white",borderRadius:12,padding:"12px 22px",fontSize:13,fontWeight:600,boxShadow:"0 8px 32px rgba(0,0,0,0.3)",zIndex:999,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:8,maxWidth:"calc(100vw - 32px)",animation:"fadeup 0.2s ease"}}>
-            <span style={{color:T.accent,fontSize:16}}>✓</span> {toast}
+          <div style={{position:"fixed",bottom:"calc(72px + env(safe-area-inset-bottom, 0px))",left:"50%",transform:"translateX(-50%)",background:toast.type==="error"?"#3B1414":T.dark,color:"white",border:toast.type==="error"?"1px solid rgba(248,113,113,0.4)":"none",borderRadius:12,padding:"12px 22px",fontSize:13,fontWeight:600,boxShadow:"0 8px 32px rgba(0,0,0,0.3)",zIndex:999,whiteSpace:"normal",textAlign:"left",display:"flex",alignItems:"center",gap:8,maxWidth:"calc(100vw - 32px)",animation:"fadeup 0.2s ease"}}>
+            <span style={{color:toast.type==="error"?"#F87171":T.accent,fontSize:16,flexShrink:0}}>{toast.type==="error"?"⚠":"✓"}</span> {toast.msg}
           </div>
         )}
         <style>{`@keyframes fadeup{from{opacity:0;transform:translateX(-50%) translateY(8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}} @keyframes ticker{0%{transform:translateX(100vw)}100%{transform:translateX(-100%)}} .ticker-wrap{overflow:hidden;width:100%;} .ticker-track{display:inline-block;white-space:nowrap;animation:ticker 24s linear infinite;} .ticker-track:hover{animation-play-state:paused;}`}</style>

@@ -17,8 +17,26 @@ async function kbFetch(path, opts = {}) {
     },
   });
   const text = await res.text();
-  if (!res.ok) throw new Error(text || res.statusText);
+  if (!res.ok) {
+    let msg = text || res.statusText;
+    try { const parsed = JSON.parse(text); msg = parsed.message || parsed.error_description || parsed.error || msg; } catch {}
+    throw new Error(msg);
+  }
   return text ? JSON.parse(text) : null;
+}
+
+// Translates raw network/Postgres errors into plain English for the kiosk screen.
+// The kiosk runs unattended, so messages need to make sense to staff with no context.
+function kioskFriendlyError(err, fallback) {
+  const raw = (err && err.message) || String(err || "");
+  const msg = raw.toLowerCase();
+  if (!navigator.onLine || msg.includes("failed to fetch") || msg.includes("networkerror") || msg.includes("load failed")) {
+    return "No internet connection. Check the WiFi and try again.";
+  }
+  if (msg.includes("timeout") || msg.includes("timed out")) {
+    return "That took too long. Check the connection and try again.";
+  }
+  return fallback || "Something went wrong. Try again, or tell your manager if this keeps happening.";
 }
 
 const DATA_LAYER = {
@@ -184,7 +202,7 @@ export default function ShiftWiseKiosk() {
       const data = await DATA_LAYER.getBusinessData(bizId);
       if (!data) throw new Error("No business found. Check your bizId or set up your account in ShiftWise first.");
       setBizData(data); setLoadError(null);
-    } catch(e) { setLoadError(e.message); }
+    } catch(e) { setLoadError(kioskFriendlyError(e, e.message)); }
     finally { setLoading(false); }
   }, [bizId]);
 
@@ -246,7 +264,7 @@ export default function ShiftWiseKiosk() {
       await DATA_LAYER.writePunch(punch,bizData.businessId);
       setMatchedEmp(emp);
       setResultMsg({ok:true,message,icon:ACTION_CONFIG[action].icon,type:action,flags});
-    } catch(e) { setResultMsg({ok:false,message:"Could not save punch — check your connection.",icon:"⚠️"}); }
+    } catch(e) { setResultMsg({ok:false,message:kioskFriendlyError(e, "Couldn't save that punch. Try again."),icon:"⚠️"}); }
     setSubmitting(false); setScreen("result");
   }
 
