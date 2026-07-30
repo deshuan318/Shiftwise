@@ -335,9 +335,6 @@ input,select,button,textarea { font-family:inherit; }
   .biz-input     { width:140px !important; font-size:13px !important; }
   .top-bar-inner { height:50px !important; }
   .page-pad      { padding-bottom:calc(80px + env(safe-area-inset-bottom,0px)) !important; }
-  .sched-table th, .sched-table td { padding:3px 2px !important; }
-  .emp-name-cell { min-width:72px !important; max-width:72px !important; }
-  .shift-badge   { font-size:9px !important; }
   .sh-pay        { display:none !important; }
   .stat-grid { grid-template-columns:1fr 1fr !important; }
   .team-grid { grid-template-columns:1fr !important; }
@@ -6886,8 +6883,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                               })}
                             </div>
                           ) : rbVizType==="table" ? (
-                            <div style={{maxHeight:320,overflowY:"auto",marginBottom:12}}>
-                              <table style={{width:"100%",borderCollapse:"collapse",fontSize:11.5}}>
+                            <div style={{maxHeight:320,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch",marginBottom:12}}>
+                              <table style={{width:"100%",minWidth:420,borderCollapse:"collapse",fontSize:11.5}}>
                                 <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
                                   <th style={{textAlign:"left",padding:"6px 8px",color:T.sub,fontWeight:700}}>{rbGrouping}</th>
                                   {fieldKeys.map(f=><th key={f.key} style={{textAlign:"left",padding:"6px 8px",color:T.sub,fontWeight:700}}>{f.label}</th>)}
@@ -6923,8 +6920,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                                 <span style={{color:T.sub,fontSize:11}}>{rbLineItemsOpen?"▲":"▼"}</span>
                               </button>
                               {rbLineItemsOpen && (
-                                <div style={{padding:"0 12px 12px",maxHeight:280,overflowY:"auto"}}>
-                                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                                <div style={{padding:"0 12px 12px",maxHeight:280,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+                                  <table style={{width:"100%",minWidth:420,borderCollapse:"collapse",fontSize:11}}>
                                     <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
                                       <th style={{textAlign:"left",padding:"5px 6px",color:T.sub,fontWeight:700}}>{rbGrouping}</th>
                                       {fieldKeys.map(f=><th key={f.key} style={{textAlign:"left",padding:"5px 6px",color:T.sub,fontWeight:700}}>{f.label}</th>)}

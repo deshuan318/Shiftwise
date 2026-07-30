@@ -79,6 +79,39 @@ const DATA_LAYER = {
   },
 };
 
+// ── Offline support ──────────────────────────────────────────────────────
+// The kiosk sits unattended, often on café wifi. If it loses connectivity we
+// must not: (a) go blank because the initial load failed, or (b) lose a
+// punch someone made mid-outage. Both are handled with localStorage:
+// a cached snapshot of business data, and a queue of unsynced punches.
+const CACHE_KEY = bizId => `sw_kiosk_cache_${bizId}`;
+const QUEUE_KEY  = bizId => `sw_kiosk_queue_${bizId}`;
+
+function safeStorageGet(key) {
+  try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; }
+  catch { return null; }
+}
+function safeStorageSet(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+  catch { return false; } // storage disabled/full — degrade silently, don't crash the kiosk
+}
+
+const KioskStorage = {
+  getCache(bizId)        { return safeStorageGet(CACHE_KEY(bizId)); },
+  setCache(bizId, data)  { return safeStorageSet(CACHE_KEY(bizId), { data, cachedAt: Date.now() }); },
+  getQueue(bizId)        { return safeStorageGet(QUEUE_KEY(bizId)) || []; },
+  setQueue(bizId, queue) { return safeStorageSet(QUEUE_KEY(bizId), queue); },
+};
+
+// True if the error looks like a connectivity failure rather than a real
+// server/application error (bad PIN, RLS rejection, etc). Only connectivity
+// failures should get queued for retry — everything else should surface now.
+function isConnectivityError(err) {
+  if (!navigator.onLine) return true;
+  const msg = ((err && err.message) || String(err || "")).toLowerCase();
+  return msg.includes("failed to fetch") || msg.includes("networkerror") || msg.includes("load failed") || msg.includes("timeout") || msg.includes("timed out");
+}
+
 const DAY_FULL = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
 const fmt = v => { if (v == null) return ""; const h = Math.floor(v), m = Math.round((v-h)*60); const hr = h%12===0?12:h%12; return `${hr}:${m===0?"00":"30"} ${h<12?"AM":"PM"}`; };
 const shiftHrs = s => (!s ? 0 : Math.max(0, parseFloat((s.end-s.start).toFixed(2))));
@@ -189,6 +222,8 @@ export default function ShiftWiseKiosk() {
   const [submitting,      setSubmitting]   = useState(false);
   const [selectedAction,  setSelectedAction] = useState(null);
   const [selectedEmp,     setSelectedEmp]   = useState(null);
+  const [isOffline,       setIsOffline]    = useState(!navigator.onLine);
+  const [queueCount,      setQueueCount]   = useState(0);
   const pinRef = useRef();
 
   const bizId = useMemo(() => {
@@ -196,17 +231,68 @@ export default function ShiftWiseKiosk() {
     return params.get("bizId") || params.get("biz_id") || params.get("business_id") || null;
   }, []);
 
+  // Attempts to sync every queued punch. Called on mount, whenever the browser
+  // reports coming back online, and on a periodic timer as a fallback (the
+  // 'online' event isn't always reliable — wifi can report "connected" while
+  // still unable to actually reach Supabase).
+  const flushQueue = useCallback(async () => {
+    if (!bizId) return;
+    const queue = KioskStorage.getQueue(bizId);
+    if (queue.length === 0) { setQueueCount(0); return; }
+    const remaining = [];
+    let syncedAny = false;
+    for (const item of queue) {
+      try { await DATA_LAYER.writePunch(item.punch, bizId); syncedAny = true; }
+      catch(e) { remaining.push(item); if (!isConnectivityError(e)) console.warn("Queued punch failed permanently:", e); }
+    }
+    KioskStorage.setQueue(bizId, remaining);
+    setQueueCount(remaining.length);
+    if (syncedAny) setIsOffline(false);
+  }, [bizId]);
+
   const loadData = useCallback(async () => {
     try {
       if (!bizId) throw new Error("No business ID in URL. Add ?bizId=YOUR_ID to the kiosk URL.");
       const data = await DATA_LAYER.getBusinessData(bizId);
       if (!data) throw new Error("No business found. Check your bizId or set up your account in ShiftWise first.");
-      setBizData(data); setLoadError(null);
-    } catch(e) { setLoadError(kioskFriendlyError(e, e.message)); }
+      setBizData(data); setLoadError(null); setIsOffline(false);
+      KioskStorage.setCache(bizId, data);
+      flushQueue();
+    } catch(e) {
+      // Connectivity failure — fall back to the last cached snapshot instead
+      // of taking the whole kiosk down. Only show the hard error screen if
+      // we have genuinely nothing to work from yet (first-ever load, no cache).
+      if (isConnectivityError(e) && bizId) {
+        const cached = KioskStorage.getCache(bizId);
+        if (cached) { setBizData(cached.data); setLoadError(null); setIsOffline(true); }
+        else { setLoadError(kioskFriendlyError(e, e.message)); }
+      } else {
+        setLoadError(kioskFriendlyError(e, e.message));
+      }
+    }
     finally { setLoading(false); }
-  }, [bizId]);
+  }, [bizId, flushQueue]);
 
   useEffect(() => { loadData(); const i = setInterval(loadData,60000); return ()=>clearInterval(i); }, [loadData]);
+
+  // Track browser connectivity directly, and retry the queue as soon as we're back.
+  useEffect(() => {
+    const goOnline  = () => { setIsOffline(false); loadData(); flushQueue(); };
+    const goOffline = () => setIsOffline(true);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => { window.removeEventListener("online", goOnline); window.removeEventListener("offline", goOffline); };
+  }, [loadData, flushQueue]);
+
+  // Fallback retry timer — catches cases where 'online' fires but Supabase
+  // still isn't actually reachable yet.
+  useEffect(() => {
+    if (!isOffline && queueCount === 0) return;
+    const i = setInterval(flushQueue, 20000);
+    return () => clearInterval(i);
+  }, [isOffline, queueCount, flushQueue]);
+
+  useEffect(() => { if (bizId) setQueueCount(KioskStorage.getQueue(bizId).length); }, [bizId]);
 
   useEffect(() => {
     if (screen==="result") {
@@ -232,8 +318,16 @@ export default function ShiftWiseKiosk() {
     if (val !== selectedEmp.pin) { setResultMsg({ok:false,message:"PIN not recognized. Please try again.",icon:"❌"}); setScreen("result"); return; }
     const emp = selectedEmp;
     setMatchedEmp(emp);
-    try { const punches = await DATA_LAYER.getTodayPunchesForEmp(emp.id); setTodayPunches(punches); }
-    catch(e) { setTodayPunches([]); }
+    const todayStr = toLocalDateStr(new Date());
+    const queuedToday = KioskStorage.getQueue(bizId)
+      .filter(q => q.punch.empId === emp.id && q.punch.time.slice(0,10) === todayStr)
+      .map(q => ({ id: `queued-${q.punch.time}`, type: q.punch.type, time: q.punch.time, scheduled: q.punch.scheduled, flags: q.punch.flags }));
+    try {
+      const punches = await DATA_LAYER.getTodayPunchesForEmp(emp.id);
+      const merged = [...punches, ...queuedToday].sort((a,b)=>new Date(a.time)-new Date(b.time));
+      setTodayPunches(merged);
+    }
+    catch(e) { setTodayPunches(queuedToday); } // offline — go on what we know locally
     setScreen("confirm");
   }
 
@@ -264,7 +358,19 @@ export default function ShiftWiseKiosk() {
       await DATA_LAYER.writePunch(punch,bizData.businessId);
       setMatchedEmp(emp);
       setResultMsg({ok:true,message,icon:ACTION_CONFIG[action].icon,type:action,flags});
-    } catch(e) { setResultMsg({ok:false,message:kioskFriendlyError(e, "Couldn't save that punch. Try again."),icon:"⚠️"}); }
+    } catch(e) {
+      if (isConnectivityError(e)) {
+        const queue = KioskStorage.getQueue(bizId);
+        queue.push({ punch, queuedAt: Date.now() });
+        KioskStorage.setQueue(bizId, queue);
+        setQueueCount(queue.length);
+        setIsOffline(true);
+        setMatchedEmp(emp);
+        setResultMsg({ok:true,message:`${message} (Saved offline — will sync automatically.)`,icon:ACTION_CONFIG[action].icon,type:action,flags});
+      } else {
+        setResultMsg({ok:false,message:kioskFriendlyError(e, "Couldn't save that punch. Try again."),icon:"⚠️"});
+      }
+    }
     setSubmitting(false); setScreen("result");
   }
 
@@ -296,6 +402,13 @@ export default function ShiftWiseKiosk() {
   if (screen==="idle") return (
     <div style={{minHeight:"100vh",background:"#0D1117",display:"flex",flexDirection:"column"}}>
       <style>{CSS}</style>
+      {(isOffline || queueCount > 0) && (
+        <div style={{background:isOffline?"#3B2A14":"#14301F",borderBottom:`1px solid ${isOffline?"rgba(232,169,58,0.4)":"rgba(76,175,125,0.4)"}`,padding:"8px 16px",textAlign:"center",fontSize:12,fontWeight:700,color:isOffline?"#E8A93A":"#4CAF7D"}}>
+          {isOffline
+            ? `⚠ Offline — clock-ins are still being saved${queueCount>0?` (${queueCount} waiting to sync)`:""}`
+            : `Syncing ${queueCount} punch${queueCount===1?"":"es"}…`}
+        </div>
+      )}
       <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:24,padding:"32px 20px"}}>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
           <div style={{width:36,height:36,background:"#2D6A4F",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18}}>📅</div>
