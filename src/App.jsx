@@ -1433,6 +1433,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     if (!rbPreset) missing.push("a date range");
     else if (rbPreset === "custom" && (!rbCustomStart || !rbCustomEnd)) missing.push("both custom dates");
     if (!rbVizType) missing.push("a visualization type");
+    if (rbGrouping === "Employee" && activeIds.some(sid => sid !== "timesheet" && sid !== "laborcost")) {
+      missing.push("Revenue and Pulse removed (they don't have a per-employee breakdown — only Timesheet and Labor Cost do)");
+    }
     if (missing.length) { showToast("Still needed: " + missing.join(", ")); return; }
 
     let startDate, endDate;
@@ -2947,6 +2950,36 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       (byEmpDay[`${p.empId}__${dateStr}`] ||= []).push(p);
     });
 
+    if (grouping === "Employee") {
+      // Revenue isn't attributable to one employee, so "actual %" here means
+      // each employee's own labor cost as a share of TOTAL business revenue
+      // for the period — these sum back up to the whole business's labor
+      // cost %, which is what makes the breakdown meaningful rather than
+      // just splitting a business-wide number arbitrarily.
+      const totalRev = salesData
+        .filter(d => d.date >= startDate && d.date <= endDate)
+        .filter(d => !filters.dow?.length || filters.dow.includes(reportDowOf(d.date)))
+        .reduce((s,d) => s + (Number(d.revenue)||0), 0);
+      const byEmp = {};
+      Object.entries(byEmpDay).forEach(([k, dayPunches]) => {
+        const [empId] = k.split("__");
+        const b = (byEmp[empId] ||= { hrs:0, pay:0 });
+        const sorted = [...dayPunches].sort((a,b)=>new Date(a.time)-new Date(b.time));
+        const hrs = calcActualHours(sorted);
+        b.hrs += hrs;
+        b.pay += hrs*(rateById[empId]||0);
+      });
+      const rows = employees.map(emp => {
+        const b = byEmp[emp.id] || { hrs:0, pay:0 };
+        return {
+          label: emp.name,
+          laborcost__actual: totalRev > 0 ? Math.round((b.pay/totalRev)*1000)/10 : 0,
+          laborcost__rplh: b.hrs > 0 ? Math.round((totalRev/b.hrs)*100)/100 : 0,
+        };
+      }).sort((a,b) => b.laborcost__actual - a.laborcost__actual);
+      return { rows, truncated };
+    }
+
     const payByKey = {}, hoursByKey = {};
     Object.entries(byEmpDay).forEach(([k, dayPunches]) => {
       const [empId, dateStr] = k.split("__");
@@ -3061,6 +3094,43 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         if (otToday > 0) overtimeByDate[dateStr] = (overtimeByDate[dateStr]||0) + otToday;
       });
     });
+
+    if (grouping === "Employee") {
+      // One row per employee, totals across the whole range — not bucketed
+      // by day/week. Overtime still needs the per-week attribution pass
+      // above (already computed into overtimeByDate) so it stays correct
+      // even when summed across employees rather than across dates.
+      const byEmp = {};
+      Object.entries(byEmpDay).forEach(([k, dayPunches]) => {
+        const [empId, dateStr] = k.split("__");
+        const b = (byEmp[empId] ||= { hours:0, punches:0, overtime:0, flagged:0, edits:0 });
+        const sorted = [...dayPunches].sort((a,b)=>new Date(a.time)-new Date(b.time));
+        b.hours += calcActualHours(sorted);
+        b.punches += dayPunches.length;
+        b.overtime += overtimeByDate[dateStr] || 0;
+        dayPunches.forEach(p => {
+          b.flagged += (p.flags||[]).length;
+          if ((p.flags||[]).includes("ADJUSTMENT")) b.edits += 1;
+        });
+      });
+      // Respect the Employee filter if set (show exactly who was chosen,
+      // even at zero); otherwise show every employee on the roster so
+      // anyone with zero activity in the range is visible, not hidden.
+      const empIds = filters.employee?.length ? filters.employee : employees.map(e=>e.id);
+      const rows = empIds.map(empId => {
+        const emp = employees.find(e=>e.id===empId);
+        const b = byEmp[empId] || { hours:0, punches:0, overtime:0, flagged:0, edits:0 };
+        return {
+          label: emp?.name || "Unknown",
+          timesheet__hours: Math.round(b.hours*100)/100,
+          timesheet__punches: b.punches,
+          timesheet__overtime: Math.round(b.overtime*100)/100,
+          timesheet__flagged: b.flagged,
+          timesheet__edits: b.edits,
+        };
+      }).sort((a,b) => b.timesheet__hours - a.timesheet__hours);
+      return { rows, truncated };
+    }
 
     const buckets = {};
     Object.entries(byEmpDay).forEach(([k, dayPunches]) => {
@@ -7004,8 +7074,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
                     <SectionLabel T={T}>Group By</SectionLabel>
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
-                      {["Day","Week","Day of Week"].map(g=>(
-                        <button key={g} onClick={()=>{setRbGrouping(g);setRbResult(null);}}
+                      {["Day","Week","Day of Week","Employee"].map(g=>(
+                        <button key={g} onClick={()=>{setRbGrouping(g);setRbResult(null);if(g==="Employee"&&rbVizType==="number")setRbVizType(null);}}
                           style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
                             border:`1px solid ${rbGrouping===g?T.accent:T.border}`,background:rbGrouping===g?T.accent:"transparent",color:rbGrouping===g?"white":T.sub}}>{g}</button>
                       ))}
@@ -7033,7 +7103,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
                     <SectionLabel T={T}>Visualization</SectionLabel>
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
-                      {[{id:"number",label:"Number"},{id:"line",label:"Line"},{id:"bar",label:"Bar"},{id:"area",label:"Area"},{id:"combo",label:"Combo"},{id:"table",label:"Table"}].map(v=>(
+                      {[{id:"number",label:"Number"},{id:"line",label:"Line"},{id:"bar",label:"Bar"},{id:"area",label:"Area"},{id:"combo",label:"Combo"},{id:"table",label:"Table"}]
+                        .filter(v => !(rbGrouping==="Employee" && v.id==="number")) // "Number" shows a first-vs-last trend delta, which is meaningless across employee rows rather than a time series
+                        .map(v=>(
                         <button key={v.id} onClick={()=>setRbVizType(v.id)}
                           style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
                             border:`1px solid ${rbVizType===v.id?"#4CAF7D":T.border}`,background:rbVizType===v.id?"#4CAF7D":"transparent",color:rbVizType===v.id?"white":T.sub}}>{v.label}</button>
