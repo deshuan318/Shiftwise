@@ -4008,7 +4008,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     return (
       <div onClick={()=>setOpenCell(null)} className="time-picker-overlay" style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:1000,display:"flex",alignItems:"flex-end",justifyContent:"center"}}>
         <style>{`
-          @media (min-width: 768px) {
+          @media (pointer: fine) {
             .time-picker-overlay { align-items: center !important; padding: 20px; box-sizing: border-box; }
             .time-picker-sheet { border-radius: 20px !important; box-shadow: 0 24px 64px rgba(0,0,0,0.28) !important; max-height: 85vh; overflow-y: auto; }
             .time-picker-grabber { display: none !important; }
