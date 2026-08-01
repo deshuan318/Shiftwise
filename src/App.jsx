@@ -5483,6 +5483,27 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     <div style={{fontSize:13,color:T.sub,lineHeight:1.6}}>Tap a date range button above to load your schedule, or use the 📅 icon to jump to a specific week.</div>
                   </div>
                 )}
+                {activeWeek && employees.length > 0 && (() => {
+                  const totalShiftsThisWeek = employees.reduce((s, e) => s + DAYS.reduce((ds, _, di) => ds + (getShift(activeWeek, e.id, di) ? 1 : 0), 0), 0);
+                  if (totalShiftsThisWeek > 0) return null;
+                  const hasAnyShiftsEver = Object.keys(schedule).some(wk =>
+                    employees.some(e => DAYS.some((_, di) => getShift(wk, e.id, di)))
+                  );
+                  return hasAnyShiftsEver ? (
+                    // An established schedule — this is just an empty week (future or past),
+                    // not a first-time setup state. No "your team is ready" onboarding framing.
+                    <div style={{marginBottom:14, background:T.surface, borderRadius:T.radius, border:`1px solid ${T.border}`, padding:"22px 24px", textAlign:"center"}}>
+                      <div style={{fontSize:13, color:T.sub}}>No shifts scheduled for this week yet. Tap any <strong style={{color:T.text}}>+</strong> cell below to add one.</div>
+                    </div>
+                  ) : (
+                    <div style={{marginBottom:14, background:T.surface, borderRadius:T.radius, border:`2px dashed ${T.border}`, padding:"36px 24px", textAlign:"center", position:"relative"}}>
+                      <div style={{width:44, height:44, borderRadius:"50%", background:T.accent+"18", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 14px", fontSize:22}}>📅</div>
+                      <div style={{fontWeight:800, fontSize:15, color:T.text, marginBottom:6}}>Your team is ready — now add their shifts</div>
+                      <div style={{fontSize:13, color:T.sub, lineHeight:1.6, marginBottom:16, maxWidth:340, margin:"0 auto 16px"}}>Tap any <strong style={{color:T.text}}>+</strong> cell on the grid below to schedule a shift. ShiftWise tracks labor cost as you go.</div>
+                      <div style={{display:"inline-flex", alignItems:"center", gap:8, background:T.accent, color:"white", borderRadius:10, padding:"10px 22px", fontSize:13, fontWeight:700}}>Tap any cell below to start</div>
+                    </div>
+                  );
+                })()}
                 {activeWeek && <div className="grid-scroll" style={{borderRadius:T.radius,boxShadow:T.shadowMd}}>
                   <table className="sched-table" style={{borderCollapse:"collapse",width:"100%",background:T.surface,minWidth:760,tableLayout:"fixed"}}>
                     <colgroup>
@@ -5624,17 +5645,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     </tfoot>
                   </table>
                 </div>}
-                {activeWeek && (() => {
-                  const totalShiftsThisWeek = employees.reduce((s, e) => s + DAYS.reduce((ds, _, di) => ds + (getShift(activeWeek, e.id, di) ? 1 : 0), 0), 0);
-                  return totalShiftsThisWeek === 0 && employees.length > 0 ? (
-                    <div style={{marginTop:14, background:T.surface, borderRadius:T.radius, border:`2px dashed ${T.border}`, padding:"36px 24px", textAlign:"center", position:"relative"}}>
-                      <div style={{width:44, height:44, borderRadius:"50%", background:T.accent+"18", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 14px", fontSize:22}}>📅</div>
-                      <div style={{fontWeight:800, fontSize:15, color:T.text, marginBottom:6}}>Your team is ready — now add their shifts</div>
-                      <div style={{fontSize:13, color:T.sub, lineHeight:1.6, marginBottom:16, maxWidth:340, margin:"0 auto 16px"}}>Tap any <strong style={{color:T.text}}>+</strong> cell on the grid above to schedule a shift. ShiftWise tracks labor cost as you go.</div>
-                      <div style={{display:"inline-flex", alignItems:"center", gap:8, background:T.accent, color:"white", borderRadius:10, padding:"10px 22px", fontSize:13, fontWeight:700}}>Tap any cell above to start</div>
-                    </div>
-                  ) : null;
-                })()}
                 {activeWeek && <div style={{marginTop:8,fontSize:11,color:T.sub,textAlign:"center"}}>Tap <strong>+</strong> to add a shift · Tap a shift to edit · Tap <strong>×</strong> to remove · <strong>Drag</strong> a shift to move it</div>}
               </>}
             </>}
