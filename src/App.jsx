@@ -3093,6 +3093,136 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   // Shared chart renderer for the custom Report Builder — Number and Table
   // are handled inline in the panel JSX since they aren't Recharts components.
+  // Renders a report result (number/table/chart) from explicit params rather
+  // than reading Report Builder's own state — this lets the exact same
+  // rendering be reused for dashboard widgets, which have their own
+  // independently-computed result.
+  function renderReportResult(data, vizType, grouping, fieldKeys, truncated) {
+    if (fieldKeys.length===0 || data.length===0) return (
+      <div style={{fontSize:12,color:T.sub,textAlign:"center",padding:"20px 0"}}>No data found for this selection.</div>
+    );
+    return (
+      <>
+        {vizType==="number" ? (
+          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12}}>
+            {fieldKeys.map(f=>{
+              const vals = data.map(r=>r[f.key]).filter(v=>v!==undefined);
+              const cur = vals[vals.length-1] ?? 0, first = vals[0] ?? 0;
+              const delta = first!==0 ? ((cur-first)/Math.abs(first))*100 : 0;
+              return (
+                <div key={f.key} style={{background:T.muted,borderRadius:10,padding:"11px 14px",flex:"1 1 140px"}}>
+                  <div style={{fontSize:10,color:T.sub,fontWeight:600,marginBottom:6}}>{f.label}</div>
+                  <div style={{fontSize:22,fontWeight:800,color:f.color}}>{cur.toLocaleString()}</div>
+                  <div style={{fontSize:11,fontWeight:700,color:delta>=0?"#4CAF7D":"#C0392B",marginTop:2}}>{delta>=0?"↑":"↓"} {Math.abs(delta).toFixed(0)}%</div>
+                </div>
+              );
+            })}
+          </div>
+        ) : vizType==="table" ? (
+          <div style={{maxHeight:320,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch",marginBottom:12}}>
+            <table style={{width:"100%",minWidth:420,borderCollapse:"collapse",fontSize:11.5}}>
+              <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
+                <th style={{textAlign:"left",padding:"6px 8px",color:T.sub,fontWeight:700}}>{grouping}</th>
+                {fieldKeys.map(f=><th key={f.key} style={{textAlign:"left",padding:"6px 8px",color:T.sub,fontWeight:700}}>{f.label}</th>)}
+              </tr></thead>
+              <tbody>
+                {data.map((row,i)=>(
+                  <tr key={i} style={{borderBottom:`1px solid ${T.border}`}}>
+                    <td style={{padding:"6px 8px",color:T.text}}>{row.label}</td>
+                    {fieldKeys.map(f=><td key={f.key} style={{padding:"6px 8px",color:T.text}}>{row[f.key] ?? "—"}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div style={{marginBottom:12}}>{renderCustomReportChart(data, vizType, fieldKeys)}</div>
+        )}
+
+        {truncated && (
+          <div style={{fontSize:11,color:"#E8A93A",marginBottom:10,display:"flex",gap:6,alignItems:"flex-start"}}>
+            <span>⚠️</span><span>One or more sources hit their data cap for this range — pick a shorter range for a complete picture.</span>
+          </div>
+        )}
+      </>
+    );
+  }
+
+  function fieldKeysFromConfig(sourcesConfig) {
+    const keys = [];
+    Object.keys(sourcesConfig || {}).forEach(sid => {
+      (sourcesConfig[sid]?.fields||[]).forEach(fid => {
+        const fieldDef = REPORT_SOURCES[sid]?.fields.find(f=>f.id===fid);
+        keys.push({ key:`${sid}__${fid}`, label: fieldDef?.label || fid, color: REPORT_SOURCES[sid]?.color });
+      });
+    });
+    return keys;
+  }
+
+  // ── Dashboard report widgets ────────────────────────────────────────────
+  // Report widgets store their DEFINITION (sources/fields/filters/grouping/
+  // date range/viz type), never a computed snapshot. This effect re-runs
+  // every report widget's computation whenever the underlying data changes,
+  // so they stay live without ever needing to be recreated.
+  const [reportWidgetData, setReportWidgetData] = useState({}); // { [widgetId]: {loading, result, error} }
+
+  useEffect(() => {
+    const reportWidgets = widgets.filter(w => w.config?.report);
+    if (reportWidgets.length === 0) return;
+    let cancelled = false;
+    reportWidgets.forEach(async (w) => {
+      const def = w.config.report;
+      setReportWidgetData(prev => ({ ...prev, [w.id]: { ...(prev[w.id]||{}), loading: true, error: null } }));
+      try {
+        let startDate, endDate;
+        if (def.preset === "custom") { startDate = def.customStart; endDate = def.customEnd; }
+        else {
+          const dates = getFilterDates(def.preset, salesData, isDemoBiz ? DEMO_TODAY_ANCHOR : undefined);
+          startDate = dates[0]; endDate = dates[dates.length-1];
+        }
+        const activeIds = Object.keys(def.sources || {});
+        const sourceFilters = {};
+        activeIds.forEach(sid => { sourceFilters[sid] = def.sources[sid]?.filters || {}; });
+        const result = await runCustomReport(activeIds, null, sourceFilters, def.grouping, startDate, endDate);
+        if (!cancelled) setReportWidgetData(prev => ({ ...prev, [w.id]: { loading:false, error:null, result } }));
+      } catch (e) {
+        if (!cancelled) setReportWidgetData(prev => ({ ...prev, [w.id]: { loading:false, error:e, result:null } }));
+      }
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [widgets, salesData, schedule, employees, punches, pulseHistory]);
+
+  async function addReportWidgetToDashboard(title) {
+    if (!bizId || widgetSaving) return;
+    setWidgetSaving(true);
+    try {
+      const activeIds = rbActiveSourceIds();
+      const sources = {};
+      activeIds.forEach(sid => { sources[sid] = { fields: rbSources[sid]?.fields || [], filters: rbSources[sid]?.filters || {} }; });
+      const reportDef = {
+        title: title?.trim() || "Custom Report",
+        sources, grouping: rbGrouping, preset: rbPreset,
+        customStart: rbPreset==="custom" ? rbCustomStart : null,
+        customEnd: rbPreset==="custom" ? rbCustomEnd : null,
+        vizType: rbVizType,
+      };
+      const { w, h } = WIDGET_SIZES.lg || WIDGET_SIZES.md || WIDGET_SIZES.sm;
+      const [row] = await dbPost("dashboard_widgets", {
+        business_id: bizId,
+        config: { report: reportDef },
+        grid_w: w, grid_h: h,
+        sort_order: widgets.length,
+      });
+      setWidgets(prev => [...prev, row]);
+      showToast("Added to Dashboard — it'll stay live and update on its own ✓", 5000);
+    } catch(e) {
+      showError(friendlyError(e, "Couldn't add that to the dashboard — try again."));
+    } finally {
+      setWidgetSaving(false);
+    }
+  }
+
   function renderCustomReportChart(data, vizType, fieldKeys) {
     const height = 260;
     const axes = (
@@ -3371,6 +3501,22 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
   // Renders one widget card based on its saved config
   function renderWidgetCard(config) {
+    if (config.config?.report) {
+      const def = config.config.report;
+      const rw = reportWidgetData[config.id];
+      const title = def.title || "Custom Report";
+      const gridH = config.grid_h || 1;
+      let body;
+      if (!rw || rw.loading) {
+        body = <div style={{fontSize:12,color:T.sub,textAlign:"center",padding:"24px 0"}}>Loading…</div>;
+      } else if (rw.error) {
+        body = <div style={{fontSize:12,color:"#C0392B",textAlign:"center",padding:"20px 0"}}>Couldn't load this report.</div>;
+      } else {
+        const fieldKeys = fieldKeysFromConfig(def.sources);
+        body = renderReportResult(rw.result.data, def.vizType, def.grouping, fieldKeys, rw.result.truncated);
+      }
+      return renderWidgetChrome(config, title, body);
+    }
     const filter = FILTERS.find(f => f.key === config.time_range);
     const sourceLabel = {sales:"Sales", labor:"Labor", both:"Sales & Labor"}[config.data_source] || "Sales";
     const title = config.title || `${sourceLabel} · ${filter?.label || config.time_range}`;
@@ -3440,6 +3586,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       );
     }
 
+    return renderWidgetChrome(config, title, body);
+  }
+
+  function renderWidgetChrome(config, title, body) {
     const sizeKey = Object.keys(WIDGET_SIZES).find(k => WIDGET_SIZES[k].w===(config.grid_w||1) && WIDGET_SIZES[k].h===(config.grid_h||1)) || "sm";
     const isDragging = dragWidgetId === config.id;
     const isDragOver = dragOverWidgetId === config.id;
@@ -6897,55 +7047,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
                     {rbResult && (()=>{
                       const fieldKeys = rbActiveFieldKeys();
-                      if (fieldKeys.length===0 || rbResult.data.length===0) return (
-                        <div style={{fontSize:12,color:T.sub,textAlign:"center",padding:"20px 0"}}>No data found for this selection.</div>
-                      );
                       return (
                         <>
-                          {rbVizType==="number" ? (
-                            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12}}>
-                              {fieldKeys.map(f=>{
-                                const vals = rbResult.data.map(r=>r[f.key]).filter(v=>v!==undefined);
-                                const cur = vals[vals.length-1] ?? 0, first = vals[0] ?? 0;
-                                const delta = first!==0 ? ((cur-first)/Math.abs(first))*100 : 0;
-                                return (
-                                  <div key={f.key} style={{background:T.muted,borderRadius:10,padding:"11px 14px",flex:"1 1 140px"}}>
-                                    <div style={{fontSize:10,color:T.sub,fontWeight:600,marginBottom:6}}>{f.label}</div>
-                                    <div style={{fontSize:22,fontWeight:800,color:f.color}}>{cur.toLocaleString()}</div>
-                                    <div style={{fontSize:11,fontWeight:700,color:delta>=0?"#4CAF7D":"#C0392B",marginTop:2}}>{delta>=0?"↑":"↓"} {Math.abs(delta).toFixed(0)}%</div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          ) : rbVizType==="table" ? (
-                            <div style={{maxHeight:320,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch",marginBottom:12}}>
-                              <table style={{width:"100%",minWidth:420,borderCollapse:"collapse",fontSize:11.5}}>
-                                <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-                                  <th style={{textAlign:"left",padding:"6px 8px",color:T.sub,fontWeight:700}}>{rbGrouping}</th>
-                                  {fieldKeys.map(f=><th key={f.key} style={{textAlign:"left",padding:"6px 8px",color:T.sub,fontWeight:700}}>{f.label}</th>)}
-                                </tr></thead>
-                                <tbody>
-                                  {rbResult.data.map((row,i)=>(
-                                    <tr key={i} style={{borderBottom:`1px solid ${T.border}`}}>
-                                      <td style={{padding:"6px 8px",color:T.text}}>{row.label}</td>
-                                      {fieldKeys.map(f=><td key={f.key} style={{padding:"6px 8px",color:T.text}}>{row[f.key] ?? "—"}</td>)}
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          ) : (
-                            <div style={{marginBottom:12}}>{renderCustomReportChart(rbResult.data, rbVizType, fieldKeys)}</div>
-                          )}
+                          {renderReportResult(rbResult.data, rbVizType, rbGrouping, fieldKeys, rbResult.truncated)}
 
-                          {rbResult.truncated && (
-                            <div style={{fontSize:11,color:"#E8A93A",marginBottom:10,display:"flex",gap:6,alignItems:"flex-start"}}>
-                              <span>⚠️</span><span>One or more sources hit their data cap for this range — pick a shorter range for a complete picture.</span>
-                            </div>
-                          )}
-
-                          <div style={{display:"flex",gap:8,marginBottom:12}}>
+                          <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
                             <button onClick={rbExportCSV} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:9,border:`1px solid ${T.border}`,background:"transparent",color:T.text,fontSize:11,fontWeight:600,cursor:"pointer"}}>⬇ Export CSV</button>
+                            <button onClick={()=>{
+                              const t = window.prompt("Name this widget for your Dashboard:", "Custom Report");
+                              if (t !== null) addReportWidgetToDashboard(t);
+                            }} disabled={widgetSaving} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:9,border:"none",background:T.accent,color:"white",fontSize:11,fontWeight:700,cursor:widgetSaving?"default":"pointer",opacity:widgetSaving?0.6:1}}>+ Add to Dashboard</button>
                           </div>
 
                           {rbVizType!=="table" && (
