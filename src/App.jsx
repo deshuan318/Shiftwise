@@ -5489,13 +5489,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   const hasAnyShiftsEver = Object.keys(schedule).some(wk =>
                     employees.some(e => DAYS.some((_, di) => getShift(wk, e.id, di)))
                   );
-                  return hasAnyShiftsEver ? (
-                    // An established schedule — this is just an empty week (future or past),
-                    // not a first-time setup state. No "your team is ready" onboarding framing.
-                    <div style={{marginBottom:14, background:T.surface, borderRadius:T.radius, border:`1px solid ${T.border}`, padding:"22px 24px", textAlign:"center"}}>
-                      <div style={{fontSize:13, color:T.sub}}>No shifts scheduled for this week yet. Tap any <strong style={{color:T.text}}>+</strong> cell below to add one.</div>
-                    </div>
-                  ) : (
+                  if (hasAnyShiftsEver) return null; // established schedule — just an empty week, no message needed
+                  return (
                     <div style={{marginBottom:14, background:T.surface, borderRadius:T.radius, border:`2px dashed ${T.border}`, padding:"36px 24px", textAlign:"center", position:"relative"}}>
                       <div style={{width:44, height:44, borderRadius:"50%", background:T.accent+"18", display:"flex", alignItems:"center", justifyContent:"center", margin:"0 auto 14px", fontSize:22}}>📅</div>
                       <div style={{fontWeight:800, fontSize:15, color:T.text, marginBottom:6}}>Your team is ready — now add their shifts</div>
