@@ -317,23 +317,48 @@ function getLabor(filterKey, salesData, employees, eDayH, anchor) {
 // only once every weekday has at least MIN_DOW_SAMPLES data points; below
 // that, projections would be built on too little history to be meaningful.
 const MIN_DOW_SAMPLES = 2;
+const FORECAST_RECENT_WEEKS = 8;
+// Forecast = average of the same weekday, from RECENT history so a seasonal
+// business isn't averaging October against July:
+//   1. the last 8 weeks before the period starts, else
+//   2. the same weeks one year earlier (±1 week) — covers reopening after
+//      being closed for the season, and stays $0 while closed.
+// A weekday with no sales in either window forecasts $0 (normally a closed day).
 function getForecast(filterKey, salesData, anchor) {
   const dates = getFilterDates(filterKey, salesData, anchor);
-  const dowTotals = [0,0,0,0,0,0,0];
-  const dowCounts = [0,0,0,0,0,0,0];
-  salesData.forEach(d => {
-    const dow = new Date(d.date+"T00:00:00").getDay();
-    dowTotals[dow] += d.revenue;
-    dowCounts[dow] += 1;
-  });
-  const dowAverages = dowTotals.map((t,i) => dowCounts[i] ? t/dowCounts[i] : 0);
-  const hasEnoughData = dowCounts.every(c => c >= MIN_DOW_SAMPLES);
+  const start = dates[0] || anchor || toLocalDateStr(new Date());
+  const tally = (from, to) => {
+    const t = [0,0,0,0,0,0,0], c = [0,0,0,0,0,0,0];
+    salesData.forEach(d => {
+      if (d.date < from || d.date >= to || !(d.revenue > 0)) return;
+      const dow = new Date(d.date+"T12:00:00").getDay();
+      t[dow] += d.revenue; c[dow] += 1;
+    });
+    return { t, c };
+  };
+  // No sales at all in the 2 weeks before the period = closed / off-season:
+  // recent weeks would forecast the old season, so skip straight to last year.
+  const recentlyOpen = salesData.some(d => d.date >= addDays(start, -14) && d.date < start && d.revenue > 0);
+  const recent = recentlyOpen ? tally(addDays(start, -FORECAST_RECENT_WEEKS * 7), start) : { t:[0,0,0,0,0,0,0], c:[0,0,0,0,0,0,0] };
+  const lyStart = addDays(start, -364); // same weekday, a year back
+  const lastYear = tally(addDays(lyStart, -7), addDays(lyStart, 7 + dates.length));
+  const dowBasis = [], dowAverages = [], dowCounts = [];
+  for (let i = 0; i < 7; i++) {
+    if (recent.c[i] >= MIN_DOW_SAMPLES) { dowAverages[i] = recent.t[i] / recent.c[i]; dowCounts[i] = recent.c[i]; dowBasis[i] = "recent"; }
+    else if (lastYear.c[i] >= MIN_DOW_SAMPLES) { dowAverages[i] = lastYear.t[i] / lastYear.c[i]; dowCounts[i] = lastYear.c[i]; dowBasis[i] = "lastYear"; }
+    else { dowAverages[i] = 0; dowCounts[i] = Math.max(recent.c[i], lastYear.c[i]); dowBasis[i] = (recent.c[i] || lastYear.c[i]) ? "thin" : "none"; }
+  }
+  // Enough data = at least one weekday has a real basis, and no weekday that
+  // HAS some sales is too thin to trust. Weekdays with no sales at all are closed days.
+  const hasEnoughData = dowBasis.some(b => b === "recent" || b === "lastYear") && !dowBasis.includes("thin");
+  const used = new Set(dowBasis.filter(b => b === "recent" || b === "lastYear"));
+  const basis = used.size === 2 ? "mixed" : used.has("recent") ? "recent" : used.has("lastYear") ? "lastYear" : null;
   const days = dates.map(date => {
-    const dow = new Date(date+"T00:00:00").getDay();
-    return { date, projectedRevenue: dowAverages[dow], dataPoints: dowCounts[dow] };
+    const dow = new Date(date+"T12:00:00").getDay();
+    return { date, projectedRevenue: dowAverages[dow], dataPoints: dowCounts[dow], basis: dowBasis[dow] };
   });
   const total = days.reduce((s,d) => s+d.projectedRevenue, 0);
-  return { filterKey, dates, days, total, hasEnoughData, dowCounts };
+  return { filterKey, dates, days, total, hasEnoughData, dowCounts, basis };
 }
 
 const mkEmp = (o={}) => ({ id:(Date.now()+Math.random()).toString(), name:"", role:"", hourlyRate:"", color:COLORS[0], notes:"", availableHours:"40", availableDays:[0,1,2,3,4,5,6], pin:"", ...o });
@@ -1385,20 +1410,18 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // ── Coverage / Open Shifts ───────────────────────────────────────────────
   // openShifts: { id, weekKey, empId, dayIdx, originalShift, reason, status, createdAt, claimedBy }
   // status: "open" | "claimed" | "covered" | "cancelled"
-  const [openShifts, setOpenShifts] = useState(() => {
-    try { const r = localStorage.getItem(STORAGE_KEY); return r ? (JSON.parse(r)?.openShifts ?? []) : []; } catch { return []; }
-  });
+  // Loaded from Supabase per business (never from browser storage, which
+  // isn't tied to a business and could carry another account's data over)
+  const [openShifts, setOpenShifts] = useState([]);
 
   // ── Business Hours ────────────────────────────────────────────────────────
   // { sun:{open:"09:00",close:"17:00",closed:true}, mon:{...}, ... }
-  const [businessHours, setBusinessHours] = useState(() => {
-    try {
-      const r = localStorage.getItem(STORAGE_KEY);
-      return r ? (JSON.parse(r)?.businessHours ?? {}) : {};
-    } catch { return {}; }
-  });
+  const [businessHours, setBusinessHours] = useState({});
+  const bizHoursLoadedRef = useRef(false); // true once THIS business's hours are loaded
+  const bizNameRef = useRef({ id: null, name: null }); // last name saved/loaded for this business
 
   useEffect(() => {
+    if (!bizHoursLoadedRef.current) return;
     if (Object.keys(businessHours).length === 0) return;
     const open = DAYS.map((_, di) => di).filter(di => !businessHours[di]?.closed);
     setDaysOpen(open);
@@ -1775,6 +1798,25 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     }
   }
 
+  // Clears everything tied to a business, so nothing from one account (or the
+  // demo) can carry into the next sign-in — on screen or into a save.
+  function resetBusinessState() {
+    bizHoursLoadedRef.current = false;
+    bizNameRef.current = { id: null, name: null };
+    shiftTypesSavedRef.current = null;
+    setBizId(null); setBiz("My Business"); setIsDemoBiz(false);
+    setEmployees([]); setFormerEmployees([]); setExitSummaries({}); setExitViewId(null);
+    setSchedule({}); setWeekMap({}); setOpenShifts([]); setBusinessHours({});
+    setRawSales([]); setCashEntries({}); setPunches([]); setPunchReviews({});
+    setPublished([]); setAuditLog([]); setRecognition([]); setTemplates([]); setTimesheetHistory([]);
+    setWidgets([]); setCosts([]); setShiftTypes(DEFAULT_SHIFT_TYPES);
+    setInsight(null); setPulseHistory([]); setFlagReportData(null); setPriceData(null); setItemNames(null);
+    setSquareConnected(false); setSquareMerchantName(""); setSquareLastSync(null);
+    setBizAddress({ line:"", city:"", state:"", zip:"" }); setAddrDraft(null); setWeatherInfo({ status:null, latestDate:null });
+    setLaborTargetPct(30);
+    try { localStorage.removeItem(STORAGE_KEY); } catch {}
+  }
+
   async function handleSignOut() {
     const s = getSession();
     if (s?.user?.id === DEMO_OWNER_ID) {
@@ -1794,8 +1836,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     }
     clearSession();
     setAuthState("unauthenticated");
-    setEmployees([]); setSchedule({}); setBiz("My Business");
-    setPublished([]); setAuditLog([]); setRecognition([]); setPunches([]);
+    resetBusinessState();
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1803,6 +1844,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // Supabase swap point: replace each dbGet call with your preferred client
   // ─────────────────────────────────────────────────────────────────────────
   async function loadAllData(forcedBusinessId) {
+    resetBusinessState();
     try {
       // 1. Get business record.
       // Demo sessions pass forcedBusinessId directly (their specific cloned
@@ -1842,6 +1884,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
       setBizId(business.id);
       setBiz(business.name ?? "My Business");
+      bizNameRef.current = { id: business.id, name: business.name ?? "My Business" };
       setSetupComplete(business.setup_complete ?? true);
       setDaysOpen(business.days_open ?? [0,1,2,3,4,5,6]);
       setWeeklyBudget(business.weekly_budget ?? null);
@@ -1995,6 +2038,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         };
       }
       setBusinessHours(bh);
+      bizHoursLoadedRef.current = true;
 
       // 10. Other state
       setRawSales((salesRows||[]).map(r=>({ date:r.sale_date, revenue:parseFloat(r.revenue), transactions:r.transactions, source:r.source || "square" })));
@@ -2197,9 +2241,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       clearSession();
       setAuthState("unauthenticated");
       setAuthError("You were signed out due to inactivity. Please sign in again.");
-      // Clear app state
-      setEmployees([]); setSchedule({}); setBiz("My Business");
-      setPublished([]); setAuditLog([]); setRecognition([]); setPunches([]);
+      resetBusinessState();
     };
     window.addEventListener("sw:session-expired", handleExpired);
     return () => window.removeEventListener("sw:session-expired", handleExpired);
@@ -2445,6 +2487,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       totalEmployees: employees.length,
       weeklyBudget: budget,
       hasSalesData: salesData.length > 0,
+      squareConnected: !!squareConnected,
       salesDateRange: salesData.length > 0
         ? { from: salesData[0].date, to: salesData[salesData.length - 1].date }
         : null,
@@ -2589,7 +2632,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     if (gapDays > 0) { score -= gapDays * 5; scorePenalties.push(`${gapDays} uncovered day${gapDays > 1 ? "s" : ""}`); }
 
     // No sales data — minor deduction (can't measure efficiency)
-    if (!hasSales) score -= 3;
+    // Why there's no sales this week decides the wording everywhere below:
+    //  "none"      — no sales source at all (Square not connected, no CSV/cash)
+    //  "unsynced"  — Square connected but nothing has synced yet
+    //  "quietWeek" — sales history exists, just none in this week (closed, off-season, early in the week)
+    const salesGap = hasSales ? null
+      : !snap.hasSalesData ? (snap.squareConnected ? "unsynced" : "none")
+      : "quietWeek";
+    if (salesGap === "none") score -= 3; // only penalize a missing sales source, not a quiet week
 
     score = Math.max(0, Math.min(100, Math.round(score)));
     const scoreLabel  = score >= 75 ? "Healthy" : score >= 50 ? "Caution" : score >= 30 ? "Warning" : "Critical";
@@ -2678,7 +2728,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     } else if (hasSales && !rplh) {
       sentences.push(`${$$(wk.totalRevenue||0)} in revenue this week — schedule some hours alongside these sales days to unlock revenue-per-labor-hour tracking.`);
     } else {
-      sentences.push(`Connect Square to see revenue-per-labor-hour and labor cost % — the two numbers that tell you whether your staffing is earning its cost.`);
+      sentences.push(salesGap === "quietWeek"
+        ? `No sales are recorded for ${weekLabel} yet, so revenue per labor hour and labor cost % will fill in as sales come in.`
+        : salesGap === "unsynced"
+        ? `Square is connected but no sales have synced yet — tap Sync Now on the Dashboard to pull them in.`
+        : `Connect Square to see revenue-per-labor-hour and labor cost % — the two numbers that tell you whether your staffing is earning its cost.`);
     }
 
     // Sentence 3 — most urgent operational issue with specifics
@@ -2712,7 +2766,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     } else if (ot.length > 0) {
       sentences.push(`Before building next week, resolve this week's overtime first — start ${ot[0].name}'s schedule at a lighter load so the week doesn't compound the problem.`);
     } else if (!hasSales) {
-      sentences.push(`Connect Square before next week's schedule to see which days earn the most per labor hour — that one number changes how you build the schedule.`);
+      sentences.push(salesGap === "quietWeek"
+        ? `Once this week's sales come in, the Pulse will show which days earn the most per labor hour.`
+        : salesGap === "unsynced"
+        ? `Run a Square sync before next week's schedule so the Pulse can show which days earn the most per labor hour.`
+        : `Connect Square before next week's schedule to see which days earn the most per labor hour — that one number changes how you build the schedule.`);
     } else {
       sentences.push(`Schedule is in good shape — stay consistent with coverage on your busiest days and keep an eye on variance as the week closes out.`);
     }
@@ -2882,7 +2940,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         title: "Revenue Efficiency",
         icon: "💵",
         urgency: "low",
-        insight: `No sales data is connected yet. When you link Square, ShiftWise calculates revenue per labor hour for every day of the week — the single clearest signal of whether your staffing is earning its cost. Connect Square in the Dashboard tab or import a sales CSV to unlock this section.`,
+        insight: salesGap === "quietWeek"
+          ? `No sales are recorded for this week yet. If you're closed or between seasons, that's expected. Revenue per labor hour fills in automatically as soon as sales come in.`
+          : salesGap === "unsynced"
+          ? `Square is connected, but no sales have synced yet. Tap Sync Now on the Dashboard to pull in your sales history, then generate the Pulse again.`
+          : `No sales data is connected yet. When you link Square, ShiftWise calculates revenue per labor hour for every day of the week — the single clearest signal of whether your staffing is earning its cost. Connect Square in the Dashboard tab or import a sales CSV to unlock this section.`,
       });
     }
 
@@ -3013,7 +3075,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const target = budget ? $$(Math.round(budget * 0.9)) : null;
       nextWeekFocus = `Use this week's overage as your calibration point. ${target ? `Try targeting ${target} in scheduled labor next week — 10% under budget gives you room for punch variance without blowing the number.` : "Set a weekly budget in Settings, then build the schedule to that number instead of building first and checking cost after."}`;
     } else if (!hasSales) {
-      nextWeekFocus = `The most impactful thing you can do before next week is connect your Square account. Revenue per labor hour is the one number that tells you whether your staffing is earning its cost — and right now ShiftWise can't calculate it without sales data. Five minutes in the Dashboard tab unlocks it permanently.`;
+      nextWeekFocus = salesGap === "quietWeek"
+        ? `No sales this week yet to plan around. When sales pick up, build the schedule around your busiest days first — the Pulse will name them once there's data for the week.`
+        : salesGap === "unsynced"
+        ? `Tap Sync Now on the Dashboard before building next week. With your sales in, the Pulse can show which days earn the most per labor hour.`
+        : `The most impactful thing you can do before next week is connect your Square account. Revenue per labor hour is the one number that tells you whether your staffing is earning its cost — and right now ShiftWise can't calculate it without sales data. Five minutes in the Dashboard tab unlocks it permanently.`;
     } else if (topSalesDay) {
       nextWeekFocus = `${topSalesDay.day} is your best revenue day at ${$$(topSalesDay.revenue)}. Make sure it's fully staffed next week before filling in the rest. The schedule should start with your highest-volume days and work backward — not the other way around.`;
     } else {
@@ -4920,7 +4986,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   <div style={{fontSize:17,fontWeight:800,marginTop:2,color:gap == null ? T.sub : gap >= 0 ? "#2D6A4F" : "#B5651D"}}>{gap == null ? "—" : `${gap >= 0 ? "+" : "−"}${fmtMoney(Math.abs(gap))}`}</div>
                 </div>
               </div>
-              {be.sales == null && <div style={{fontSize:11,color:T.sub}}>Forecast needs 2+ weeks of sales history for every weekday. Sales needed is still accurate.</div>}
+              {be.sales == null && <div style={{fontSize:11,color:T.sub}}>No forecast for this week: there are no recent sales and none in these weeks last year. If you're closed for the season, that's expected. Sales needed is still accurate.</div>}
               {summary && <div style={{fontSize:12,color:T.text,lineHeight:1.5}}>{summary}</div>}
 
               <div style={{background:T.bg,borderRadius:9,padding:"6px 10px 8px"}}>
@@ -5003,7 +5069,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           </div>
 
           <div style={{fontSize:11,color:T.sub,lineHeight:1.5}}>
-            Break-even = (labor + fixed costs) ÷ (1 − % of sales costs). Monthly and yearly costs are converted to weekly and spread evenly across open days. Forecast = average of past same weekdays.
+            Break-even = (labor + fixed costs) ÷ (1 − % of sales costs). Monthly and yearly costs are converted to weekly and spread evenly across open days. Forecast = average of the same weekday over the last 8 weeks, or the same weeks last year if you were closed recently.
           </div>
           <button onClick={changeLaborTarget}
             style={{alignSelf:"flex-start",background:"transparent",color:T.accent,border:`1px solid ${T.border}`,borderRadius:8,padding:"9px 14px",fontWeight:700,fontSize:12,cursor:"pointer"}}>
@@ -5262,6 +5328,15 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         : dbDelete(`sales_data?business_id=eq.${bizId}&sale_date=eq.${date}&source=eq.cash`);
       save.catch(e => { console.warn("Cash entry save failed:", e); showError(friendlyError(e, "That cash entry didn't save — try again.")); });
     }
+  }
+
+  function saveBizNameIfChanged() {
+    const ref = bizNameRef.current;
+    const name = (biz || "").trim();
+    if (!bizId || ref.id !== bizId || !name || name === ref.name) return;
+    bizNameRef.current = { id: bizId, name };
+    saveBizSettings({ name });
+    showToast("Business name saved ✓");
   }
 
   async function saveBizSettings(fields) {
@@ -6159,7 +6234,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               <div style={{width:30,height:30,background:T.accent,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>📅</div>
               <input className="biz-input" value={biz} onChange={e=>setBiz(e.target.value)}
                 style={{background:"transparent",border:"none",color:"white",fontSize:15,fontWeight:700,outline:"none",width:180}}
-                onBlur={()=>{ saveBizSettings({name:biz}); showToast("Business name saved ✓"); }}/>
+                onBlur={saveBizNameIfChanged}/>
             </div>
             <div className="top-bar-tabs" style={{display:"flex",gap:2,flex:1,overflow:"hidden",minWidth:0}}>
               {TABS.map(t=>(
@@ -9173,7 +9248,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       <SectionLabel T={T}>Business Name</SectionLabel>
                       <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Appears in the top bar and on all printed schedules.</p>
                       <input value={biz} onChange={e=>setBiz(e.target.value)}
-                        onBlur={()=>{ saveBizSettings({name:biz}); showToast("Business name saved ✓"); }}
+                        onBlur={saveBizNameIfChanged}
                         style={{width:"100%", border:`1.5px solid ${T.border}`, borderRadius:9, padding:"11px 13px", fontSize:16, fontWeight:700, outline:"none", color:T.text, background:T.surface}}
                         placeholder="Your business name"/>
                     </Card>
