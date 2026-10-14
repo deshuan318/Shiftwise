@@ -3,9 +3,16 @@
     {
       "path": "/api/demo-cleanup",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/nightly",
+      "schedule": "0 8 * * *"
     }
   ],
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }

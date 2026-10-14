@@ -22,7 +22,7 @@ export default async function handler(req, res) {
   // this should be a signed/opaque token instead of the raw id.
   const params = new URLSearchParams({
     client_id: process.env.SQUARE_APP_ID,
-    scope: "MERCHANT_PROFILE_READ ORDERS_READ",
+    scope: "MERCHANT_PROFILE_READ ORDERS_READ ITEMS_READ",
     session: "false",
     state: business_id,
     redirect_uri: `${APP_BASE_URL}/api/square-oauth-callback`,

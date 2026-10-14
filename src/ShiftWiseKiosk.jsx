@@ -49,6 +49,8 @@ const DATA_LAYER = {
       kbFetch(`employees?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`),
       kbFetch(`schedule_weeks?select=*&business_id=eq.${business.id}&order=week_start.asc`),
     ]);
+    // Deactivated (former) employees can't clock in
+    const activeEmpRows = (empRows || []).filter(e => e.status !== "inactive");
     const wkIds = (weekRows || []).map(w => w.id);
     const shiftRows = wkIds.length ? await kbFetch(`shifts?select=*&week_id=in.(${wkIds.join(",")})`) : [];
     const schedule = {};
@@ -64,7 +66,7 @@ const DATA_LAYER = {
     }
     return {
       businessId: business.id, businessName: business.name || "ShiftWise",
-      employees: (empRows || []).map(e => ({ id: e.id, name: e.name, role: e.role || "", pin: e.pin || "", color: e.color || "#2D6A4F", availableDays: e.available_days || [0,1,2,3,4,5,6] })),
+      employees: activeEmpRows.map(e => ({ id: e.id, name: e.name, role: e.role || "", pin: e.pin || "", color: e.color || "#2D6A4F", availableDays: e.available_days || [0,1,2,3,4,5,6] })),
       schedule, weeks: (weekRows || []).map(w => w.week_start),
     };
   },
