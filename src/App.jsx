@@ -5345,6 +5345,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     catch(e) { console.warn("Business save failed:", e); showError(friendlyError(e, "Couldn't save that setting — try again.")); }
   }
 
+  // Schedule "Today" button: jump to the current week (demo-aware), with today
+  // selected for the Day view; works from the Week, Day, and Month views.
+  function goToTodaySchedule() {
+    const t = demoToday;
+    const s = getSunday(t);
+    setWk1Start(s); setActiveWeek(s); setPrintWeek(s); setActiveDay(t);
+  }
+
   // The "today" every date-comparison in the UI should use — real today for
   // real businesses, the fixed demo anchor for Cedar & Sage (whose seeded
   // data lives in June 2026, not whenever this is actually being viewed).
@@ -6889,6 +6897,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         </div>
         <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,7)))}
           style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
+        {tsWeekStart !== getSunday(demoToday) && (
+          <button onClick={()=>setTsWeekStart(getSunday(demoToday))} style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,padding:"0 14px",height:36,fontSize:12,fontWeight:700,color:T.accent,cursor:"pointer",flexShrink:0}}>Today</button>
+        )}
       </div>
 
       {/* Grid */}
@@ -7095,6 +7106,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       </div>
                       <button onClick={()=>{ const next=getSunday(addDays(activeWeek||wk1Start,7)); setWk1Start(next); setActiveWeek(next); setPrintWeek(next); }}
                         style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
+                      {(activeWeek !== getSunday(demoToday) || (schedView==="daily" && activeDay !== demoToday)) && (
+                        <button onClick={goToTodaySchedule} style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,padding:"0 14px",height:36,fontSize:12,fontWeight:700,color:T.accent,cursor:"pointer",flexShrink:0}}>Today</button>
+                      )}
                     </div>
                   </div>
 
@@ -7382,10 +7396,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         <th style={{padding:"13px 16px",textAlign:"left",color:"#777",fontSize:11,fontWeight:700,letterSpacing:"0.08em"}}>EMPLOYEE</th>
                         {DAYS.map((d,i)=>{
                           const dh=employees.reduce((s,e)=>s+eDayH(activeWeek,e.id,i),0);
+                          const isToday = !!activeWkObj && toInputDate(activeWkObj.dates[i]) === demoToday;
                           return (
-                            <th key={d} style={{padding:"12px 6px",textAlign:"center",color:"white",fontSize:13,fontWeight:700}}>
+                            <th key={d} style={{padding:"12px 6px",textAlign:"center",color:"white",fontSize:13,fontWeight:700,background:isToday?T.accent:"transparent",borderRadius:isToday?"8px 8px 0 0":0}}>
                               <div>{d}</div>
-                              <div style={{fontSize:10,color:"#777",fontWeight:400,marginTop:2}}>{activeWkObj?dl(activeWkObj.dates[i]):""}</div>
+                              <div style={{fontSize:10,color:isToday?"rgba(255,255,255,0.85)":"#777",fontWeight:isToday?700:400,marginTop:2}}>{isToday?"Today":activeWkObj?dl(activeWkObj.dates[i]):""}</div>
                               {dh>0&&<div style={{fontSize:10,color:T.accent,fontWeight:700,marginTop:2}}>{dh}h</div>}
                             </th>
                           );
