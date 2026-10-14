@@ -56,6 +56,38 @@ function getSession() {
 function saveSession(s) { localStorage.setItem(SW_SESSION_KEY, JSON.stringify(s)); }
 function clearSession() { localStorage.removeItem(SW_SESSION_KEY); }
 
+// Supabase email links (signup confirmation, password reset) send the user back
+// to the app with the session in the URL hash:
+//   #access_token=...&refresh_token=...&type=signup|recovery
+// or, for an expired/used link, #error=...&error_description=...
+function readAuthHash() {
+  const h = window.location.hash.replace(/^#/, "");
+  if (!h.includes("access_token") && !h.includes("error")) return null;
+  const p = new URLSearchParams(h);
+  if (p.get("error") || p.get("error_description")) {
+    return { error: p.get("error_description") || p.get("error") };
+  }
+  const access_token = p.get("access_token");
+  if (!access_token) return null;
+  return {
+    access_token,
+    refresh_token: p.get("refresh_token"),
+    expires_in: p.get("expires_in"),
+    token_type: p.get("token_type") || "bearer",
+    type: p.get("type"),
+  };
+}
+function clearAuthHash() {
+  window.history.replaceState({}, "", window.location.pathname + window.location.search);
+}
+async function fetchAuthUser(accessToken) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error("Link expired");
+  return res.json();
+}
+
 // Core fetch helper
 async function sbFetch(path, opts={}) {
   const token = getToken();
@@ -100,6 +132,9 @@ const DEFAULT_SHIFT_TYPES = [
 ];
 const toTypeArr = t => !t ? ["regular"] : Array.isArray(t) ? t : [t];
 const STORAGE_KEY = "shiftwise_v2";
+// Shift-type attribution buckets that aren't real shift types
+const SHIFT_UNSCHEDULED = "__unscheduled"; // punches with no scheduled shift that day
+const SHIFT_REMOVED     = "__removed";     // shifts whose type was later deleted
 
 const fmt = v => {
   if (v == null) return "";
@@ -131,6 +166,15 @@ const toLocalDateStr = d => {
   parts.forEach(({type,value}) => { p[type]=value; });
   return `${p.year}-${p.month}-${p.day}`;
 };
+// Central-time date + hour for a timestamp. Central's UTC offset is always a
+// whole number of hours, so its hour boundaries line up with UTC's — which
+// lets attribution walk a shift hour-by-hour with simple math.
+const CENTRAL_DH_FMT = new Intl.DateTimeFormat("en-CA", { timeZone: APP_TZ, year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", hourCycle:"h23" });
+function centralDateHour(ms) {
+  const p = {};
+  CENTRAL_DH_FMT.formatToParts(new Date(ms)).forEach(({type,value}) => { p[type] = value; });
+  return { date: `${p.year}-${p.month}-${p.day}`, hour: parseInt(p.hour, 10) % 24 };
+}
 const addDays = (ds,n) => { const d = new Date(ds+"T12:00:00"); d.setDate(d.getDate()+n); return toLocalDateStr(d); };
 // Pairs a day's punches (in/break_in/out) into worked hours. Promoted here from
 // where it used to live buried inside the Grid tab's render tree — it had no
@@ -672,6 +716,10 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
   const [saving,    setSaving]    = useState(false);
   const [saveErr,   setSaveErr]   = useState("");
   const [bizName,   setBizName]   = useState("");
+  const [addrLine,  setAddrLine]  = useState("");
+  const [addrCity,  setAddrCity]  = useState("");
+  const [addrState, setAddrState] = useState("");
+  const [addrZip,   setAddrZip]   = useState("");
   const [weekStart, setWeekStart] = useState("Sunday");
   const [daysOpen,  setDaysOpen]  = useState([0,1,2,3,4,5,6]);
   const [budget,    setBudget]    = useState("");
@@ -712,6 +760,10 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
     try {
       await dbPatch("businesses?id=eq." + bizId, {
         name:           bizName.trim(),
+        address_line:   addrLine.trim() || null,
+        city:           addrCity.trim() || null,
+        state:          addrState.trim().toUpperCase() || null,
+        zip:            addrZip.trim() || null,
         days_open:      daysOpen,
         weekly_budget:  budgetNum > 0 ? budgetNum : null,
         setup_complete: true,
@@ -795,6 +847,17 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
               <input className="sw-input" placeholder="e.g. Coastal Grounds Coffee"
                 value={bizName} onChange={e=>setBizName(e.target.value)}
                 onKeyDown={e=>e.key==="Enter"&&canNext[0]&&setStep(1)} autoFocus />
+            </div>
+            <div className="sw-fgroup">
+              <label className="sw-flabel" htmlFor="sw-addr-line">Business address</label>
+              <input id="sw-addr-line" className="sw-input" placeholder="Street address" autoComplete="street-address"
+                value={addrLine} onChange={e=>setAddrLine(e.target.value)} />
+              <div style={{display:"grid",gridTemplateColumns:"minmax(0,2fr) minmax(0,1fr) minmax(0,1.2fr)",gap:8,marginTop:8}}>
+                <input className="sw-input" placeholder="City" aria-label="City" autoComplete="address-level2" value={addrCity} onChange={e=>setAddrCity(e.target.value)} />
+                <input className="sw-input" placeholder="State" aria-label="State" autoComplete="address-level1" maxLength={2} value={addrState} onChange={e=>setAddrState(e.target.value)} />
+                <input className="sw-input" placeholder="ZIP" aria-label="ZIP code" autoComplete="postal-code" inputMode="numeric" maxLength={10} value={addrZip} onChange={e=>setAddrZip(e.target.value)} />
+              </div>
+              <div className="sw-fhint">Optional. ShiftWise uses it to record each day's weather automatically, so you can see how weather affects sales.</div>
             </div>
             <div className="sw-fgroup">
               <label className="sw-flabel">Week starts on</label>
@@ -996,6 +1059,7 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
             <div className="sw-review-section">
               <div className="sw-review-title">Business</div>
               <div className="sw-review-row"><span className="sw-review-label">Name</span><span className="sw-review-val">{bizName}</span></div>
+              <div className="sw-review-row"><span className="sw-review-label">Address</span><span className="sw-review-val">{[addrLine,addrCity,[addrState.toUpperCase(),addrZip].filter(Boolean).join(" ")].filter(x=>x&&x.trim()).join(", ")||"Not set"}</span></div>
               <div className="sw-review-row"><span className="sw-review-label">Week starts</span><span className="sw-review-val">{weekStart}</span></div>
               <div className="sw-review-row"><span className="sw-review-label">Weekly budget</span><span className="sw-review-val">{budgetNum>0?fmt$(budgetNum):"Not set"}</span></div>
             </div>
@@ -1045,7 +1109,7 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
 
 
 // ── FeedbackTab component ─────────────────────────────────────────────────────
-function FeedbackTab({ bizId, T, Card, showToast, addAudit, getSession, dbPost }) {
+function FeedbackTab({ bizId, T, Card, showToast, showError, friendlyError, addAudit, getSession, dbPost }) {
   const FEEDBACK_AREAS = [
     "Schedule","Timesheet","Kiosk / Clock-In","Coverage",
     "Business Insights","Dashboard","Team Feed","Settings",
@@ -1185,7 +1249,11 @@ export default function App() {
   const defaultSun = useMemo(() => getSunday(toLocalDateStr(new Date())), []);
 
   // ── Auth state ────────────────────────────────────────────────────────────
+  // Read once on first render — an email link (signup confirm / password
+  // reset) may have just dropped the user back here with tokens in the hash.
+  const [authHash] = useState(() => readAuthHash());
   const [authState,   setAuthState]   = useState(() => {
+    if (authHash?.access_token) return authHash.type === "recovery" ? "recovery" : "loading";
     const s = getSession();
     return s?.access_token ? "loading" : "unauthenticated";
   });
@@ -1193,7 +1261,11 @@ export default function App() {
   const [authPass,    setAuthPass]    = useState("");
   const [authMode,    setAuthMode]    = useState("signin");
   const [resetSent,   setResetSent]   = useState(false);
-  const [authError,   setAuthError]   = useState("");
+  const [authError,   setAuthError]   = useState(() =>
+    authHash?.error ? `That link didn't work (${authHash.error}). Request a new one below.` : "");
+  const [newPass,     setNewPass]     = useState("");
+  const [newPass2,    setNewPass2]    = useState("");
+  const bizCreateRef = useRef(null); // guards against creating two businesses for one new account
   const [authBizName, setAuthBizName] = useState("");
   const [bizId,       setBizId]       = useState(null);
   const [isDemoBiz,   setIsDemoBiz]   = useState(false);
@@ -1221,7 +1293,13 @@ export default function App() {
   const [printView,   setPrintView]    = useState("weekly");
   const [weeklyBudget,setWeeklyBudget] = useState("");
   const [clipboard,   setClipboard]    = useState(null);
-  const [employees,   setEmployees]    = useState([]);
+  const [employees,   setEmployees]    = useState([]);       // active only — everything operational uses this
+  const [formerEmployees, setFormerEmployees] = useState([]); // deactivated — kept for history + exit summaries
+  const allEmployees = useMemo(() => [...employees, ...formerEmployees], [employees, formerEmployees]);
+  const [exitSummaries, setExitSummaries] = useState({});    // empId -> { id, summary }
+  const [exitViewId,    setExitViewId]    = useState(null);
+  const [formerOpen,    setFormerOpen]    = useState(false);
+  const [exitBusy,      setExitBusy]      = useState(false);
   const [editEmpId,   setEditEmpId]    = useState(null);
   const [schedule,    setSchedule]     = useState({});
   const [weekMap,     setWeekMap]      = useState({});
@@ -1239,12 +1317,34 @@ export default function App() {
   const [auditLog,   setAuditLog]   = useState([]);
   const [shiftTypes,  setShiftTypes]  = useState(DEFAULT_SHIFT_TYPES);
   const SHIFT_TYPES = shiftTypes;
+  // What's currently saved in Supabase (JSON). null = not loaded yet, so
+  // nothing saves before the business's own shift types have arrived.
+  const shiftTypesSavedRef = useRef(null);
   const [recognition, setRecognition] = useState([]);
   const [schedView,    setSchedView]   = useState("weekly");
   const [activeDay,    setActiveDay]   = useState(() => toLocalDateStr(new Date()));
   const [actionsOpen,  setActionsOpen] = useState(false);
   const [templates,    setTemplates]   = useState([]);
-  const [salesData,   setSalesData]   = useState([]);
+  // Raw sales rows, one per day per source (square / cash). Everything that
+  // needs a daily total reads salesData, which sums the sources per day — so a
+  // cash entry and Square sales on the same day ADD instead of overwriting.
+  const [rawSales,    setRawSales]    = useState([]);
+  const salesData = useMemo(() => {
+    const by = {};
+    rawSales.forEach(r => {
+      const d = (by[r.date] ||= { date: r.date, revenue: 0, transactions: 0, sources: [] });
+      d.revenue += Number(r.revenue) || 0;
+      d.transactions += Number(r.transactions) || 0;
+      if (r.source && !d.sources.includes(r.source)) d.sources.push(r.source);
+    });
+    return Object.values(by).map(d => ({ ...d, source: d.sources.length === 1 ? d.sources[0] : "mixed" }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [rawSales]);
+  // Replace every row of one source for the given dates, keep everything else
+  const mergeSalesRows = (prev, source, rows) => {
+    const dates = new Set(rows.map(r => r.date));
+    return [...prev.filter(r => !(r.source === source && dates.has(r.date))), ...rows.map(r => ({ ...r, source }))];
+  };
   const [squareConnected,    setSquareConnected]    = useState(false);
   const [squareMerchantName, setSquareMerchantName] = useState("");
   const [squareLastSync,     setSquareLastSync]     = useState(null);
@@ -1255,6 +1355,16 @@ export default function App() {
   const [cashEntries, setCashEntries] = useState({}); // { "YYYY-MM-DD": amount }
   const [laborPctMode, setLaborPctMode] = useState("projected"); // "projected" | "actual"
   const [widgets,        setWidgets]        = useState([]);
+  // Break-even + week check
+  const [laborTargetPct, setLaborTargetPct] = useState(30);   // businesses.labor_target_pct
+  const [bizAddress,     setBizAddress]     = useState({ line:"", city:"", state:"", zip:"" });
+  const [addrDraft,      setAddrDraft]      = useState(null);   // editing copy in Settings
+  const [weatherInfo,    setWeatherInfo]    = useState({ status:null, latestDate:null });
+  const [costs,          setCosts]          = useState([]);   // business_costs rows
+  const [costsOpen,      setCostsOpen]      = useState(false);
+  const [costDraft,      setCostDraft]      = useState(null); // {id?, name, amount, kind, frequency} while adding/editing
+  const [beView,         setBeView]         = useState("breakeven"); // "breakeven" | "target"
+  const [weekCheckOpen,  setWeekCheckOpen]  = useState(false);
   const [showAddWidget,  setShowAddWidget]  = useState(false);
   const [newWidget,      setNewWidget]      = useState({ data_source:"sales", time_range:"last7", display:"stat", color:null, size:"sm", show_axis:true, show_legend:true });
   const [sizeMenuFor,    setSizeMenuFor]    = useState(null); // widget id whose size picker is open, or null
@@ -1312,7 +1422,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const [pulseHistory,   setPulseHistory]   = useState([]); // saved scores from pulse_history table
   // Mutually exclusive Insights-tab side panels — only one shows at a time,
   // and opening any of them hides the main Pulse content below.
-  const [insightsPanel, setInsightsPanel] = useState(null); // null | "history" | "flags" | "reports" | "notif"
+  const [insightsPanel, setInsightsPanel] = useState(null); // null | "history" | "flags" | "reports" | "notif" | "prices"
+  const [priceData,     setPriceData]     = useState(null); // { loading, error, changes, hasTracking }
+  const [itemNames,     setItemNames]     = useState(null); // [{ key, name, units }] for the Item Sales filter
+  const [rbFilterSearch, setRbFilterSearch] = useState({}); // { "source|filter": text }
   const [pulsePrompt,    setPulsePrompt]    = useState(false);
 
   const [notifFreq,      setNotifFreq]      = useState(() => { try { return localStorage.getItem("sw_notif_freq")||"login"; } catch { return "login"; } });
@@ -1334,6 +1447,17 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   const [rbLineItemsOpen, setRbLineItemsOpen] = useState(false);
 
   const printRef = useRef();
+  // These pop-ups are written inside App so they can use its data directly.
+  // Rendering them through a shell whose identity never changes stops React
+  // from remounting them on every App re-render, which used to wipe whatever
+  // was being typed. Each shell calls the latest version of its pop-up.
+  const timePickerImpl = useRef(null);
+  const TimePickerShell = useRef(function TimePickerShell() { return timePickerImpl.current ? timePickerImpl.current() : null; }).current;
+  const tsCellPopupImpl = useRef(null);
+  const TsCellPopupShell = useRef(function TsCellPopupShell(props) { return tsCellPopupImpl.current ? tsCellPopupImpl.current(props) : null; }).current;
+  const punchRowImpl = useRef(null);
+  const PunchRowShell = useRef(function PunchRowShell(props) { return punchRowImpl.current ? punchRowImpl.current(props) : null; }).current;
+  const weatherMapRef = useRef({}); // date -> daily_weather row, loaded per report run
 
   const showToast = (msg, dur=3000, type="success") => { setToast({msg, type}); setTimeout(()=>setToast(null),dur); };
   const showError = (msg, dur=5000) => showToast(msg, dur, "error");
@@ -1373,8 +1497,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const dates = getFilterDates(key, salesData, isDemoBiz ? DEMO_TODAY_ANCHOR : undefined);
       const startDate = dates[0], endDate = dates[dates.length-1];
       const { rows, truncated } = await fetchPunchesForRange(bizId, startDate, endDate);
-      const stats = computeFlagPatterns(rows);
-      setFlagReportData({ ...stats, startDate, endDate, filterKey: key, punchesScanned: rows.length, truncated });
+      // Saved no-shows (written nightly). Excused ones are listed but not counted.
+      let noShows = [];
+      try {
+        noShows = (await dbGet(`attendance_events?select=*&business_id=eq.${bizId}&event_type=eq.NO_SHOW&event_date=gte.${startDate}&event_date=lte.${endDate}&order=event_date.desc`)) || [];
+      } catch (e) { console.warn("No-shows unavailable:", e); }
+      const noShowRows = noShows.filter(n => n.status !== "excused").map(n => ({
+        id: n.id, empId: n.employee_id, empName: n.employee_name, type: "no_show", time: `${n.event_date}T12:00:00`, flags: ["NO_SHOW"],
+      }));
+      const stats = computeFlagPatterns([...rows, ...noShowRows]);
+      setFlagReportData({ ...stats, noShows, startDate, endDate, filterKey: key, punchesScanned: rows.length, truncated });
     } catch (e) {
       showError(friendlyError(e, "Couldn't load that report — try again."));
     } finally {
@@ -1423,6 +1555,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // (X button, toggling it off, or switching straight to History/Flag
   // Patterns/notifications) resets it, so reopening always starts blank.
   useEffect(() => { if (insightsPanel !== "reports") rbResetAll(); }, [insightsPanel]);
+  useEffect(() => {
+    if (insightsPanel !== "reports" || itemNames || !bizId) return;
+    dbGet(`sales_item_names?select=item_key,item_name,units&business_id=eq.${bizId}&order=units.desc&limit=1000`)
+      .then(rows => setItemNames((rows||[]).map(r => ({ key: r.item_key, name: r.item_name || "Item", units: Number(r.units)||0 }))))
+      .catch(e => { console.warn("Item list unavailable:", e); setItemNames([]); });
+  }, [insightsPanel, bizId]);
 
   async function runCustomReportUI() {
     const activeIds = rbActiveSourceIds();
@@ -1434,7 +1572,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     else if (rbPreset === "custom" && (!rbCustomStart || !rbCustomEnd)) missing.push("both custom dates");
     if (!rbVizType) missing.push("a visualization type");
     if (rbGrouping === "Employee" && activeIds.some(sid => sid !== "timesheet" && sid !== "laborcost")) {
-      missing.push("Revenue and Pulse removed (they don't have a per-employee breakdown — only Timesheet and Labor Cost do)");
+      missing.push("only Timesheet and Labor Cost can be grouped by Employee — remove the other sources");
+    }
+    if (activeIds.includes("weather") && ["Employee","Shift Type","Item"].includes(rbGrouping)) {
+      missing.push("Weather can only be grouped by Day, Week, or Day of Week");
+    }
+    if (rbGrouping === "Item" && activeIds.some(sid => sid !== "itemsales")) {
+      missing.push("only Item Sales can be grouped by Item — remove the other sources");
+    }
+    if (rbGrouping === "Shift Type" && activeIds.some(sid => sid !== "shifttypes")) {
+      missing.push("only Shift Types can be grouped by Shift Type — remove the other sources");
     }
     if (missing.length) { showToast("Still needed: " + missing.join(", ")); return; }
 
@@ -1463,7 +1610,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     rbActiveSourceIds().forEach(sid => {
       (rbSources[sid]?.fields||[]).forEach(fid => {
         const fieldDef = REPORT_SOURCES[sid].fields.find(f=>f.id===fid);
-        keys.push({ key:`${sid}__${fid}`, label: fieldDef?.label || fid, color: REPORT_SOURCES[sid].color });
+        keys.push({ key:`${sid}__${fid}`, label: fieldDef?.label || fid, color: REPORT_SOURCES[sid].color, text: !!fieldDef?.text });
       });
     });
     return keys;
@@ -1553,9 +1700,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     setAuthError("");
     if (!authBizName.trim()) { setAuthError("Enter your business name"); return; }
     try {
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+      // Business name rides along on the auth user's metadata. That way the
+      // business row can be created on first sign-in even when email
+      // confirmation means signup itself returns no session.
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/signup?redirect_to=${encodeURIComponent(window.location.origin)}`, {
         method:"POST", headers:{...SB_HEADERS},
-        body:JSON.stringify({email:authEmail, password:authPass}),
+        body:JSON.stringify({email:authEmail, password:authPass, data:{ business_name: authBizName.trim() }}),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error_description || data.error || "Sign up failed");
@@ -1564,8 +1714,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         return;
       }
       saveSession(data);
-      // Create business record
-      await dbPost("businesses", { owner_id: data.user.id, name: authBizName.trim() });
+      // Business record is created by loadAllData() on first load
+      setTab("grid");
       setAuthState("loading");
       await loadAllData();
     } catch(err) { setAuthError(err.message); }
@@ -1576,7 +1726,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     setAuthError("");
     if (!authEmail.trim()) { setAuthError("Enter your email address first."); return; }
     try {
-      const res = await fetch(`${SUPABASE_URL}/auth/v1/recover`, {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/recover?redirect_to=${encodeURIComponent(window.location.origin)}`, {
         method:"POST",
         headers:{ "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
         body:JSON.stringify({ email: authEmail }),
@@ -1590,6 +1740,38 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setResetSent(true);
     } catch(err) {
       setAuthError(err.message);
+    }
+  }
+
+  // Second half of password reset — the user arrived from the reset email
+  // with a short-lived recovery token and now picks a new password.
+  async function handleSetNewPassword(e) {
+    if(e?.preventDefault) e.preventDefault();
+    setAuthError("");
+    if (newPass.length < 6) { setAuthError("Password must be at least 6 characters."); return; }
+    if (newPass !== newPass2) { setAuthError("Passwords don't match."); return; }
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+        method:"PUT",
+        headers:{ "apikey": SUPABASE_ANON_KEY, "Content-Type":"application/json", "Authorization":`Bearer ${authHash.access_token}` },
+        body:JSON.stringify({ password: newPass }),
+      });
+      const data = await res.json().catch(()=>({}));
+      if (!res.ok) throw new Error(data.msg || data.error_description || data.message || "Couldn't update your password.");
+      saveSession({ ...authHash, user: data });
+      setNewPass(""); setNewPass2("");
+      setTab("grid");
+      setAuthState("loading");
+      if (data?.id === DEMO_OWNER_ID) {
+        await loadAllData(await resolveDemoBusinessId());
+      } else {
+        await loadAllData();
+      }
+      showToast("Password updated ✓");
+    } catch(err) {
+      setAuthError(/expired|invalid|jwt/i.test(err.message)
+        ? "This reset link has expired. Request a new one below."
+        : err.message);
     }
   }
 
@@ -1635,7 +1817,28 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         const bizRows = await dbGet("businesses?select=*&order=created_at.asc&limit=1");
         business = bizRows?.[0];
       }
-      if (!business) { setAuthState("unauthenticated"); clearSession(); return; }
+      if (!business && !forcedBusinessId) {
+        // Brand-new account signing in for the first time (e.g. right after
+        // confirming their email) — create their business now. setup_complete
+        // is set explicitly so new accounts always go through onboarding,
+        // regardless of the column's database default.
+        const u = getSession()?.user;
+        if (u?.id && u.id !== DEMO_OWNER_ID) {
+          if (!bizCreateRef.current) {
+            bizCreateRef.current = dbPost("businesses", {
+              owner_id: u.id,
+              name: (u.user_metadata?.business_name || "").trim() || "My Business",
+              setup_complete: false,
+            });
+          }
+          const created = await bizCreateRef.current;
+          business = created?.[0];
+        }
+      }
+      if (!business) {
+        setAuthError("Couldn't load your business — try signing in again.");
+        setAuthState("unauthenticated"); clearSession(); return;
+      }
 
       setBizId(business.id);
       setBiz(business.name ?? "My Business");
@@ -1643,6 +1846,21 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setDaysOpen(business.days_open ?? [0,1,2,3,4,5,6]);
       setWeeklyBudget(business.weekly_budget ?? null);
       if (business.cash_mode) setCashMode(true);
+      setLaborTargetPct(Number(business.labor_target_pct) > 0 ? Number(business.labor_target_pct) : 30);
+      setBizAddress({ line: business.address_line || "", city: business.city || "", state: business.state || "", zip: business.zip || "" });
+      setAddrDraft(null);
+      {
+        let latestDate = null;
+        try {
+          const w = await dbGet(`daily_weather?select=weather_date&business_id=eq.${business.id}&order=weather_date.desc&limit=1`);
+          latestDate = w?.[0]?.weather_date || null;
+        } catch {}
+        setWeatherInfo({ status: business.geocode_status || null, latestDate });
+      }
+      try {
+        const costRows = await dbGet(`business_costs?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`);
+        setCosts(costRows || []);
+      } catch (e) { console.warn("Costs load failed:", e); setCosts([]); }
 
       setIsDemoBiz(!!business.is_demo);
 
@@ -1717,7 +1935,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       }
 
       // 6. Transform employees
-      setEmployees((empRows||[]).map(e => ({
+      const mappedEmps = (empRows||[]).map(e => ({
         id:             e.id,
         name:           e.name,
         role:           e.role,
@@ -1727,7 +1945,19 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         availableDays:  e.available_days || [0,1,2,3,4,5,6],
         availableHours: String(e.available_hours || "40"),
         notes:          e.notes,
-      })));
+        status:         e.status || "active",
+        exitedAt:       e.exited_at || null,
+        exitReason:     e.exit_reason || "",
+        createdAt:      e.created_at || null,
+      }));
+      setEmployees(mappedEmps.filter(e => e.status !== "inactive"));
+      setFormerEmployees(mappedEmps.filter(e => e.status === "inactive").sort((a,b) => (b.exitedAt||"").localeCompare(a.exitedAt||"")));
+      try {
+        const exitRows = await dbGet(`employee_exits?select=*&business_id=eq.${business.id}&order=created_at.asc`);
+        const map = {};
+        (exitRows||[]).forEach(r => { if (r.employee_id) map[r.employee_id] = { id: r.id, summary: r.summary }; });
+        setExitSummaries(map);
+      } catch (e) { console.warn("Exit summaries load failed:", e); setExitSummaries({}); }
 
       // 7. Transform schedule: { weekStart: { empId: { dayIdx: shift } } }
       const sched = {};
@@ -1748,10 +1978,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setSchedule(sched);
 
       // 8. Shift types
-      setShiftTypes((shiftTypeRows||[]).length > 0
+      const loadedTypes = (shiftTypeRows||[]).length > 0
         ? (shiftTypeRows||[]).map(r => ({ id:r.type_id, label:r.label, color:r.color }))
-        : DEFAULT_SHIFT_TYPES
-      );
+        : DEFAULT_SHIFT_TYPES;
+      // No saved rows yet → baseline "" so the defaults get saved once.
+      shiftTypesSavedRef.current = (shiftTypeRows||[]).length > 0 ? JSON.stringify(loadedTypes) : "";
+      setShiftTypes(loadedTypes);
 
       // 9. Business hours
       const bh = {};
@@ -1765,7 +1997,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setBusinessHours(bh);
 
       // 10. Other state
-      setSalesData((salesRows||[]).map(r=>({ date:r.sale_date, revenue:parseFloat(r.revenue), transactions:r.transactions, source:r.source })));
+      setRawSales((salesRows||[]).map(r=>({ date:r.sale_date, revenue:parseFloat(r.revenue), transactions:r.transactions, source:r.source || "square" })));
       // Load cash entries (source='cash') separately into cashEntries map
       const cashRows = (salesRows||[]).filter(r=>r.source==='cash');
       if (cashRows.length > 0) {
@@ -1776,6 +2008,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       setRecognition((recRows||[]).map(r=>({ id:r.id, at:r.created_at, type:r.rec_type, emoji:r.emoji, message:r.message, fromName:r.from_name, toName:r.to_name, toId:r.to_id })));
       setPunches((punchRows||[]).map(r=>({ id:r.id, empId:r.employee_id, empName:r.employee_name, type:r.punch_type, time:r.punched_at?.replace(" ", "T").replace("+00","Z") ?? null, scheduled:r.scheduled_start?{start:parseFloat(r.scheduled_start),end:parseFloat(r.scheduled_end)}:null, flags:r.flags||[] })));
       setOpenShifts((openShiftRows||[]).map(r=>({ id:r.id, weekKey:wks.find(w=>w.id===r.week_id)?.week_start||r.week_id, empId:r.employee_id, dayIdx:r.day_index, originalShift:r.shift_start?{start:parseFloat(r.shift_start),end:parseFloat(r.shift_end)}:null, reason:r.reason, status:r.status, claimedBy:r.claimed_by, createdAt:r.created_at })));
+      try {
+        const lockRows = await dbGet(`timesheet_locks?select=*&business_id=eq.${business.id}&order=locked_at.desc`);
+        setTimesheetHistory((lockRows||[]).map(r => ({ ...(r.snapshot || {}), id: r.id, savedAt: r.locked_at || r.snapshot?.savedAt })));
+      } catch (e) { console.warn("Locked timesheets load failed:", e); }
       setTemplates((templateRows||[]).map(r=>({ id:r.id, name:r.name, savedAt:r.created_at, scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot })));
       setPublished((publishedRows||[]).map(r=>({ id:r.id, publishedAt:r.published_at, label:r.label, wk1Start:r.week_start, wk2Start:r.week_start, weekMode:"1", scheduleData:r.schedule_data, employeeSnapshot:r.employee_snapshot, budget:r.budget })));
       setAuditLog((auditRows||[]).map(r=>({ id:r.id, at:r.created_at, action:r.action, detail:r.detail, empName:r.employee_name })));
@@ -1798,9 +2034,50 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     }
   }
 
+  // Save shift type edits (rename, recolor, add, delete, reorder) to Supabase.
+  // Debounced so typing a new name doesn't fire a save per keystroke.
+  useEffect(() => {
+    if (!bizId || shiftTypesSavedRef.current === null) return;
+    const json = JSON.stringify(shiftTypes);
+    if (json === shiftTypesSavedRef.current) return;
+    const timer = setTimeout(async () => {
+      try {
+        const rows = shiftTypes.map((st, i) => ({ business_id: bizId, type_id: st.id, label: st.label, color: st.color, sort_order: i }));
+        if (rows.length) {
+          await sbFetch("shift_types?on_conflict=business_id,type_id", {
+            method: "POST", body: JSON.stringify(rows),
+            headers: { "Prefer": "resolution=merge-duplicates,return=minimal" },
+          });
+        }
+        const keepIds = shiftTypes.map(st => st.id).join(",");
+        await dbDelete(`shift_types?business_id=eq.${bizId}` + (keepIds ? `&type_id=not.in.(${keepIds})` : ""));
+        shiftTypesSavedRef.current = json;
+      } catch (e) {
+        console.warn("Shift type save failed:", e);
+        showError(friendlyError(e, "Shift type changes didn't save — try again."));
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [shiftTypes, bizId]);
+
   // Auto-load on mount if session exists
   useEffect(() => {
-    if (authState === "loading") {
+    if (authHash) clearAuthHash(); // don't leave tokens sitting in the address bar
+    if (authState !== "loading") return;
+    (async () => {
+      // Arrived from the signup confirmation email — turn the link's tokens
+      // into a saved session so the user is signed in straight away.
+      if (authHash?.access_token) {
+        try {
+          const user = await fetchAuthUser(authHash.access_token);
+          saveSession({ ...authHash, user });
+        } catch {
+          clearSession();
+          setAuthError("That link has expired — sign in below.");
+          setAuthState("unauthenticated");
+          return;
+        }
+      }
       const s = getSession();
       if (s?.user?.id === DEMO_OWNER_ID) {
         // Demo user refreshing the tab: reuse this tab's already-cloned
@@ -1813,7 +2090,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       } else {
         loadAllData();
       }
-    }
+    })();
   }, []);
 
   // ── Demo sandbox cleanup backstop ──────────────────────────────────────
@@ -2178,6 +2455,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       overtimeAlerts,
       recentPunchFlags: recentFlags,
       publishedSchedulesCount: published.length,
+      laborTargetPct: laborTargetPct || 30,
     };
   }
 
@@ -2194,6 +2472,28 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     setTimeout(async () => {
       try {
         const snapshot = buildBusinessSnapshot();
+        // Shift Type Efficiency: this Pulse week for the card, the last 28
+        // days for the trim suggestion (needs a pattern, not one bad night).
+        try {
+          const wkEndFull = addDays(wk1Start, 6);
+          const wkEnd = wkEndFull < demoToday ? wkEndFull : demoToday;
+          if (wk1Start <= wkEnd) {
+            const [wkAttr, trendAttr] = await Promise.all([
+              computeShiftTypeAttribution(wk1Start, wkEnd),
+              computeShiftTypeAttribution(addDays(demoToday, -27), demoToday),
+            ]);
+            const rows = summarizeShiftTypes(wkAttr);
+            const worst = rows.find(r => r.status === "over");
+            snapshot.shiftTypeAttribution = {
+              rows,
+              uncovered: Object.values(wkAttr.uncoveredByDate).reduce((s,v)=>s+v,0),
+              matchedRevenue: wkAttr.matchedRevenue,
+              estimatedRevenue: wkAttr.estimatedRevenue,
+              trim: worst ? shiftTypeTrimSuggestion(trendAttr, worst.key) : null,
+              trimHasHourly: trendAttr.hasHourly,
+            };
+          }
+        } catch (e) { console.warn("Shift type attribution failed (Pulse continues without it):", e); }
         const result   = computePulse(snapshot);
         const now = new Date().toISOString();
         const weekStart = wk1Start;
@@ -2469,6 +2769,29 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       }
     }
 
+    // 4b. Shift type running over the labor target
+    const staA = snap.shiftTypeAttribution;
+    const worstTypeA = staA?.rows?.find(r => r.status === "over");
+    if (priority <= 5 && worstTypeA) {
+      const nm = worstTypeA.label.toLowerCase();
+      const t = staA.trim;
+      if (t) {
+        actions.push({
+          priority: priority++,
+          action: `End ${t.days.join(", ")} ${nm} shifts an hour earlier`,
+          why: `Sales in the last ${nm} hour averaged ${$$(t.avgRev)} against ${$$(t.avgCost)} in ${nm} labor. Cutting it saves about ${$$(t.weeklySavings)} a week.`,
+        });
+      } else {
+        actions.push({
+          priority: priority++,
+          action: `Review ${nm} staffing`,
+          why: staA.trimHasHourly
+            ? `${worstTypeA.label} is running ${pct(worstTypeA.laborPct)} labor cost, but no single hour stands out. Try a shorter shift or one less person on it.`
+            : `${worstTypeA.label} is running ${pct(worstTypeA.laborPct)} labor cost. Hourly Square sales would show exactly which hour to trim.`,
+        });
+      }
+    }
+
     // 5. Coverage gaps
     if (priority <= 5 && gapDays > 0) {
       const uncovered = (wk.dailyTotals || []).filter(d => d.staffCount === 0);
@@ -2504,6 +2827,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     // ── Sections — rich templated analysis per topic ─────────────────────────
     const sections = [];
     const nearOTEmps = wk.employeeBreakdown?.filter(e => e.scheduledHours >= 36) || [];
+    // Owner's labor target (default 30%); "on target" = within 5 points of it
+    const tgtPct = snap.laborTargetPct || 30;
+    const tgtHigh = tgtPct + 5;
 
     // ── SECTION 1: Labor Cost — always shown ─────────────────────────────────
     {
@@ -2520,12 +2846,12 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       } else if (overBudget) {
         const overAmt = totalPay - budget;
         const overPct = Math.round((overAmt / budget) * 100);
-        insight = `Scheduled labor is ${$$(totalPay)}, which puts you ${$$(overAmt)} (${overPct}%) over your ${$$(budget)} weekly budget. That gap needs to close before payroll runs — look for overlap shifts or days where coverage exceeds what the schedule actually requires. ${hasSales && laborPct ? `At ${pct(laborPct)} of revenue, labor cost is above the 25–35% target range.` : ""}`;
+        insight = `Scheduled labor is ${$$(totalPay)}, which puts you ${$$(overAmt)} (${overPct}%) over your ${$$(budget)} weekly budget. That gap needs to close before payroll runs — look for overlap shifts or days where coverage exceeds what the schedule actually requires. ${hasSales && laborPct ? (laborPct > tgtHigh ? `At ${pct(laborPct)} of revenue, labor cost is above your ${tgtPct}% target.` : `Labor cost is ${pct(laborPct)} of revenue against your ${tgtPct}% target.`) : ""}`;
       } else if (projOver) {
         insight = `Scheduled labor is ${$$(totalPay)} against a ${$$(budget)} budget — ${$$(burn.overBy)} over. You're ${burn.weekPct}% through the week (day ${burn.daysPassed} of ${burn.daysInWeek}). Review the remaining shifts and look for overlap or slow days where hours can be trimmed. ${hasSales && laborPct ? `Current labor cost is ${pct(laborPct)} of revenue.` : ""}`;
       } else {
         const usedPct = budget > 0 ? Math.round((totalPay / budget) * 100) : 0;
-        insight = `Scheduled labor is ${$$(totalPay)} against your ${$$(budget)} budget — ${$$(runway)} of runway remaining with ${100 - burn?.weekPct || 0}% of the week ahead. ${hasSales && laborPct ? `Your labor cost is ${pct(laborPct)} of revenue, which is ${laborPct <= 35 ? "within" : "above"} the 25–35% target.` : ""}`;
+        insight = `Scheduled labor is ${$$(totalPay)} against your ${$$(budget)} budget — ${$$(runway)} of runway remaining with ${100 - burn?.weekPct || 0}% of the week ahead. ${hasSales && laborPct ? `Your labor cost is ${pct(laborPct)} of revenue, ${laborPct <= tgtHigh ? "in line with" : "above"} your ${tgtPct}% target.` : ""}`;
       }
       sections.push({ title: "Labor Cost", icon: "💰", urgency, insight });
     }
@@ -2557,6 +2883,31 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         icon: "💵",
         urgency: "low",
         insight: `No sales data is connected yet. When you link Square, ShiftWise calculates revenue per labor hour for every day of the week — the single clearest signal of whether your staffing is earning its cost. Connect Square in the Dashboard tab or import a sales CSV to unlock this section.`,
+      });
+    }
+
+    // ── SECTION 2b: Shift Type Efficiency ────────────────────────────────────
+    const sta = snap.shiftTypeAttribution;
+    if (sta?.rows?.length) {
+      const rows = sta.rows;
+      const withPct = rows.filter(r => r.laborPct != null);
+      const maxPct = withPct.length ? Math.max(...withPct.map(r => r.laborPct)) : 0;
+      const urgency = maxPct > tgtPct + 10 ? "high" : maxPct > tgtHigh ? "medium" : "low";
+      const worst = rows.find(r => r.status === "over");
+      let insight;
+      if (!withPct.length) {
+        const top = [...rows].sort((a,b) => b.cost - a.cost)[0];
+        insight = `No sales recorded during these hours yet, so this shows labor only. ${top.label} carries the most labor cost at ${$$(top.cost)}.`;
+      } else if (worst) {
+        insight = `${worst.label} is your costliest shift type. It cost ${$$(worst.cost)} in labor against ${$$(worst.revenue)} in sales during its hours — ${pct(worst.laborPct)}, above your ${tgtPct}% target.`;
+      } else {
+        const best = [...withPct].sort((a,b) => (b.rplh||0) - (a.rplh||0))[0];
+        insight = `Every shift type is at or under your ${tgtPct}% target. ${best.label} is the most efficient at ${$$(best.rplh)} per labor hour.`;
+      }
+      const totalRev = sta.matchedRevenue + sta.estimatedRevenue;
+      sections.push({
+        title: "Shift Type Efficiency", icon: "🏷️", urgency, insight,
+        shiftTypes: { rows, uncovered: sta.uncovered, matchedPct: totalRev > 0 ? Math.round(sta.matchedRevenue / totalRev * 100) : null },
       });
     }
 
@@ -2669,7 +3020,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       nextWeekFocus = `Review your operating hours in Settings and make sure they reflect when you're actually open. Accurate hours let ShiftWise detect coverage gaps automatically and give the Pulse engine better data to work with next week.`;
     }
 
-    return { pulse, headline, score: { value: score, label: scoreLabel, reason: scoreReason }, sections: sections.slice(0, 5), actions: actions.slice(0, 5), positives: positives.slice(0, 3), nextWeekFocus };
+    return { pulse, headline, score: { value: score, label: scoreLabel, reason: scoreReason }, sections: sections.slice(0, 6), actions: actions.slice(0, 5), positives: positives.slice(0, 3), nextWeekFocus };
   }
   // ── end computePulse ───────────────────────────────────────────────────────
 
@@ -2746,18 +3097,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
         if (result.length === 0) throw new Error("No sales data found in this file.");
 
-        setSalesData(prev => {
-          const map = {};
-          prev.forEach(d => map[d.date] = d);
-          result.forEach(d => map[d.date] = d);
-          const merged = Object.values(map).sort((a,b) => a.date.localeCompare(b.date));
-          // Write to Supabase
-          if (bizId) {
-            const rows = merged.map(d=>({ business_id:bizId, sale_date:d.date, revenue:d.revenue, transactions:d.transactions||0 }));
-            dbUpsert("sales_data", rows).catch(e=>{ console.warn("Sales data write failed:", e); showError(friendlyError(e, "That import didn't save to the server — try uploading again.")); });
-          }
-          return merged;
-        });
+        setRawSales(prev => mergeSalesRows(prev, "square", result));
+        // Write only the imported Square rows; cash entries are untouched
+        if (bizId) {
+          const rows = result.map(d=>({ business_id:bizId, sale_date:d.date, revenue:d.revenue, transactions:d.transactions||0, source:"square" }));
+          sbFetch("sales_data?on_conflict=business_id,sale_date,source", {
+            method:"POST", body:JSON.stringify(rows), headers:{ "Prefer":"resolution=merge-duplicates,return=minimal" },
+          }).catch(e=>{ console.warn("Sales data write failed:", e); showError(friendlyError(e, "That import didn't save to the server — try uploading again.")); });
+        }
 
         showToast(`${result.length} days of sales data imported ✓`, 4000);
         addAudit("Sales Data Imported", `${result.length} days from Square — ${result[0].date} to ${result[result.length-1].date}`);
@@ -2802,8 +3149,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     };
   }
 
-  const FLAG_REPORT_LABELS = { EARLY:"Clocked In Early", EARLY_OUT:"Clocked Out Early", NO_SHIFT:"Unscheduled Punch", ADJUSTMENT:"Manually Adjusted" };
-  const FLAG_REPORT_COLORS = { EARLY:"#3A9BE8", EARLY_OUT:"#E07020", NO_SHIFT:"#C0392B", ADJUSTMENT:"#9B59B6" };
+  const FLAG_REPORT_LABELS = { EARLY:"Clocked In Early", EARLY_OUT:"Clocked Out Early", NO_SHIFT:"Unscheduled Punch", ADJUSTMENT:"Manually Adjusted", LATE:"Late Clock-In", NO_SHOW:"No-Show" };
+  const FLAG_REPORT_COLORS = { EARLY:"#3A9BE8", EARLY_OUT:"#E07020", NO_SHIFT:"#C0392B", ADJUSTMENT:"#9B59B6", LATE:"#E8A93A", NO_SHOW:"#7B241C" };
   const DOW_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 
   // Deterministic, rule-based pattern detection + one-line narrative —
@@ -2847,6 +3194,16 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // report charts read left-to-right the way an owner thinks about a work
   // week, not the JS Date.getDay() Sun-first convention.
   const REPORT_DOW = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  // Weather filter shared by every date-based source. A day passes when its
+  // main condition is one of those picked; days with no weather recorded are
+  // left out while the filter is on.
+  const WEATHER_CONDITIONS = [["sunny","Sunny"],["cloudy","Cloudy"],["rainy","Rainy"],["storm","Storm"],["snowy","Snowy"]];
+  const WEATHER_FILTER = { id:"weather", label:"Weather", options: WEATHER_CONDITIONS.map(([v,l]) => ({ value:v, label:l })) };
+  function weatherOk(dateStr, filters) {
+    if (!filters?.weather?.length) return true;
+    const w = weatherMapRef.current[dateStr];
+    return !!w && filters.weather.includes(w.condition);
+  }
   function reportDowOf(dateStr) {
     const d = new Date(dateStr+"T12:00:00");
     return REPORT_DOW[(d.getDay()+6)%7];
@@ -2889,13 +3246,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         { id:"edits", label:"Manual Edits" },
       ],
       filters: [
-        { id:"employee", label:"Employee", options: employees.map(e=>({value:e.id,label:e.name})) },
+        { id:"employee", label:"Employee", options: allEmployees.map(e=>({value:e.id,label:e.status==="inactive" ? `${e.name} (former)` : e.name})) },
         { id:"flagType", label:"Flag Type", options:[
           {value:"EARLY",label:"Clocked In Early"},{value:"EARLY_OUT",label:"Clocked Out Early"},
           {value:"NO_SHIFT",label:"Unscheduled Punch"},{value:"ADJUSTMENT",label:"Manually Adjusted"}] },
         { id:"reviewStatus", label:"Review Status", options:[
           {value:"reviewed",label:"Reviewed"},{value:"approved",label:"Approved"},{value:"rejected",label:"Rejected"}] },
         { id:"dow", label:"Day of Week", options: REPORT_DOW.map(d=>({value:d,label:d})) },
+        WEATHER_FILTER,
       ],
     },
     revenue: {
@@ -2908,6 +3266,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       filters: [
         { id:"source", label:"Source", options:[{value:"square",label:"Square (Auto)"},{value:"cash",label:"Cash"}] },
         { id:"dow", label:"Day of Week", options: REPORT_DOW.map(d=>({value:d,label:d})) },
+        WEATHER_FILTER,
       ],
     },
     // NOTE: intentionally only Actual % and Revenue/Labor Hr for now — both
@@ -2924,6 +3283,49 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       ],
       filters: [
         { id:"dow", label:"Day of Week", options: REPORT_DOW.map(d=>({value:d,label:d})) },
+        WEATHER_FILTER,
+      ],
+    },
+    weather: {
+      label: "Weather", color: "#3A9BE8",
+      fields: [
+        { id:"condition", label:"Conditions", text:true },
+        { id:"highF", label:"High °F" },
+        { id:"lowF", label:"Low °F" },
+        { id:"rainIn", label:"Rain (in)" },
+        { id:"wetDays", label:"Rain / Storm / Snow Days" },
+      ],
+      filters: [WEATHER_FILTER],
+    },
+    itemsales: {
+      label: "Item Sales", color: "#E8623A",
+      fields: [
+        { id:"units", label:"Units Sold" },
+        { id:"sales", label:"Item Sales" },
+        { id:"avgPrice", label:"Avg Price Paid" },
+        { id:"share", label:"Share of Item Sales %" },
+      ],
+      filters: [
+        { id:"item", label:"Item", options: (itemNames||[]).map(i => ({ value:i.key, label:i.name })) },
+        { id:"dow", label:"Day of Week", options: REPORT_DOW.map(d=>({value:d,label:d})) },
+        WEATHER_FILTER,
+      ],
+    },
+    shifttypes: {
+      label: "Shift Types", color: "#9B59B6",
+      fields: [
+        { id:"hours", label:"Hours" },
+        { id:"cost", label:"Labor Cost" },
+        { id:"revenue", label:"Sales Credited" },
+        { id:"laborPct", label:"Labor Cost %" },
+        { id:"rplh", label:"Sales / Labor Hr" },
+      ],
+      filters: [
+        { id:"shiftType", label:"Shift Type", options: [
+          ...shiftTypes.map(s => ({ value:s.id, label:s.label || "(unnamed)" })),
+          { value: SHIFT_UNSCHEDULED, label: "Unscheduled" },
+        ] },
+        WEATHER_FILTER,
       ],
     },
     pulse: {
@@ -2939,7 +3341,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   async function computeLaborCostReport(startDate, endDate, grouping, filters={}) {
     const { rows: rawPunches, truncated } = await fetchPunchesForRange(bizId, startDate, endDate);
     const rateById = {};
-    employees.forEach(e => { rateById[e.id] = parseFloat(e.hourlyRate)||0; });
+    allEmployees.forEach(e => { rateById[e.id] = parseFloat(e.hourlyRate)||0; });
 
     const byEmpDay = {};
     rawPunches.forEach(p => {
@@ -2947,6 +3349,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const dateStr = toLocalDateStr(new Date(p.time));
       if (dateStr < startDate || dateStr > endDate) return;
       if (filters.dow?.length && !filters.dow.includes(reportDowOf(dateStr))) return;
+      if (!weatherOk(dateStr, filters)) return;
       (byEmpDay[`${p.empId}__${dateStr}`] ||= []).push(p);
     });
 
@@ -2959,6 +3362,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const totalRev = salesData
         .filter(d => d.date >= startDate && d.date <= endDate)
         .filter(d => !filters.dow?.length || filters.dow.includes(reportDowOf(d.date)))
+        .filter(d => weatherOk(d.date, filters))
         .reduce((s,d) => s + (Number(d.revenue)||0), 0);
       const byEmp = {};
       Object.entries(byEmpDay).forEach(([k, dayPunches]) => {
@@ -2969,7 +3373,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         b.hrs += hrs;
         b.pay += hrs*(rateById[empId]||0);
       });
-      const rows = employees.map(emp => {
+      const rows = allEmployees.filter(emp => emp.status !== "inactive" || (byEmp[emp.id]?.hrs||0) > 0).map(emp => {
         const b = byEmp[emp.id] || { hrs:0, pay:0 };
         return {
           label: emp.name,
@@ -2993,6 +3397,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     const revByKey = {};
     salesData.filter(d => d.date >= startDate && d.date <= endDate).forEach(d => {
       if (filters.dow?.length && !filters.dow.includes(reportDowOf(d.date))) return;
+      if (!weatherOk(d.date, filters)) return;
       const key = reportBucketKey(d.date, grouping);
       revByKey[key] = (revByKey[key]||0) + (Number(d.revenue)||0);
     });
@@ -3029,9 +3434,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   }
 
   function computeRevenueReport(startDate, endDate, grouping, filters={}) {
-    let salesRows = salesData.filter(d => d.date >= startDate && d.date <= endDate);
+    let salesRows = rawSales.filter(d => d.date >= startDate && d.date <= endDate);
     if (filters.source?.length) salesRows = salesRows.filter(d => filters.source.includes(d.source));
     if (filters.dow?.length) salesRows = salesRows.filter(d => filters.dow.includes(reportDowOf(d.date)));
+    if (filters.weather?.length) salesRows = salesRows.filter(d => weatherOk(d.date, filters));
 
     const buckets = {};
     salesRows.forEach(d => {
@@ -3072,6 +3478,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       const dateStr = toLocalDateStr(new Date(p.time));
       if (dateStr < startDate || dateStr > endDate) return;
       if (filters.dow?.length && !filters.dow.includes(reportDowOf(dateStr))) return;
+      if (!weatherOk(dateStr, filters)) return;
       (byEmpDay[`${p.empId}__${dateStr}`] ||= []).push(p);
     });
 
@@ -3116,9 +3523,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       // Respect the Employee filter if set (show exactly who was chosen,
       // even at zero); otherwise show every employee on the roster so
       // anyone with zero activity in the range is visible, not hidden.
-      const empIds = filters.employee?.length ? filters.employee : employees.map(e=>e.id);
+      const empIds = filters.employee?.length ? filters.employee
+        : allEmployees.filter(e => e.status !== "inactive" || (byEmp[e.id]?.hours||0) > 0).map(e=>e.id);
       const rows = empIds.map(empId => {
-        const emp = employees.find(e=>e.id===empId);
+        const emp = allEmployees.find(e=>e.id===empId);
         const b = byEmp[empId] || { hours:0, punches:0, overtime:0, flagged:0, edits:0 };
         return {
           label: emp?.name || "Unknown",
@@ -3175,8 +3583,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       <>
         {vizType==="number" ? (
           <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12}}>
-            {fieldKeys.map(f=>{
-              const vals = data.map(r=>r[f.key]).filter(v=>v!==undefined);
+            {fieldKeys.filter(f=>!f.text).map(f=>{
+              const vals = data.map(r=>r[f.key]).filter(v=>v!==undefined && v!==null);
               const cur = vals[vals.length-1] ?? 0, first = vals[0] ?? 0;
               const delta = first!==0 ? ((cur-first)/Math.abs(first))*100 : 0;
               return (
@@ -3206,7 +3614,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             </table>
           </div>
         ) : (
-          <div style={{marginBottom:12}}>{renderCustomReportChart(data, vizType, fieldKeys)}</div>
+          <div style={{marginBottom:12}}>
+            {renderCustomReportChart(data, vizType, fieldKeys.filter(f=>!f.text))}
+            {fieldKeys.some(f=>f.text) && <div style={{fontSize:10.5,color:T.sub,marginTop:4}}>Text fields like Conditions show in Table view and CSV export.</div>}
+          </div>
         )}
 
         {truncated && (
@@ -3223,7 +3634,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     Object.keys(sourcesConfig || {}).forEach(sid => {
       (sourcesConfig[sid]?.fields||[]).forEach(fid => {
         const fieldDef = REPORT_SOURCES[sid]?.fields.find(f=>f.id===fid);
-        keys.push({ key:`${sid}__${fid}`, label: fieldDef?.label || fid, color: REPORT_SOURCES[sid]?.color });
+        keys.push({ key:`${sid}__${fid}`, label: fieldDef?.label || fid, color: REPORT_SOURCES[sid]?.color, text: !!fieldDef?.text });
       });
     });
     return keys;
@@ -3261,7 +3672,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [widgets, salesData, schedule, employees, punches, pulseHistory]);
+  }, [widgets, salesData, schedule, employees, punches, pulseHistory, shiftTypes]);
 
   async function addReportWidgetToDashboard(title) {
     if (!bizId || widgetSaving) return;
@@ -3331,11 +3742,387 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     return null;
   }
 
+  // ── SHIFT-TYPE ATTRIBUTION ENGINE ───────────────────────────────────────
+  // Hours + labor cost come from actual punches, each matched to that day's
+  // scheduled shift for its type. Sales are credited hour-by-hour: each hour's
+  // Square sales (sales_hourly) split among whoever was clocked in that hour,
+  // by minutes worked. Days without hourly data fall back to splitting the
+  // day's total by each type's share of labor hours (marked as estimated).
+  // A shift tagged Manager always counts as Manager.
+  function isManagerType(id) {
+    if (id === "manager") return true;
+    const st = shiftTypes.find(s => s.id === id);
+    return !!st && /manager/i.test(st.label || "");
+  }
+  function resolveShiftTypeKey(shift) {
+    if (!shift) return SHIFT_UNSCHEDULED;
+    const ids = toTypeArr(shift.type);
+    const pick = ids.find(isManagerType) || ids[0];
+    return shiftTypes.some(s => s.id === pick) ? pick : SHIFT_REMOVED;
+  }
+  function shiftTypeMeta(key) {
+    if (key === SHIFT_UNSCHEDULED) return { label:"Unscheduled", color:"#8A8A8A" };
+    if (key === SHIFT_REMOVED) return { label:"Removed type", color:"#B0A99F" };
+    const st = shiftTypes.find(s => s.id === key);
+    return { label: st?.label || "(unnamed)", color: st?.color || "#888888" };
+  }
+
+  // Missing table, no rows, or any error → [] and the estimate takes over.
+  async function fetchHourlySales(startDate, endDate) {
+    if (!bizId) return [];
+    const out = []; const PAGE = 1000; let offset = 0;
+    try {
+      while (out.length < 20000) {
+        const rows = await dbGet(`sales_hourly?select=sale_date,hour,revenue&business_id=eq.${bizId}&sale_date=gte.${startDate}&sale_date=lte.${endDate}&order=sale_date.asc,hour.asc&limit=${PAGE}&offset=${offset}`);
+        if (!rows?.length) break;
+        out.push(...rows);
+        if (rows.length < PAGE) break;
+        offset += PAGE;
+      }
+    } catch (e) { console.warn("Hourly sales unavailable — using estimates:", e); return []; }
+    return out;
+  }
+
+  async function computeShiftTypeAttribution(startDate, endDate) {
+    const [{ rows: rawPunches, truncated }, hourlyRows] = await Promise.all([
+      fetchPunchesForRange(bizId, startDate, endDate),
+      fetchHourlySales(startDate, endDate),
+    ]);
+    const rateById = {};
+    allEmployees.forEach(e => { rateById[e.id] = parseFloat(e.hourlyRate)||0; });
+    const todayStr = toLocalDateStr(new Date());
+
+    const byEmpDay = {};
+    rawPunches.forEach(p => {
+      if (!p.time) return;
+      const d = toLocalDateStr(new Date(p.time));
+      if (d < startDate || d > endDate) return;
+      (byEmpDay[`${p.empId}__${d}`] ||= []).push(p);
+    });
+
+    const slots = {};      // "date|hour" -> { typeKey: { minutes, cost } }
+    const byDateType = {}; // date -> { typeKey: { minutes, cost, revenue, estRevenue } }
+    const lastHour = {};   // typeKey -> { date: last hour worked }
+    const empStats = {};   // empId -> { minutes, cost, revenue, byType, dates }
+    const slotEmp = {};    // "date|hour" -> { empId: minutes }
+    const dayEmp = {};     // date -> { empId: minutes }
+    Object.entries(byEmpDay).forEach(([k, dayPunches]) => {
+      const [empId, dateStr] = k.split("__");
+      const dow = new Date(dateStr+"T12:00:00").getDay();
+      const typeKey = resolveShiftTypeKey(schedule?.[getSunday(dateStr)]?.[empId]?.[dow] || null);
+      const rate = rateById[empId] || 0;
+      // Same pairing rules as calcActualHours, so hours match the Timesheet
+      const sorted = [...dayPunches].sort((a,b)=>new Date(a.time)-new Date(b.time));
+      const intervals = []; let inT = null;
+      for (const p of sorted) {
+        if (p.type==="in" || p.type==="break_in") inT = new Date(p.time).getTime();
+        else if (p.type==="out" && inT != null) { intervals.push([inT, new Date(p.time).getTime()]); inT = null; }
+      }
+      if (inT != null && dateStr === todayStr) intervals.push([inT, Date.now()]);
+      for (const [s, e] of intervals) {
+        let t = s;
+        while (t < e) {
+          const next = Math.min(e, (Math.floor(t/3600000)+1)*3600000);
+          const { date, hour } = centralDateHour(t);
+          if (date >= startDate && date <= endDate) {
+            const mins = (next - t) / 60000;
+            const cost = mins / 60 * rate;
+            const slot = ((slots[`${date}|${hour}`] ||= {})[typeKey] ||= { minutes:0, cost:0 });
+            slot.minutes += mins; slot.cost += cost;
+            const dt = ((byDateType[date] ||= {})[typeKey] ||= { minutes:0, cost:0, revenue:0, estRevenue:0 });
+            dt.minutes += mins; dt.cost += cost;
+            const lh = (lastHour[typeKey] ||= {});
+            if (lh[date] == null || hour > lh[date]) lh[date] = hour;
+            const es = (empStats[empId] ||= { minutes:0, cost:0, revenue:0, byType:{}, dates:new Set() });
+            es.minutes += mins; es.cost += cost; es.byType[typeKey] = (es.byType[typeKey]||0) + mins; es.dates.add(date);
+            const se = (slotEmp[`${date}|${hour}`] ||= {}); se[empId] = (se[empId]||0) + mins;
+            const de = (dayEmp[date] ||= {}); de[empId] = (de[empId]||0) + mins;
+          }
+          t = next;
+        }
+      }
+    });
+
+    const hourly = {}; const hourlyDates = new Set();
+    hourlyRows.forEach(r => {
+      const k = `${r.sale_date}|${r.hour}`;
+      hourly[k] = (hourly[k]||0) + (Number(r.revenue)||0);
+      hourlyDates.add(r.sale_date);
+    });
+    const dailyRev = {};
+    salesData.forEach(d => { dailyRev[d.date] = (dailyRev[d.date]||0) + (Number(d.revenue)||0); });
+
+    const slotRevenue = {};     // "date|hour" -> { typeKey: revenue credited }
+    const uncoveredByDate = {}; // sales with no one on the clock
+    let matchedRevenue = 0, estimatedRevenue = 0;
+    datesInRange(startDate, endDate).forEach(date => {
+      const types = byDateType[date] || {};
+      if (hourlyDates.has(date)) {
+        for (let h = 0; h < 24; h++) {
+          const rev = hourly[`${date}|${h}`] || 0;
+          if (!rev) continue;
+          matchedRevenue += rev;
+          const slot = slots[`${date}|${h}`];
+          const totalMin = slot ? Object.values(slot).reduce((s,x)=>s+x.minutes,0) : 0;
+          if (!totalMin) { uncoveredByDate[date] = (uncoveredByDate[date]||0) + rev; continue; }
+          Object.entries(slot).forEach(([tk, x]) => {
+            const share = rev * x.minutes / totalMin;
+            types[tk].revenue += share;
+            const sr = (slotRevenue[`${date}|${h}`] ||= {});
+            sr[tk] = (sr[tk]||0) + share;
+          });
+          Object.entries(slotEmp[`${date}|${h}`] || {}).forEach(([eid, m]) => { if (empStats[eid]) empStats[eid].revenue += rev * m / totalMin; });
+        }
+      } else {
+        const rev = dailyRev[date] || 0;
+        if (!rev) return;
+        estimatedRevenue += rev;
+        const totalMin = Object.values(types).reduce((s,x)=>s+x.minutes,0);
+        if (!totalMin) { uncoveredByDate[date] = (uncoveredByDate[date]||0) + rev; return; }
+        Object.values(types).forEach(x => { const share = rev * x.minutes / totalMin; x.revenue += share; x.estRevenue += share; });
+        Object.entries(dayEmp[date] || {}).forEach(([eid, m]) => { if (empStats[eid]) empStats[eid].revenue += rev * m / totalMin; });
+      }
+    });
+
+    return { startDate, endDate, byDateType, slots, slotRevenue, lastHour, uncoveredByDate, empStats,
+      matchedRevenue, estimatedRevenue, hourlyDates: [...hourlyDates], hasHourly: hourlyDates.size > 0, truncated };
+  }
+
+  // Totals per shift type, with a status against the owner's labor target
+  // (on target = within 5 points; over = more than 5 above; lean = more than 5 below)
+  function summarizeShiftTypes(attr, filterKeys, dateOk) {
+    const totals = {};
+    Object.entries(attr.byDateType).filter(([d]) => !dateOk || dateOk(d)).forEach(([, types]) => Object.entries(types).forEach(([tk, x]) => {
+      if (filterKeys?.length && !filterKeys.includes(tk)) return;
+      const t = (totals[tk] ||= { minutes:0, cost:0, revenue:0, estRevenue:0 });
+      t.minutes += x.minutes; t.cost += x.cost; t.revenue += x.revenue; t.estRevenue += x.estRevenue;
+    }));
+    return Object.entries(totals).map(([key, t]) => {
+      const hours = t.minutes / 60;
+      const laborPct = t.revenue > 0 ? (t.cost / t.revenue) * 100 : null;
+      const tgt = laborTargetPct || 30;
+      const status = laborPct == null ? null : laborPct > tgt + 5 ? "over" : laborPct >= tgt - 5 ? "on" : "lean";
+      return { key, ...shiftTypeMeta(key), hours, cost:t.cost, revenue:t.revenue, estRevenue:t.estRevenue,
+        laborPct, rplh: hours > 0 && t.revenue > 0 ? t.revenue / hours : null, status };
+    }).filter(r => r.hours > 0).sort((a,b) => (b.laborPct ?? -1) - (a.laborPct ?? -1));
+  }
+
+  // The "end it an hour earlier" rule: on each weekday, look at the LAST hour
+  // this shift type works. Where that hour's credited sales averaged less than
+  // its labor cost on 2+ occurrences, trimming it is the suggestion; the
+  // weekly saving is that hour's average labor cost on each of those days.
+  // Uses hourly-matched days only — estimates can't pin down a single hour.
+  function shiftTypeTrimSuggestion(attr, typeKey) {
+    const hourlySet = new Set(attr.hourlyDates);
+    const byDow = {};
+    Object.entries(attr.lastHour[typeKey] || {}).forEach(([date, hour]) => {
+      if (!hourlySet.has(date)) return;
+      const cost = attr.slots[`${date}|${hour}`]?.[typeKey]?.cost || 0;
+      const revenue = attr.slotRevenue[`${date}|${hour}`]?.[typeKey] || 0;
+      (byDow[new Date(date+"T12:00:00").getDay()] ||= []).push({ cost, revenue });
+    });
+    const losing = Object.entries(byDow).map(([dow, list]) => ({
+      dow: +dow, n: list.length,
+      avgCost: list.reduce((s,x)=>s+x.cost,0) / list.length,
+      avgRev:  list.reduce((s,x)=>s+x.revenue,0) / list.length,
+    })).filter(d => d.n >= 2 && d.avgRev < d.avgCost).sort((a,b) => a.dow - b.dow);
+    if (!losing.length) return null;
+    return {
+      days: losing.map(d => DAYS[d.dow]),
+      avgCost: losing.reduce((s,d)=>s+d.avgCost,0) / losing.length,
+      avgRev:  losing.reduce((s,d)=>s+d.avgRev,0) / losing.length,
+      weeklySavings: losing.reduce((s,d)=>s+d.avgCost,0),
+    };
+  }
+
+  async function computeShiftTypeReport(startDate, endDate, grouping, filters={}) {
+    const attr = await computeShiftTypeAttribution(startDate, endDate);
+    const keys = filters.shiftType?.length ? filters.shiftType : null;
+    const fmtRow = (label, t) => {
+      const hours = t.minutes / 60;
+      return {
+        label,
+        shifttypes__hours: Math.round(hours*100)/100,
+        shifttypes__cost: Math.round(t.cost*100)/100,
+        shifttypes__revenue: Math.round(t.revenue*100)/100,
+        shifttypes__laborPct: t.revenue > 0 ? Math.round(t.cost/t.revenue*1000)/10 : null,
+        shifttypes__rplh: hours > 0 && t.revenue > 0 ? Math.round(t.revenue/hours*100)/100 : null,
+      };
+    };
+    if (grouping === "Shift Type") {
+      const rows = summarizeShiftTypes(attr, keys, d => weatherOk(d, filters)).map(r => fmtRow(r.label, { minutes: r.hours*60, cost: r.cost, revenue: r.revenue }));
+      const uncovered = Object.entries(attr.uncoveredByDate).filter(([d]) => weatherOk(d, filters)).reduce((s,[,v])=>s+v,0);
+      if (!keys && uncovered > 0) {
+        rows.push({ label:"No one on clock", shifttypes__hours:0, shifttypes__cost:0,
+          shifttypes__revenue: Math.round(uncovered*100)/100, shifttypes__laborPct:null, shifttypes__rplh:null });
+      }
+      return { rows, truncated: attr.truncated };
+    }
+    const buckets = {};
+    Object.entries(attr.byDateType).forEach(([date, types]) => {
+      if (!weatherOk(date, filters)) return;
+      const b = (buckets[reportBucketKey(date, grouping)] ||= { minutes:0, cost:0, revenue:0 });
+      Object.entries(types).forEach(([tk, x]) => {
+        if (keys && !keys.includes(tk)) return;
+        b.minutes += x.minutes; b.cost += x.cost; b.revenue += x.revenue;
+      });
+    });
+    const rows = reportBucketKeysInRange(startDate, endDate, grouping)
+      .map(key => fmtRow(reportBucketLabel(key, grouping), buckets[key] || { minutes:0, cost:0, revenue:0 }));
+    return { rows, truncated: attr.truncated };
+  }
+
+  // ── WEATHER REPORT ──────────────────────────────────────────────────────
+  // Reviews weather over time. Day: that day's conditions (with how they
+  // changed), high/low, rain. Week / Day of Week: average high/low, total
+  // rain, number of wet days, and a count of each condition.
+  async function computeWeatherReport(startDate, endDate, grouping, filters={}) {
+    const map = weatherMapRef.current;
+    const label = c => (WEATHER_CONDITIONS.find(([v]) => v === c) || [c, c])[1];
+    const dates = datesInRange(startDate, endDate).filter(d => map[d] && weatherOk(d, filters));
+    const buckets = {};
+    dates.forEach(d => { (buckets[reportBucketKey(d, grouping)] ||= []).push(map[d]); });
+    const rows = reportBucketKeysInRange(startDate, endDate, grouping).map(key => {
+      const list = buckets[key] || [];
+      const avg = f => { const v = list.map(x => x[f]).filter(x => x != null); return v.length ? Math.round(v.reduce((s,x)=>s+Number(x),0) / v.length) : null; };
+      let condition = "—";
+      if (list.length === 1 && grouping === "Day") condition = list[0].timeline || label(list[0].condition);
+      else if (list.length) {
+        const counts = {}; list.forEach(x => { counts[x.condition] = (counts[x.condition]||0) + 1; });
+        condition = Object.entries(counts).sort((a,b) => b[1]-a[1]).map(([c,n]) => `${n} ${label(c).toLowerCase()}`).join(" · ");
+      }
+      return {
+        label: reportBucketLabel(key, grouping),
+        weather__condition: condition,
+        weather__highF: avg("high_f"),
+        weather__lowF: avg("low_f"),
+        weather__rainIn: list.length ? Math.round(list.reduce((s,x)=>s+(Number(x.precip_in)||0),0) * 100) / 100 : null,
+        weather__wetDays: list.length ? list.filter(x => ["rainy","storm","snowy"].includes(x.condition)).length : null,
+      };
+    });
+    return { rows, truncated: false };
+  }
+
+  // ── ITEM SALES REPORT ───────────────────────────────────────────────────
+  // From sales_items_daily (Square catalog items, sales before tax).
+  // "Share" = these items' sales ÷ ALL item sales in the same bucket.
+  const ITEM_REPORT_MAX_ROWS = 50000;
+  async function computeItemSalesReport(startDate, endDate, grouping, filters={}) {
+    if (!bizId) return { rows: [], truncated: false };
+    const all = []; const PAGE = 1000; let offset = 0; let truncated = false;
+    while (true) {
+      const page = await dbGet(`sales_items_daily?select=sale_date,item_key,item_name,quantity,revenue&business_id=eq.${bizId}&sale_date=gte.${startDate}&sale_date=lte.${endDate}&order=sale_date.asc&limit=${PAGE}&offset=${offset}`);
+      if (!page?.length) break;
+      all.push(...page);
+      if (page.length < PAGE) break;
+      offset += PAGE;
+      if (all.length >= ITEM_REPORT_MAX_ROWS) { truncated = true; break; }
+    }
+    const pickItems = filters.item?.length ? new Set(filters.item) : null;
+    const inDow = ds => (!filters.dow?.length || filters.dow.includes(reportDowOf(ds))) && weatherOk(ds, filters);
+    const rowsIn = all.filter(r => inDow(r.sale_date));
+    const fmt = (label, units, sales, denom) => ({
+      label,
+      itemsales__units: Math.round(units * 100) / 100,
+      itemsales__sales: Math.round(sales * 100) / 100,
+      itemsales__avgPrice: units > 0 ? Math.round(sales / units * 100) / 100 : null,
+      itemsales__share: denom > 0 ? Math.round(sales / denom * 1000) / 10 : null,
+    });
+
+    if (grouping === "Item") {
+      const byItem = {}; let allSales = 0;
+      rowsIn.forEach(r => {
+        const rev = Number(r.revenue) || 0; allSales += rev;
+        if (pickItems && !pickItems.has(r.item_key)) return;
+        const b = (byItem[r.item_key] ||= { name: r.item_name || "Item", units: 0, sales: 0 });
+        b.units += Number(r.quantity) || 0; b.sales += rev;
+        if (r.item_name) b.name = r.item_name;
+      });
+      const rows = Object.values(byItem).sort((a,b) => b.sales - a.sales).map(b => fmt(b.name, b.units, b.sales, allSales));
+      return { rows, truncated };
+    }
+
+    const buckets = {}; const denomByKey = {};
+    rowsIn.forEach(r => {
+      const key = reportBucketKey(r.sale_date, grouping);
+      const rev = Number(r.revenue) || 0;
+      denomByKey[key] = (denomByKey[key] || 0) + rev;
+      if (pickItems && !pickItems.has(r.item_key)) return;
+      const b = (buckets[key] ||= { units: 0, sales: 0 });
+      b.units += Number(r.quantity) || 0; b.sales += rev;
+    });
+    const rows = reportBucketKeysInRange(startDate, endDate, grouping).map(key => {
+      const b = buckets[key] || { units: 0, sales: 0 };
+      return fmt(reportBucketLabel(key, grouping), b.units, b.sales, denomByKey[key] || 0);
+    });
+    return { rows, truncated };
+  }
+
+  // Insights card body for Shift Type Efficiency
+  function renderShiftTypeRows(data) {
+    const STATUS = {
+      over: { label:"Over target", color:"#A93226" },
+      on:   { label:"On target",   color:"#2D6A4F" },
+      lean: { label:"Lean",        color:"#9A6510" },
+    };
+    const footnote = data.matchedPct == null ? "No sales in this period."
+      : data.matchedPct === 100 ? "All sales matched to shifts by hour from Square."
+      : data.matchedPct === 0 ? "Sales estimated by each shift type's share of labor hours (no hourly sales data)."
+      : `${data.matchedPct}% of sales matched to shifts by hour from Square; the rest estimated by labor-hour share.`;
+    const tgt = laborTargetPct || 30;
+    const scaleMax = Math.max(50, Math.ceil((tgt + 15) / 10) * 10);
+    const bandLeft = Math.max(0, tgt - 5) / scaleMax * 100;
+    const bandWidth = 10 / scaleMax * 100;
+    return (
+      <div style={{borderTop:`1px solid ${T.border}`}}>
+        {data.rows.map(r => {
+          const st = STATUS[r.status];
+          const barPct = r.laborPct == null ? 0 : Math.min(100, r.laborPct / scaleMax * 100);
+          return (
+            <div key={r.key} style={{padding:"9px 16px", borderBottom:`1px solid ${T.border}`, display:"flex", flexDirection:"column", gap:6}}>
+              <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", gap:8}}>
+                <div style={{display:"flex", alignItems:"center", gap:8, minWidth:0, flexWrap:"wrap"}}>
+                  <span style={{width:10, height:10, borderRadius:3, background:r.color, flexShrink:0}}/>
+                  <span style={{fontWeight:700, fontSize:13, color:T.text}}>{r.label}</span>
+                  {st && <span style={{fontSize:10, fontWeight:700, color:st.color, background:st.color+"18", borderRadius:5, padding:"1px 6px"}}>{st.label}</span>}
+                </div>
+                <span style={{fontWeight:800, fontSize:16, color:r.status==="over"?"#A93226":T.text, flexShrink:0}}>{r.laborPct==null ? "—" : `${Math.round(r.laborPct)}%`}</span>
+              </div>
+              <div style={{position:"relative", height:8, background:T.muted, borderRadius:4}}>
+                <div style={{position:"absolute", left:`${bandLeft}%`, width:`${bandWidth}%`, top:-3, bottom:-3, background:"rgba(45,106,79,0.18)", borderRadius:3}}/>
+                <div style={{position:"absolute", left:0, top:0, bottom:0, width:`${barPct}%`, background:r.status==="over"?"#A93226":T.accent, borderRadius:4}}/>
+              </div>
+              <div style={{fontSize:11, color:T.sub}}>
+                {r.hours.toFixed(1)}h · ${Math.round(r.cost).toLocaleString()} labor · ${Math.round(r.revenue).toLocaleString()} sales{r.rplh!=null ? ` · $${Math.round(r.rplh)} per labor hr` : ""}
+              </div>
+            </div>
+          );
+        })}
+        <div style={{padding:"8px 16px", fontSize:10, color:T.sub}}>Shaded band = your {tgt}% target (±5) · bar scale 0–{scaleMax}%</div>
+        {data.uncovered > 0 && (
+          <div style={{margin:"0 16px 10px", padding:"9px 12px", background:"#FEF3E2", borderRadius:9, fontSize:12, color:"#6E4A0E", lineHeight:1.5}}>
+            <strong>${Math.round(data.uncovered).toLocaleString()} in sales with no one clocked in.</strong> Usually the owner covering a gap.
+          </div>
+        )}
+        <div style={{padding:"9px 16px 12px", borderTop:`1px solid ${T.border}`, display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap"}}>
+          <span style={{fontSize:11, color:T.sub, lineHeight:1.5, flex:"1 1 200px"}}>{footnote}</span>
+          <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); }}
+            style={{background:"none", border:"none", color:T.accent, fontWeight:700, fontSize:12, cursor:"pointer", padding:"8px 0"}}>
+            Edit shift types
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   const REPORT_COMPUTE_FNS = {
     timesheet: computeTimesheetReport,
     revenue: (s,e,g,f) => Promise.resolve(computeRevenueReport(s,e,g,f)),
     laborcost: computeLaborCostReport,
     pulse: computePulseReport,
+    shifttypes: computeShiftTypeReport,
+    itemsales: computeItemSalesReport,
+    weather: computeWeatherReport,
   };
 
   // Orchestrator — runs every active source in parallel and merges results
@@ -3344,6 +4131,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // weekday — sources with mismatched bucket counts just leave gaps rather
   // than silently misaligning).
   async function runCustomReport(activeSourceIds, sourceFields, sourceFilters, grouping, startDate, endDate) {
+    const needsWeather = activeSourceIds.includes("weather") || activeSourceIds.some(sid => sourceFilters[sid]?.weather?.length);
+    if (needsWeather && bizId) {
+      try {
+        const rows = (await dbGet(`daily_weather?select=weather_date,condition,high_f,low_f,precip_in,timeline&business_id=eq.${bizId}&weather_date=gte.${startDate}&weather_date=lte.${endDate}&limit=5000`)) || [];
+        const map = {}; rows.forEach(r => { map[r.weather_date] = r; });
+        weatherMapRef.current = map;
+      } catch (e) { console.warn("Weather unavailable:", e); weatherMapRef.current = {}; }
+    }
     const results = await Promise.all(
       activeSourceIds.map(sid => REPORT_COMPUTE_FNS[sid](startDate, endDate, grouping, sourceFilters[sid] || {}))
     );
@@ -3395,12 +4190,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.error || "Sync failed"); }
       const data = await res.json();
       if (Array.isArray(data.salesData)) {
-        setSalesData(prev => {
-          const map = {};
-          prev.forEach(d => map[d.date] = d);
-          data.salesData.forEach(d => map[d.date] = d);
-          return Object.values(map).sort((a,b) => a.date.localeCompare(b.date));
-        });
+        setRawSales(prev => mergeSalesRows(prev, "square", data.salesData));
       }
       setSquareLastSync(data.lastSyncedAt || new Date().toISOString());
       showToast(`Square sales synced ✓${data.daysSynced ? ` (${data.daysSynced} days)` : ""}`, 4000);
@@ -3494,15 +4284,746 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     catch(e) { console.warn("Widget delete failed:", e); showError(friendlyError(e, "Couldn't remove that widget — try again.")); }
   }
 
+  // ── SAVED NO-SHOWS ──────────────────────────────────────────────────────
+  async function excuseNoShow(n) {
+    const status = n.status === "excused" ? "open" : "excused";
+    try {
+      await dbPatch(`attendance_events?id=eq.${n.id}`, { status });
+      addAudit(status === "excused" ? "No-Show Excused" : "No-Show Restored", `${n.employee_name || "Employee"} — ${n.event_date}`, { empName: n.employee_name });
+      runFlagReport(flagReportData?.filterKey);
+    } catch (e) { showError(friendlyError(e, "Couldn't update that no-show — try again.")); }
+  }
+
+  // ── EMPLOYEE EXITS ──────────────────────────────────────────────────────
+  // Deactivating keeps the employee's history and freezes an exit summary,
+  // computed once from the 12 weeks before they left (90 days for reliability).
+  const addYearsStr = (ds, n) => { const [y,m,d] = ds.split("-"); return `${Number(y)+n}-${m}-${d}`; };
+
+  async function computeExitSummary(emp, exitDate, reason) {
+    const start12 = addDays(exitDate, -83), start90 = addDays(exitDate, -89);
+    const [attr, p90res, firstRows, noShowRows] = await Promise.all([
+      computeShiftTypeAttribution(start12, exitDate),
+      fetchPunchesForRange(bizId, start90, exitDate),
+      dbGet(`punches?select=punched_at&business_id=eq.${bizId}&employee_id=eq.${emp.id}&order=punched_at.asc&limit=1`).catch(() => []),
+      dbGet(`attendance_events?select=event_date&business_id=eq.${bizId}&employee_id=eq.${emp.id}&status=eq.open&event_date=gte.${start90}&event_date=lte.${exitDate}`).catch(() => []),
+    ]);
+    const firstName = (emp.name || "They").split(" ")[0];
+    const firstPunch = firstRows?.[0]?.punched_at ? toLocalDateStr(new Date(String(firstRows[0].punched_at).replace(" ","T"))) : null;
+    const created = emp.createdAt ? String(emp.createdAt).slice(0,10) : null;
+    const tenureStart = [firstPunch, created].filter(Boolean).sort()[0] || null;
+    const tenureDays = tenureStart ? Math.max(1, Math.round((new Date(exitDate+"T12:00:00") - new Date(tenureStart+"T12:00:00")) / 86400000) + 1) : null;
+    const weeksIn = tenureDays ? Math.min(12, Math.max(1, Math.ceil(tenureDays / 7))) : 12;
+
+    const es = attr.empStats?.[emp.id] || { minutes:0, cost:0, revenue:0, byType:{}, dates:new Set() };
+    const totalMin = Object.values(attr.empStats || {}).reduce((s, x) => s + x.minutes, 0);
+    const avgWeeklyHours = es.minutes / 60 / weeksIn;
+
+    const dowCounts = [0,0,0,0,0,0,0];
+    [...es.dates].forEach(d => { dowCounts[new Date(d+"T12:00:00").getDay()]++; });
+    let usual = dowCounts.map((c, i) => ({ i, c })).filter(x => x.c >= Math.max(2, Math.ceil(weeksIn * 0.33)));
+    if (!usual.length) usual = dowCounts.map((c, i) => ({ i, c })).filter(x => x.c > 0).sort((a,b) => b.c - a.c).slice(0, 3);
+    const usualIdx = usual.map(x => x.i).sort((a,b) => a - b);
+
+    const mainTypeKey = Object.entries(es.byType).sort((a,b) => b[1] - a[1])[0]?.[0] || null;
+    const typeTotalMin = mainTypeKey ? Object.values(attr.byDateType).reduce((s, types) => s + (types[mainTypeKey]?.minutes || 0), 0) : 0;
+
+    const mine = (p90res.rows || []).filter(p => p.empId === emp.id);
+    const workedDates = new Set(mine.filter(p => p.type === "in" && p.time).map(p => toLocalDateStr(new Date(p.time))));
+    const countFlag = f => mine.filter(p => (p.flags || []).includes(f)).length;
+
+    const peers = employees.filter(e => e.id !== emp.id && emp.role && e.role === emp.role && parseFloat(e.hourlyRate) > 0);
+    const replaceRate = peers.length ? peers.reduce((s, e) => s + parseFloat(e.hourlyRate), 0) / peers.length : (parseFloat(emp.hourlyRate) || 0);
+    const rateBasis = peers.length ? `the average ${emp.role} rate on your team` : `${firstName}'s rate`;
+    const replaceWeekly = avgWeeklyHours * replaceRate;
+
+    const gaps = usualIdx.map(i => {
+      const others = employees.filter(e => e.id !== emp.id && (e.availableDays ?? [0,1,2,3,4,5,6]).includes(i));
+      return others.length <= 1 ? { day: DAY_FULL[i], names: others.map(e => e.name || "Unnamed") } : null;
+    }).filter(Boolean);
+
+    let headline;
+    if (es.minutes === 0) headline = `${firstName} worked no hours in the 12 weeks before leaving, so there's no coverage to replace.`;
+    else headline = `Losing ${firstName} costs about ${fmtMoney(replaceWeekly)} a week to replace${gaps.length ? ` and leaves ${gaps.map(g => g.day).join(" and ")} thin.` : "."}`;
+
+    return {
+      v: 1, name: emp.name || "", role: emp.role || "", color: emp.color || "#888888",
+      exitedAt: exitDate, reason: reason || "", tenureStart, tenureDays,
+      usualDays: usualIdx.map(i => DAYS[i]), mainType: mainTypeKey ? shiftTypeMeta(mainTypeKey).label : null,
+      avgWeeklyHours, weeksIn,
+      shiftsWorked90: workedDates.size, late90: countFlag("LATE"), earlyOut90: countFlag("EARLY_OUT"), noShow90: (noShowRows || []).length,
+      coverageShare: totalMin > 0 ? es.minutes / totalMin : 0,
+      typeShare: typeTotalMin > 0 && mainTypeKey ? (es.byType[mainTypeKey] || 0) / typeTotalMin : 0,
+      salesDuring: es.revenue, weeklySales: es.revenue / weeksIn,
+      salesEstimated: !attr.hasHourly ? "all" : attr.estimatedRevenue > 0 ? "some" : "none",
+      replaceRate, rateBasis, replaceWeekly, gaps, headline,
+      keepUntil: addYearsStr(exitDate, 3),
+    };
+  }
+
+  // Drop the employee's shifts AFTER their exit date (past shifts stay as history)
+  async function removeFutureShifts(empId, exitDate) {
+    const doomed = [];
+    Object.entries(schedule).forEach(([wk, emps]) => {
+      Object.keys(emps?.[empId] || {}).forEach(di => { if (addDays(wk, Number(di)) > exitDate) doomed.push([wk, Number(di)]); });
+    });
+    if (!doomed.length) return;
+    setSchedule(prev => {
+      const n = JSON.parse(JSON.stringify(prev));
+      doomed.forEach(([wk, di]) => { if (n[wk]?.[empId]) delete n[wk][empId][di]; });
+      return n;
+    });
+    await Promise.all(doomed.map(([wk, di]) => weekMap[wk]
+      ? dbDelete(`shifts?week_id=eq.${weekMap[wk]}&employee_id=eq.${empId}&day_index=eq.${di}`).catch(e => console.warn("Future shift delete failed:", e))
+      : null));
+  }
+
+  async function deactivateEmp(emp) {
+    if (exitBusy) return;
+    if (!window.confirm(`Deactivate ${emp.name || "this employee"}? They'll come off the schedule and kiosk from today on. Their hours and pay history are kept.`)) return;
+    const reason = window.prompt("Reason for leaving (optional):", "");
+    if (reason === null) return;
+    setExitBusy(true);
+    try {
+      const exitDate = demoToday;
+      const summary = await computeExitSummary(emp, exitDate, reason.trim());
+      await dbPatch(`employees?id=eq.${emp.id}`, { status: "inactive", exited_at: exitDate, exit_reason: reason.trim() || null });
+      let savedId = null;
+      try {
+        const saved = await dbPost("employee_exits", { business_id: bizId, employee_id: emp.id, exited_at: exitDate, summary });
+        savedId = saved?.[0]?.id || null;
+      } catch (e) { console.warn("Exit summary save failed:", e); showError(friendlyError(e, "Deactivated, but the exit summary didn't save. Open it from Former employees to rebuild it.")); }
+      await removeFutureShifts(emp.id, exitDate);
+      setEmployees(p => p.filter(e => e.id !== emp.id));
+      setFormerEmployees(p => [{ ...emp, status: "inactive", exitedAt: exitDate, exitReason: reason.trim() }, ...p]);
+      setExitSummaries(p => ({ ...p, [emp.id]: { id: savedId, summary } }));
+      setEditEmpId(null);
+      addAudit("Employee Deactivated", `${emp.name || "Employee"} — ${reason.trim() || "no reason given"}`, { empName: emp.name });
+      setFormerOpen(true);
+      setExitViewId(emp.id);
+      showToast(`${emp.name || "Employee"} deactivated — exit summary saved ✓`, 4000);
+    } catch (e) {
+      showError(friendlyError(e, "Couldn't deactivate that employee — try again."));
+    } finally { setExitBusy(false); }
+  }
+
+  async function rebuildExitSummary(emp) {
+    setExitBusy(true);
+    try {
+      const summary = await computeExitSummary(emp, emp.exitedAt || demoToday, emp.exitReason || "");
+      const existing = exitSummaries[emp.id];
+      let id = existing?.id || null;
+      if (id) await dbPatch(`employee_exits?id=eq.${id}`, { summary });
+      else id = (await dbPost("employee_exits", { business_id: bizId, employee_id: emp.id, exited_at: summary.exitedAt, summary }))?.[0]?.id || null;
+      setExitSummaries(p => ({ ...p, [emp.id]: { id, summary } }));
+    } catch (e) { showError(friendlyError(e, "Couldn't build the exit summary — try again.")); }
+    finally { setExitBusy(false); }
+  }
+
+  async function reactivateEmp(emp) {
+    if (!window.confirm(`Reactivate ${emp.name}? They'll return to the schedule and kiosk.`)) return;
+    try {
+      await dbPatch(`employees?id=eq.${emp.id}`, { status: "active", exited_at: null, exit_reason: null });
+      setFormerEmployees(p => p.filter(e => e.id !== emp.id));
+      setEmployees(p => [...p, { ...emp, status: "active", exitedAt: null, exitReason: "" }]);
+      setExitViewId(null);
+      addAudit("Employee Reactivated", emp.name || "Employee", { empName: emp.name });
+      showToast(`${emp.name} is back on the team ✓`);
+    } catch (e) { showError(friendlyError(e, "Couldn't reactivate — try again.")); }
+  }
+
+  async function removePersonalInfo(emp) {
+    if (!window.confirm(`Remove ${emp.name}'s personal info? Their name, PIN, and notes are deleted. Hours and pay stay as an anonymous former employee for your payroll records. This can't be undone.`)) return;
+    const n = formerEmployees.filter(e => /^Former employee #/.test(e.name || "")).length + 1;
+    const anon = `Former employee #${n}`;
+    try {
+      await dbPatch(`employees?id=eq.${emp.id}`, { name: anon, pin: "", notes: "" });
+      await Promise.all([
+        dbPatch(`punches?business_id=eq.${bizId}&employee_id=eq.${emp.id}`, { employee_name: anon }).catch(e => console.warn(e)),
+        dbPatch(`attendance_events?business_id=eq.${bizId}&employee_id=eq.${emp.id}`, { employee_name: anon }).catch(() => {}),
+      ]);
+      const ex = exitSummaries[emp.id];
+      if (ex?.summary) {
+        const summary = { ...ex.summary, name: anon, reason: "" };
+        if (ex.id) await dbPatch(`employee_exits?id=eq.${ex.id}`, { summary }).catch(e => console.warn(e));
+        setExitSummaries(p => ({ ...p, [emp.id]: { ...ex, summary } }));
+      }
+      setFormerEmployees(p => p.map(e => e.id === emp.id ? { ...e, name: anon, pin: "", notes: "", exitReason: "" } : e));
+      setPunches(p => p.map(x => x.empId === emp.id ? { ...x, empName: anon } : x));
+      addAudit("Personal Info Removed", anon, { empName: anon });
+      showToast("Personal info removed ✓");
+    } catch (e) { showError(friendlyError(e, "Couldn't remove personal info — try again.")); }
+  }
+
+  async function deleteEmployeePermanently(emp) {
+    const keepUntil = exitSummaries[emp.id]?.summary?.keepUntil || (emp.exitedAt ? addYearsStr(emp.exitedAt, 3) : null);
+    const early = keepUntil && demoToday < keepUntil;
+    const warn = early
+      ? `Payroll records are usually kept for 3 years after someone leaves (until ${dl(keepUntil)}). Deleting removes ALL of ${emp.name}'s hours, punches, and pay history now. This can't be undone. Delete anyway?`
+      : `Delete everything for ${emp.name}, including hours, punches, and pay history? This can't be undone.`;
+    if (!window.confirm(warn)) return;
+    try {
+      await dbDelete(`punches?business_id=eq.${bizId}&employee_id=eq.${emp.id}`);
+      await dbDelete(`attendance_events?business_id=eq.${bizId}&employee_id=eq.${emp.id}`).catch(() => {});
+      await dbDelete(`employee_exits?business_id=eq.${bizId}&employee_id=eq.${emp.id}`).catch(() => {});
+      await dbDelete(`employees?id=eq.${emp.id}`); // shifts cascade
+      setFormerEmployees(p => p.filter(e => e.id !== emp.id));
+      setExitSummaries(p => { const n = { ...p }; delete n[emp.id]; return n; });
+      setPunches(p => p.filter(x => x.empId !== emp.id));
+      setSchedule(p => { const n = JSON.parse(JSON.stringify(p)); Object.keys(n).forEach(wk => delete n[wk][emp.id]); return n; });
+      setExitViewId(null);
+      addAudit("Employee Deleted", "A former employee's records were permanently deleted");
+      showToast("Deleted permanently");
+    } catch (e) { showError(friendlyError(e, "Couldn't delete — try again.")); }
+  }
+
+  function renderFormerEmployees() {
+    if (!formerEmployees.length) return null;
+    return (
+      <div style={{marginTop:18}}>
+        <button onClick={()=>setFormerOpen(o=>!o)} aria-expanded={formerOpen}
+          style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",background:T.surface,border:`1px solid ${T.border}`,borderRadius:T.radius,padding:"13px 16px",cursor:"pointer"}}>
+          <span style={{fontWeight:800,fontSize:14,color:T.text}}>Former employees <span style={{fontWeight:400,color:T.sub}}>· {formerEmployees.length}</span></span>
+          <span style={{fontSize:12,color:T.sub}}>{formerOpen ? "Hide ▴" : "Show ▾"}</span>
+        </button>
+        {formerOpen && (
+          <Card T={T} style={{marginTop:8,overflow:"hidden"}}>
+            {formerEmployees.map((e, i) => {
+              const keepUntil = exitSummaries[e.id]?.summary?.keepUntil || (e.exitedAt ? addYearsStr(e.exitedAt, 3) : null);
+              const due = keepUntil && demoToday >= keepUntil;
+              return (
+                <button key={e.id} onClick={()=>setExitViewId(e.id)}
+                  style={{width:"100%",display:"flex",alignItems:"center",gap:12,padding:"12px 16px",background:"transparent",border:"none",borderTop:i?`1px solid ${T.border}`:"none",cursor:"pointer",textAlign:"left"}}>
+                  <div style={{width:34,height:34,borderRadius:"50%",background:e.color||T.muted,opacity:0.75,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:13,flexShrink:0}}>{(e.name||"?")[0].toUpperCase()}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:700,fontSize:13,color:T.text}}>{e.name || "Unnamed"}</div>
+                    <div style={{fontSize:11,color:T.sub}}>{e.role ? `${e.role} · ` : ""}Left {e.exitedAt ? dl(e.exitedAt) : "—"}</div>
+                  </div>
+                  {due && <span style={{fontSize:10,fontWeight:700,color:"#9A6510",background:"#FEF3E2",borderRadius:6,padding:"3px 7px"}}>3 years — review</span>}
+                  <span style={{color:T.sub,fontSize:16}}>›</span>
+                </button>
+              );
+            })}
+          </Card>
+        )}
+        {exitViewId && renderExitSummaryModal()}
+      </div>
+    );
+  }
+
+  function renderExitSummaryModal() {
+    const emp = formerEmployees.find(e => e.id === exitViewId);
+    if (!emp) return null;
+    const s = exitSummaries[emp.id]?.summary;
+    const first = (s?.name || emp.name || "They").split(" ")[0];
+    const pctStr = v => `${Math.round((v || 0) * 100)}%`;
+    const tenureStr = d => { if (!d) return "—"; const m = Math.floor(d / 30.44); return m >= 12 ? `${Math.floor(m/12)} yr ${m%12} mo` : m >= 1 ? `${m} mo` : `${d} days`; };
+    const Row = ({ label, value, sub, color }) => (
+      <div style={{padding:"10px 16px",borderTop:`1px solid ${T.border}`}}>
+        <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"baseline"}}>
+          <span style={{fontSize:12,color:T.sub}}>{label}</span>
+          <span style={{fontSize:13,fontWeight:800,color:color||T.text,textAlign:"right"}}>{value}</span>
+        </div>
+        {sub && <div style={{fontSize:11,color:T.sub,marginTop:3,lineHeight:1.45}}>{sub}</div>}
+      </div>
+    );
+    return (
+      <div onClick={()=>setExitViewId(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:1100,display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"24px 16px",overflowY:"auto"}}>
+        <div onClick={e=>e.stopPropagation()} style={{background:T.bg,borderRadius:18,width:"100%",maxWidth:440,overflow:"hidden",boxShadow:"0 20px 60px rgba(0,0,0,0.3)"}}>
+          <div style={{background:T.dark,padding:"14px 16px",display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:44,height:44,borderRadius:"50%",background:s?.color||emp.color||"#888",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:18,flexShrink:0}}>{(s?.name||emp.name||"?")[0].toUpperCase()}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{color:"white",fontWeight:800,fontSize:16}}>{s?.name || emp.name}</div>
+              <div style={{color:"#C9D2CB",fontSize:12}}>{[s?.role || emp.role, emp.exitedAt ? `Left ${dl(emp.exitedAt)}` : null, (s?.reason || emp.exitReason) ? `"${s?.reason || emp.exitReason}"` : null].filter(Boolean).join(" · ")}</div>
+            </div>
+            <button onClick={()=>setExitViewId(null)} aria-label="Close" style={{background:"rgba(255,255,255,0.12)",border:"none",borderRadius:"50%",width:34,height:34,color:"white",fontSize:18,cursor:"pointer",flexShrink:0}}>×</button>
+          </div>
+
+          <div style={{padding:12,display:"flex",flexDirection:"column",gap:12}}>
+            {!s ? (
+              <Card T={T} style={{padding:"18px 16px",textAlign:"center"}}>
+                <div style={{fontSize:13,color:T.text,marginBottom:12}}>No exit summary saved for {first} yet.</div>
+                <button onClick={()=>rebuildExitSummary(emp)} disabled={exitBusy}
+                  style={{background:T.accent,color:"white",border:"none",borderRadius:9,padding:"11px 18px",fontWeight:700,fontSize:13,cursor:"pointer",opacity:exitBusy?0.6:1}}>{exitBusy ? "Building…" : "Build exit summary"}</button>
+              </Card>
+            ) : (
+              <Card T={T} style={{overflow:"hidden"}}>
+                <div style={{padding:"12px 16px",fontSize:13,lineHeight:1.6,color:T.text}}><strong>{s.headline}</strong></div>
+                <Row label="Tenure" value={tenureStr(s.tenureDays)} sub={s.tenureStart ? `${dl(s.tenureStart)} – ${dl(s.exitedAt)}` : null}/>
+                <Row label="Usual schedule" value={s.usualDays?.length ? s.usualDays.join(" · ") : "—"}
+                  sub={`${s.mainType ? `Mostly ${s.mainType} · ` : ""}${(s.avgWeeklyHours||0).toFixed(1)}h a week on average (last ${s.weeksIn} week${s.weeksIn!==1?"s":""})`}/>
+                <Row label="Reliability, last 90 days" value={`${s.late90} late · ${s.noShow90} no-show${s.noShow90!==1?"s":""}`}
+                  sub={`${s.earlyOut90} early clock-out${s.earlyOut90!==1?"s":""} · ${s.shiftsWorked90} shift${s.shiftsWorked90!==1?"s":""} worked`}/>
+                <Row label="Share of coverage" value={`${pctStr(s.coverageShare)} of all hours`} sub={s.mainType ? `${pctStr(s.typeShare)} of ${s.mainType} hours` : null}/>
+                <Row label={`Sales during ${first}'s shifts`} value={fmtMoney(s.salesDuring || 0)}
+                  sub={`Last ${s.weeksIn} week${s.weeksIn!==1?"s":""} · about ${fmtMoney(s.weeklySales || 0)} a week${s.salesEstimated==="all" ? " · estimated (no hourly sales data)" : s.salesEstimated==="some" ? " · partly estimated" : ""}`}/>
+                <Row label="Cost to replace their hours" value={`${fmtMoney(s.replaceWeekly || 0)} / week`}
+                  sub={`${(s.avgWeeklyHours||0).toFixed(1)}h × $${(s.replaceRate||0).toFixed(2)}, ${s.rateBasis}`}/>
+                {s.gaps?.length > 0 && (
+                  <div style={{margin:"4px 16px 14px",padding:"10px 12px",background:"#FEF3E2",borderRadius:9,fontSize:12,color:"#6E4A0E",lineHeight:1.5}}>
+                    <strong>Coverage gap:</strong> {s.gaps.map(g => `${g.day}: ${g.names.length ? `only ${g.names.join(", ")} ${g.names.length===1?"is":"are"} available` : "no one else is available"}`).join(" · ")}. Consider training or hiring before it comes up on the schedule.
+                  </div>
+                )}
+              </Card>
+            )}
+
+            <Card T={T} style={{overflow:"hidden"}}>
+              <div style={{padding:"11px 16px",background:T.muted,borderBottom:`1px solid ${T.border}`,fontWeight:700,fontSize:13,color:T.text}}>Records</div>
+              <div style={{padding:"11px 16px",fontSize:12,color:T.sub,lineHeight:1.5}}>
+                Hours, punches, and pay records are kept until <strong style={{color:T.text}}>{dl(s?.keepUntil || (emp.exitedAt ? addYearsStr(emp.exitedAt, 3) : demoToday))}</strong> (3 years after leaving). This list will flag them for review then.
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:8,padding:"0 16px 14px"}}>
+                <button onClick={()=>reactivateEmp(emp)} style={{background:T.surface,color:T.accent,border:`1px solid ${T.border}`,borderRadius:10,padding:"13px 0",fontWeight:700,fontSize:13,cursor:"pointer"}}>Reactivate {first}</button>
+                {!/^Former employee #/.test(emp.name || "") && (
+                  <>
+                    <button onClick={()=>removePersonalInfo(emp)} style={{background:T.surface,color:T.text,border:`1px solid ${T.border}`,borderRadius:10,padding:"13px 0",fontWeight:700,fontSize:13,cursor:"pointer"}}>Remove personal info</button>
+                    <div style={{fontSize:11,color:T.sub,lineHeight:1.45,marginTop:-2}}>Deletes their name, PIN, and notes. Hours and pay stay as an anonymous former employee. Names already written in the audit log aren't changed.</div>
+                  </>
+                )}
+                <button onClick={()=>deleteEmployeePermanently(emp)} style={{background:"#FDECEA",color:"#A93226",border:"none",borderRadius:10,padding:"13px 0",fontWeight:700,fontSize:13,cursor:"pointer"}}>Delete permanently</button>
+                <div style={{fontSize:11,color:T.sub,lineHeight:1.45,marginTop:-2}}>Removes everything, including hours and pay. You'll be warned if it's inside the 3-year window.</div>
+              </div>
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── PRICE CHANGES ───────────────────────────────────────────────────────
+  // Price changes come ONLY from the item's set price in the Square catalog
+  // (catalog_price_history, written by the sync). Prices charged at the
+  // register are never used, so overrides — even several days running — can't
+  // register as a change. Sales outcomes come from sales_items_daily: the 28
+  // days before vs. after, weekday-matched, on days the business had sales.
+  async function loadPriceChanges() {
+    if (!bizId) return;
+    setPriceData({ loading: true });
+    try {
+      const history = (await dbGet(`catalog_price_history?select=item_key,item_name,price,effective_date,is_baseline&business_id=eq.${bizId}&order=effective_date.asc&limit=20000`)) || [];
+      const since = addDays(demoToday, -240);
+      const sales = []; const PAGE = 1000; let offset = 0;
+      while (sales.length < 50000) {
+        const page = await dbGet(`sales_items_daily?select=sale_date,item_key,quantity,revenue&business_id=eq.${bizId}&sale_date=gte.${since}&order=sale_date.asc&limit=${PAGE}&offset=${offset}`);
+        if (!page?.length) break;
+        sales.push(...page);
+        if (page.length < PAGE) break;
+        offset += PAGE;
+      }
+      const trackingSince = history.length ? history[0].effective_date : null;
+      setPriceData({ loading: false, hasTracking: history.length > 0, trackingSince, changes: detectPriceChanges(history, sales) });
+    } catch (e) {
+      console.warn("Price changes unavailable:", e);
+      setPriceData({ loading: false, hasTracking: false, changes: [], error: true });
+    }
+  }
+
+  function detectPriceChanges(history, salesRows) {
+    const totalByDate = {};
+    salesData.forEach(d => { totalByDate[d.date] = (totalByDate[d.date]||0) + (Number(d.revenue)||0); });
+    const bizDays = Object.keys(totalByDate).filter(d => totalByDate[d] > 0);
+    const salesByItem = {};
+    salesRows.forEach(r => { (salesByItem[r.item_key] ||= {})[r.sale_date] = { qty: Number(r.quantity)||0, rev: Number(r.revenue)||0 }; });
+    const histByItem = {};
+    history.forEach(h => { (histByItem[h.item_key] ||= []).push(h); });
+    const cutoff = addDays(demoToday, -180);
+    const changes = [];
+    Object.entries(histByItem).forEach(([key, rows]) => {
+      rows.sort((x, y) => x.effective_date.localeCompare(y.effective_date));
+      for (let i = 1; i < rows.length; i++) {
+        const prev = Number(rows[i-1].price), cur = Number(rows[i].price);
+        if (rows[i].is_baseline || Math.abs(cur - prev) < 0.005) continue;
+        if (rows[i].effective_date < cutoff) continue;
+        const it = { name: rows[i].item_name || rows[i-1].item_name || "Item", map: salesByItem[key] || {} };
+        changes.push(evaluatePriceChange(key, it, rows[i].effective_date, prev, cur, bizDays, totalByDate));
+      }
+    });
+    return changes.sort((x, y) => y.date.localeCompare(x.date));
+  }
+
+  function evaluatePriceChange(key, it, date, oldPrice, newPrice, bizDays, totalByDate) {
+    const beforeStart = addDays(date, -28), afterEnd = addDays(date, 27) < demoToday ? addDays(date, 27) : demoToday;
+    const before = bizDays.filter(ds => ds >= beforeStart && ds < date);
+    const after  = bizDays.filter(ds => ds >= date && ds <= afterEnd);
+    const group = dates => {
+      const by = {};
+      dates.forEach(ds => {
+        const dow = new Date(ds+"T12:00:00").getDay();
+        const x = it.map[ds];
+        (by[dow] ||= []).push({ qty: x?.qty || 0, rev: x?.rev || 0, total: totalByDate[ds] || 0 });
+      });
+      return by;
+    };
+    const b = group(before), a = group(after);
+    const dows = Object.keys(b).filter(k => a[k]);
+    const avg = (by, f) => dows.length ? dows.reduce((s, k) => s + by[k].reduce((t, x) => t + x[f], 0) / by[k].length, 0) / dows.length : 0;
+    const m = f => { const bv = avg(b, f), av = avg(a, f); return { before: bv, after: av, pct: bv > 0 ? (av - bv) / bv * 100 : null }; };
+    const qty = m("qty"), rev = m("rev"), total = m("total");
+    const tooEarly = after.length < 14;
+    const verdict = tooEarly ? "early" : rev.pct == null ? "flat" : rev.pct >= 2 ? "working" : rev.pct <= -2 ? "not" : "flat";
+    return { key, name: it.name, date, oldPrice, newPrice, pricePct: oldPrice > 0 ? (newPrice - oldPrice) / oldPrice * 100 : null,
+      afterDays: after.length, weeksAfter: Math.floor(after.length / 7), qty, rev, total, tooEarly, verdict };
+  }
+
+  function renderPriceChangesPanel() {
+    const pd = priceData;
+    const money2 = n => `$${Number(n).toFixed(2)}`;
+    const signPct = p => p == null ? "—" : `${p >= 0 ? "+" : "−"}${Math.abs(p).toFixed(0)}%`;
+    const Metric = ({ label, m, money, goodWhenUp=true }) => {
+      const good = m.pct == null ? null : goodWhenUp ? m.pct >= 0 : m.pct < 0;
+      const fmtV = v => money ? fmtMoney(v) : (Math.round(v * 10) / 10).toLocaleString();
+      return (
+        <div style={{background:T.bg,borderRadius:8,padding:"8px 9px",minWidth:0}}>
+          <div style={{fontSize:10,color:T.sub,fontWeight:700,lineHeight:1.3}}>{label}</div>
+          <div style={{fontSize:11,color:T.sub,marginTop:4}}>{fmtV(m.before)} → <strong style={{color:T.text}}>{fmtV(m.after)}</strong></div>
+          <div style={{fontSize:13,fontWeight:800,marginTop:2,color:good==null?T.sub:good?"#2D6A4F":"#9A4E0C"}}>{signPct(m.pct)}</div>
+        </div>
+      );
+    };
+    return (
+      <Card T={T} style={{padding:"14px 16px"}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12,gap:12}}>
+          <div>
+            <div style={{fontWeight:800,fontSize:14,color:T.text}}>💲 Price Changes</div>
+            <div style={{fontSize:11,color:T.sub,marginTop:2,lineHeight:1.5}}>Found automatically from your Square prices. Each compares the 4 weeks before and after the change, same weekdays.</div>
+          </div>
+          <button onClick={()=>setInsightsPanel(null)} aria-label="Close" style={{background:T.muted,border:"none",borderRadius:"50%",width:28,height:28,fontSize:16,cursor:"pointer",color:T.sub,flexShrink:0}}>×</button>
+        </div>
+        {(!pd || pd.loading) && <div style={{fontSize:12,color:T.sub,textAlign:"center",padding:"20px 0"}}>Checking your item prices…</div>}
+        {pd && !pd.loading && !pd.hasTracking && (
+          <div style={{fontSize:12,color:T.sub,textAlign:"center",padding:"18px 8px",lineHeight:1.6}}>
+            Price tracking hasn't started yet. It reads the prices set in your Square item catalog, so reconnect Square once (Dashboard → Disconnect, then Connect) and sync. Cash-only sales aren't tracked.
+          </div>
+        )}
+        {pd && !pd.loading && pd.hasTracking && !pd.changes.length && (
+          <div style={{fontSize:12,color:T.sub,textAlign:"center",padding:"18px 8px",lineHeight:1.6}}>No price changes since tracking started on {dl(pd.trackingSince)}. Changes you make to item prices in Square will show up here.</div>
+        )}
+        {pd && !pd.loading && pd.changes?.length > 0 && (
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {pd.changes.map(c => (
+              <div key={`${c.key}-${c.date}`} style={{border:`1px solid ${T.border}`,borderRadius:12,padding:"12px 13px",display:"flex",flexDirection:"column",gap:9}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8}}>
+                  <span style={{fontWeight:800,fontSize:14,color:T.text}}>{c.name}</span>
+                  <span style={{fontWeight:800,fontSize:13,color:T.text,flexShrink:0}}>{money2(c.oldPrice)} → {money2(c.newPrice)}</span>
+                </div>
+                <div style={{fontSize:11,color:T.sub,marginTop:-5}}>Changed {dl(c.date)}{c.pricePct!=null ? ` · ${signPct(c.pricePct)}` : ""}{c.tooEarly ? "" : ` · ${c.weeksAfter >= 4 ? "4 weeks" : `${c.weeksAfter} week${c.weeksAfter!==1?"s":""}`} after so far`}</div>
+                {c.tooEarly ? (
+                  <>
+                    <div style={{fontSize:12,color:T.text}}>Too early to tell: {c.afterDays} of 14 days of sales so far.</div>
+                    <div style={{height:6,background:T.muted,borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${Math.min(100, c.afterDays/14*100)}%`,background:T.accent}}/></div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:6}}>
+                      <Metric label="Sold per day" m={c.qty}/>
+                      <Metric label="Item sales per day" m={c.rev} money/>
+                      <Metric label="All sales per day" m={c.total} money/>
+                    </div>
+                    <div style={{background:c.verdict==="working"?"#E8F4EE":c.verdict==="not"?"#FEF3E2":T.muted,color:c.verdict==="working"?"#1B4332":c.verdict==="not"?"#6E4A0E":T.text,borderRadius:9,padding:"9px 11px",fontSize:12,lineHeight:1.5}}>
+                      {c.verdict==="working" && <><strong>Working.</strong> It brings in more per day{c.qty.pct!=null && c.qty.pct < 0 ? " even though a few fewer sell" : ""}.</>}
+                      {c.verdict==="not" && <><strong>Not working so far.</strong> {c.newPrice > c.oldPrice ? "The drop in sales is bigger than the price increase." : "The lower price isn't bringing in enough extra sales to make up for it."}</>}
+                      {c.verdict==="flat" && <><strong>No clear change yet.</strong> Item sales per day are about the same as before.</>}
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{fontSize:11,color:T.sub,lineHeight:1.5,marginTop:12}}>Uses the set price in your Square item catalog. Prices overridden at the register are never counted as a change. Weather, holidays, and other changes on the same dates can also move these numbers.</div>
+      </Card>
+    );
+  }
+
+  // ── BREAK-EVEN ENGINE ───────────────────────────────────────────────────
+  // Per day: scheduled labor + an even share of weekly fixed costs (open days
+  // only), divided by (1 − % of sales costs) = sales needed to break even.
+  // Labor-target view: labor ÷ target %. Sales per day = actual where it's
+  // already recorded, forecast (average of past same weekdays) otherwise.
+  function costWeeklyAmount(c) {
+    const amt = Number(c.amount) || 0;
+    if (c.kind === "percent") return 0;
+    if (c.frequency === "month") return amt * 12 / 52;
+    if (c.frequency === "year") return amt / 52;
+    return amt;
+  }
+  function computeBreakEven(weekStart) {
+    const dates = weekDatesFromSunday(weekStart).map(toInputDate);
+    const laborByDay = DAYS.map((_, i) => employees.reduce((s, e) => s + eDayH(weekStart, e.id, i) * (parseFloat(e.hourlyRate)||0), 0));
+    const fixedWeekly = costs.reduce((s, c) => s + costWeeklyAmount(c), 0);
+    const pctCosts = costs.filter(c => c.kind === "percent").reduce((s, c) => s + (Number(c.amount)||0), 0) / 100;
+    const openIdx = (daysOpen && daysOpen.length) ? daysOpen : [0,1,2,3,4,5,6];
+    const fixedPerOpenDay = fixedWeekly / openIdx.length;
+    const target = (laborTargetPct || 30) / 100;
+    const pctOk = pctCosts < 1;
+    const forecast = getForecast("thisWeek", salesData, weekStart);
+    const actualByDate = {};
+    salesData.forEach(d => { actualByDate[d.date] = (actualByDate[d.date]||0) + (Number(d.revenue)||0); });
+    const days = dates.map((date, i) => {
+      const fixedShare = openIdx.includes(i) ? fixedPerOpenDay : 0;
+      const labor = laborByDay[i];
+      const breakEven = pctOk ? (labor + fixedShare) / (1 - pctCosts) : null;
+      const targetNeed = labor / target;
+      let sales = null, isActual = false;
+      if (date <= demoToday && actualByDate[date] != null) { sales = actualByDate[date]; isActual = true; }
+      else if (forecast.hasEnoughData) { sales = forecast.days[i]?.projectedRevenue ?? null; }
+      return { date, day: DAYS[i], labor, fixedShare, breakEven, targetNeed, sales, isActual };
+    });
+    const sum = k => days.reduce((s, d) => s + (d[k] || 0), 0);
+    const salesKnown = days.every(d => d.sales != null);
+    return {
+      days, salesKnown, pctOk, pctCosts, fixedWeekly, target,
+      labor: sum("labor"), breakEven: pctOk ? sum("breakEven") : null, targetNeed: sum("targetNeed"),
+      sales: salesKnown ? sum("sales") : null, anyActual: days.some(d => d.isActual),
+    };
+  }
+
+  async function saveCostDraft() {
+    const d = costDraft;
+    if (!d) return;
+    if (!d.name?.trim()) { showToast("Give this cost a name"); return; }
+    const amount = parseFloat(d.amount);
+    if (isNaN(amount) || amount < 0) { showToast("Enter a valid amount"); return; }
+    if (d.kind === "percent" && amount >= 100) { showToast("A % of sales cost has to be under 100%"); return; }
+    const row = { name: d.name.trim(), amount, kind: d.kind, frequency: d.kind === "percent" ? null : (d.frequency || "week") };
+    try {
+      if (d.id) {
+        setCosts(prev => prev.map(c => c.id === d.id ? { ...c, ...row } : c));
+        await dbPatch(`business_costs?id=eq.${d.id}`, row);
+      } else {
+        const saved = await dbPost("business_costs", { business_id: bizId, ...row, sort_order: costs.length });
+        if (saved?.[0]) setCosts(prev => [...prev, saved[0]]);
+      }
+      setCostDraft(null);
+      showToast(d.id ? "Cost updated ✓" : "Cost added ✓");
+    } catch (e) { showError(friendlyError(e, "Couldn't save that cost — try again.")); }
+  }
+  async function removeCost(id) {
+    if (!window.confirm("Remove this cost?")) return;
+    const prev = costs;
+    setCosts(p => p.filter(c => c.id !== id));
+    try { await dbDelete(`business_costs?id=eq.${id}`); }
+    catch (e) { setCosts(prev); showError(friendlyError(e, "Couldn't remove that cost — try again.")); }
+  }
+  function changeLaborTarget() {
+    const v = window.prompt("Labor cost target, as a % of sales:", String(laborTargetPct));
+    if (v === null) return;
+    const n = parseFloat(v);
+    if (isNaN(n) || n <= 0 || n >= 100) { showToast("Enter a number between 1 and 99"); return; }
+    setLaborTargetPct(n);
+    saveBizSettings({ labor_target_pct: n });
+    showToast(`Labor target set to ${n}% ✓`);
+  }
+
+  const fmtMoney = n => "$" + Math.round(n).toLocaleString("en-US");
+
+  // Schedule tab — Option C: one collapsed "Week check" line under the budget
+  function renderWeekCheck(weekKey) {
+    const be = computeBreakEven(weekKey);
+    const targetPct = laborTargetPct || 30;
+    const laborPct = be.sales > 0 ? (be.labor / be.sales) * 100 : null;
+    const belowDays = be.pctOk ? be.days.filter(d => d.sales != null && d.breakEven > 0 && d.sales < d.breakEven) : [];
+    const overtime = employees.filter(e => eWkH(weekKey, e.id) > 40);
+    const checks = [
+      {
+        label: "Labor % of sales",
+        value: laborPct == null ? "Needs 2+ weeks of sales history" : `${laborPct.toFixed(0)}% · target ${targetPct}%`,
+        flag: laborPct != null && laborPct > targetPct,
+      },
+      {
+        label: "Break-even",
+        value: !be.pctOk ? "Check your % costs" : !be.salesKnown && !be.days.some(d => d.sales != null) ? "Needs 2+ weeks of sales history"
+          : belowDays.length === 0 ? "All days covered" : `${belowDays.map(d => d.day).join(", ")} below`,
+        flag: belowDays.length > 0,
+      },
+      {
+        label: "Over 40 hours",
+        value: overtime.length === 0 ? "No one" : overtime.map(e => `${e.name || "Unnamed"} · ${eWkH(weekKey, e.id)}h`).join(", "),
+        flag: overtime.length > 0,
+      },
+    ];
+    const flagged = checks.filter(c => c.flag).length;
+    return (
+      <div style={{marginTop:8}}>
+        <button onClick={()=>setWeekCheckOpen(o=>!o)} aria-expanded={weekCheckOpen}
+          style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",background:T.bg,border:`1px solid ${T.border}`,borderRadius:9,padding:"9px 11px",cursor:"pointer",minHeight:40}}>
+          <span style={{display:"flex",alignItems:"center",gap:8,fontSize:12,fontWeight:700,color:T.text}}>
+            <span style={{background:flagged?"#C0392B":"#4CAF7D",color:"white",borderRadius:999,minWidth:20,height:20,padding:"0 6px",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>{flagged || "✓"}</span>
+            Week check
+          </span>
+          <span style={{fontSize:11,color:T.sub}}>{weekCheckOpen ? "Hide ▴" : "Show ▾"}</span>
+        </button>
+        {weekCheckOpen && (
+          <div style={{marginTop:6,border:`1px solid ${T.border}`,borderRadius:9,overflow:"hidden",background:T.surface}}>
+            {checks.map((c, i) => (
+              <div key={c.label} style={{display:"flex",justifyContent:"space-between",gap:10,padding:"8px 11px",borderTop:i?`1px solid ${T.border}`:"none",fontSize:11.5}}>
+                <span style={{color:T.sub,flexShrink:0}}>{c.label}</span>
+                <span style={{fontWeight:700,textAlign:"right",color:c.flag?"#C0392B":T.text}}>{c.value}</span>
+              </div>
+            ))}
+            <button onClick={()=>setTab("dashboard")}
+              style={{width:"100%",background:"transparent",border:"none",borderTop:`1px solid ${T.border}`,padding:"9px 0",fontSize:11,fontWeight:700,color:T.accent,cursor:"pointer"}}>
+              Open break-even on Dashboard →
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Dashboard — Break-even card (its own card, not a user widget)
+  function renderBreakEvenCard() {
+    const be = computeBreakEven(payWeek);
+    const isTarget = beView === "target";
+    const need = isTarget ? be.targetNeed : be.breakEven;
+    const needKey = isTarget ? "targetNeed" : "breakEven";
+    const wkDates = weekDatesFromSunday(payWeek);
+    const gap = be.sales != null && need != null ? be.sales - need : null;
+    const scaleMax = Math.max(1, ...be.days.map(d => Math.max(d.sales || 0, d[needKey] || 0))) * 1.08;
+    const short = be.days.filter(d => d.sales != null && d[needKey] > 0 && d.sales < d[needKey]);
+    const thinnest = be.days.filter(d => d.sales != null && d[needKey] > 0).sort((a,b) => (a.sales - a[needKey]) - (b.sales - b[needKey]))[0];
+    let summary = null;
+    if (need != null && be.days.some(d => d.sales != null)) {
+      summary = short.length
+        ? `${short.map(d => d.day).join(", ")} ${short.length === 1 ? "doesn't" : "don't"} cover ${isTarget ? `labor at ${laborTargetPct}%` : "costs"}.`
+        : thinnest ? `Every day covers ${isTarget ? `labor at ${laborTargetPct}%` : "its costs"}. ${thinnest.day} has the thinnest cushion at ${fmtMoney(thinnest.sales - thinnest[needKey])}.` : null;
+    }
+    const inputStyle = {border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:13,outline:"none",background:T.surface,color:T.text,width:"100%",boxSizing:"border-box"};
+    return (
+      <div style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,overflow:"hidden"}}>
+        <div style={{padding:"10px 15px",background:T.dark,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{color:"white",fontWeight:800,fontSize:14}}>Break-even</span>
+          <span style={{color:"#999",fontSize:11}}>{dl(wkDates[0])} – {dl(wkDates[6])}</span>
+        </div>
+        <div style={{padding:"13px 16px",display:"flex",flexDirection:"column",gap:12}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:4,background:T.muted,borderRadius:9,padding:3}}>
+            {[["breakeven","Break-even"],["target",`Labor at ${laborTargetPct}%`]].map(([k,l]) => (
+              <button key={k} onClick={()=>setBeView(k)}
+                style={{background:beView===k?T.surface:"transparent",color:beView===k?T.text:T.sub,border:"none",borderRadius:7,padding:"9px 0",fontWeight:700,fontSize:12,cursor:"pointer",boxShadow:beView===k?T.shadow:"none"}}>{l}</button>
+            ))}
+          </div>
+
+          {!isTarget && !be.pctOk ? (
+            <div style={{background:"#FDECEA",color:"#A93226",borderRadius:9,padding:"10px 12px",fontSize:12}}>Your % of sales costs add up to 100% or more, so there's no break-even point. Check them below.</div>
+          ) : (
+            <>
+              <div>
+                <div style={{fontSize:12,color:T.sub}}>{isTarget ? `Sales needed to keep labor at ${laborTargetPct}%` : "Sales needed to cover all costs"}</div>
+                <div style={{fontSize:28,fontWeight:800,color:T.text,lineHeight:1.15}}>{fmtMoney(need || 0)}</div>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <div style={{background:T.muted,borderRadius:9,padding:"9px 11px"}}>
+                  <div style={{fontSize:10,color:T.sub,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.04em"}}>{be.anyActual ? "Sales (actual + forecast)" : "Forecast sales"}</div>
+                  <div style={{fontSize:17,fontWeight:800,color:T.text,marginTop:2}}>{be.sales != null ? fmtMoney(be.sales) : "—"}</div>
+                </div>
+                <div style={{background:T.muted,borderRadius:9,padding:"9px 11px"}}>
+                  <div style={{fontSize:10,color:T.sub,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.04em"}}>{gap == null ? "Gap" : gap >= 0 ? "Cushion" : "Short"}</div>
+                  <div style={{fontSize:17,fontWeight:800,marginTop:2,color:gap == null ? T.sub : gap >= 0 ? "#2D6A4F" : "#B5651D"}}>{gap == null ? "—" : `${gap >= 0 ? "+" : "−"}${fmtMoney(Math.abs(gap))}`}</div>
+                </div>
+              </div>
+              {be.sales == null && <div style={{fontSize:11,color:T.sub}}>Forecast needs 2+ weeks of sales history for every weekday. Sales needed is still accurate.</div>}
+              {summary && <div style={{fontSize:12,color:T.text,lineHeight:1.5}}>{summary}</div>}
+
+              <div style={{background:T.bg,borderRadius:9,padding:"6px 10px 8px"}}>
+                {be.days.map(d => {
+                  const below = d.sales != null && d[needKey] > 0 && d.sales < d[needKey];
+                  const diff = d.sales != null ? d.sales - d[needKey] : null;
+                  return (
+                    <div key={d.date} style={{display:"grid",gridTemplateColumns:"34px minmax(0,1fr) 66px",alignItems:"center",gap:8,padding:"6px 0"}}>
+                      <span style={{fontSize:12,fontWeight:700,color:T.text}}>{d.day}</span>
+                      <div style={{position:"relative",height:16,background:T.muted,borderRadius:4}}>
+                        {d.sales != null && <div style={{position:"absolute",left:0,top:0,bottom:0,width:`${Math.min(100, d.sales/scaleMax*100)}%`,background:below?"#C26A12":"#2D6A4F",opacity:d.isActual?1:0.7,borderRadius:4}}/>}
+                        {d[needKey] > 0 && <div style={{position:"absolute",left:`${Math.min(100, d[needKey]/scaleMax*100)}%`,top:-4,bottom:-4,width:2,background:T.text}}/>}
+                      </div>
+                      <span style={{fontSize:11,fontWeight:700,textAlign:"right",color:diff == null ? T.sub : below ? "#9A4E0C" : "#2D6A4F"}}>
+                        {diff == null ? fmtMoney(d[needKey]) : `${diff >= 0 ? "+" : "−"}${fmtMoney(Math.abs(diff))}`}
+                      </span>
+                    </div>
+                  );
+                })}
+                <div style={{display:"flex",gap:12,flexWrap:"wrap",paddingTop:6,fontSize:10,color:T.sub}}>
+                  <span style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:12,height:8,background:"#2D6A4F",borderRadius:2}}/>Sales {be.anyActual ? "(lighter = forecast)" : "forecast"}</span>
+                  <span style={{display:"flex",alignItems:"center",gap:5}}><span style={{width:2,height:12,background:T.text}}/>{isTarget ? "Needed at target" : "Break-even"}</span>
+                </div>
+              </div>
+            </>
+          )}
+
+          <div style={{border:`1px solid ${T.border}`,borderRadius:9,overflow:"hidden"}}>
+            <button onClick={()=>setCostsOpen(o=>!o)} aria-expanded={costsOpen}
+              style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",padding:"11px 12px",background:"transparent",border:"none",cursor:"pointer"}}>
+              <span style={{fontSize:12,fontWeight:800,color:T.text}}>Your costs <span style={{fontWeight:400,color:T.sub}}>· {costs.length + 1}</span></span>
+              <span style={{fontSize:11,color:T.sub}}>{fmtMoney(be.labor + be.fixedWeekly)}/wk{be.pctCosts > 0 ? ` + ${(be.pctCosts*100).toFixed(1)}%` : ""} {costsOpen ? "▴" : "▾"}</span>
+            </button>
+            {costsOpen && (
+              <div style={{padding:"0 12px 10px"}}>
+                <div style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto",gap:8,padding:"9px 0",borderTop:`1px solid ${T.border}`,fontSize:12.5}}>
+                  <span style={{fontWeight:600,color:T.text}}>Scheduled labor <span style={{fontSize:11,color:T.sub,fontWeight:400}}>· from schedule</span></span>
+                  <span style={{fontWeight:800,color:T.text}}>{fmtMoney(be.labor)}</span>
+                </div>
+                {costs.map(c => (
+                  <div key={c.id} style={{display:"grid",gridTemplateColumns:"minmax(0,1fr) auto auto",alignItems:"center",gap:8,padding:"6px 0",borderTop:`1px solid ${T.border}`,fontSize:12.5}}>
+                    <button onClick={()=>setCostDraft({ id:c.id, name:c.name, amount:String(c.amount), kind:c.kind, frequency:c.frequency || "week" })}
+                      style={{background:"none",border:"none",padding:"4px 0",textAlign:"left",cursor:"pointer",minWidth:0}}>
+                      <div style={{fontWeight:600,color:T.text}}>{c.name}</div>
+                      <div style={{fontSize:11,color:T.sub}}>{c.kind === "percent" ? `${c.amount}% of sales` : `${fmtMoney(c.amount)} / ${c.frequency || "week"}`}</div>
+                    </button>
+                    <span style={{fontWeight:800,color:T.text}}>{c.kind === "percent" ? `${c.amount}%` : fmtMoney(costWeeklyAmount(c))}</span>
+                    <button onClick={()=>removeCost(c.id)} aria-label={`Remove ${c.name}`}
+                      style={{background:"none",border:"none",color:T.sub,fontSize:15,cursor:"pointer",padding:"6px 4px"}}>✕</button>
+                  </div>
+                ))}
+                {costDraft ? (
+                  <div style={{marginTop:8,background:T.bg,borderRadius:9,padding:10,display:"flex",flexDirection:"column",gap:8}}>
+                    <input value={costDraft.name} onChange={e=>setCostDraft(d=>({...d,name:e.target.value}))} placeholder="Name, e.g. Rent" aria-label="Cost name" style={inputStyle}/>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                      <input type="number" min="0" step="0.01" value={costDraft.amount} onChange={e=>setCostDraft(d=>({...d,amount:e.target.value}))}
+                        placeholder={costDraft.kind === "percent" ? "e.g. 2.9" : "e.g. 2000"} aria-label="Amount" style={inputStyle}/>
+                      <select value={costDraft.kind === "percent" ? "percent" : (costDraft.frequency || "week")} aria-label="How it's charged"
+                        onChange={e=>{ const v=e.target.value; setCostDraft(d=> v==="percent" ? {...d,kind:"percent"} : {...d,kind:"fixed",frequency:v}); }}
+                        style={inputStyle}>
+                        <option value="week">$ per week</option>
+                        <option value="month">$ per month</option>
+                        <option value="year">$ per year</option>
+                        <option value="percent">% of sales</option>
+                      </select>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:8}}>
+                      <button onClick={()=>setCostDraft(null)} style={{background:"transparent",border:`1px solid ${T.border}`,borderRadius:8,padding:"10px 0",fontSize:12,fontWeight:700,color:T.sub,cursor:"pointer"}}>Cancel</button>
+                      <button onClick={saveCostDraft} style={{background:T.accent,border:"none",borderRadius:8,padding:"10px 0",fontSize:12,fontWeight:700,color:"white",cursor:"pointer"}}>{costDraft.id ? "Save changes" : "Add cost"}</button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={()=>setCostDraft({ name:"", amount:"", kind:"fixed", frequency:"month" })}
+                    style={{width:"100%",marginTop:8,background:"transparent",border:`1.5px dashed ${T.border}`,borderRadius:8,color:T.accent,fontWeight:700,fontSize:12,padding:"11px 0",cursor:"pointer"}}>
+                    + Add cost
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div style={{fontSize:11,color:T.sub,lineHeight:1.5}}>
+            Break-even = (labor + fixed costs) ÷ (1 − % of sales costs). Monthly and yearly costs are converted to weekly and spread evenly across open days. Forecast = average of past same weekdays.
+          </div>
+          <button onClick={changeLaborTarget}
+            style={{alignSelf:"flex-start",background:"transparent",color:T.accent,border:`1px solid ${T.border}`,borderRadius:8,padding:"9px 14px",fontWeight:700,fontSize:12,cursor:"pointer"}}>
+            Change labor target ({laborTargetPct}%)
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   // Resolves a widget config into the underlying Sales/Labor/Forecast data
   function computeWidgetResult(config) {
+    const anchor = isDemoBiz ? DEMO_TODAY_ANCHOR : undefined;
     const filter = FILTERS.find(f => f.key === config.time_range);
     if (filter?.kind === "forecast") {
-      return { kind:"forecast", forecast: getForecast(config.time_range, salesData) };
+      return { kind:"forecast", forecast: getForecast(config.time_range, salesData, anchor) };
     }
     const result = { kind:"history" };
-    if (config.data_source !== "labor") result.sales = getSales(config.time_range, salesData);
-    if (config.data_source !== "sales") result.labor = getLabor(config.time_range, salesData, employees, eDayH);
+    if (config.data_source !== "labor") result.sales = getSales(config.time_range, salesData, anchor);
+    if (config.data_source !== "sales") result.labor = getLabor(config.time_range, salesData, employees, eDayH, anchor);
     return result;
   }
 
@@ -3602,7 +5123,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         body = result.forecast.hasEnoughData ? (
           <>
             <div style={{fontSize:22,fontWeight:800,color:primaryColor}}>${result.forecast.total.toFixed(0)}</div>
-            <div style={{fontSize:11,color:T.sub,marginTop:2}}>suggested labor: ${Math.round(result.forecast.total*0.3)}</div>
+            <div style={{fontSize:11,color:T.sub,marginTop:2}}>suggested labor: ${Math.round(result.forecast.total*(laborTargetPct||30)/100)}</div>
           </>
         ) : <div style={{fontSize:12,color:T.sub}}>Need {MIN_DOW_SAMPLES}+ weeks of history</div>;
       } else {
@@ -3726,21 +5247,21 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   function saveCashEntry(date, amount) {
     const num = parseFloat(amount);
     setCashEntries(prev => ({ ...prev, [date]: isNaN(num) ? 0 : num }));
-    setSalesData(prev => {
-      const map = {};
-      prev.forEach(d => map[d.date] = d);
-      if (!isNaN(num) && num > 0) {
-        map[date] = { date, revenue: num, transactions: 0, source: 'cash' };
-      } else {
-        delete map[date];
-      }
-      const merged = Object.values(map).sort((a,b)=>a.date.localeCompare(b.date));
-      if (bizId) {
-        const row = { business_id: bizId, sale_date: date, revenue: isNaN(num)?0:num, transactions: 0, source: 'cash' };
-        dbUpsert('sales_data', [row]).catch(e => { console.warn("Cash entry save failed:", e); showError(friendlyError(e, "That cash entry didn't save — try again.")); });
-      }
-      return merged;
+    // Only the cash row for this day changes; that day's Square sales stay put
+    setRawSales(prev => {
+      const rest = prev.filter(r => !(r.source === "cash" && r.date === date));
+      return !isNaN(num) && num > 0 ? [...rest, { date, revenue: num, transactions: 0, source: "cash" }] : rest;
     });
+    if (bizId) {
+      const save = !isNaN(num) && num > 0
+        ? sbFetch("sales_data?on_conflict=business_id,sale_date,source", {
+            method:"POST",
+            body:JSON.stringify([{ business_id: bizId, sale_date: date, revenue: num, transactions: 0, source: "cash" }]),
+            headers:{ "Prefer":"resolution=merge-duplicates,return=minimal" },
+          })
+        : dbDelete(`sales_data?business_id=eq.${bizId}&sale_date=eq.${date}&source=eq.cash`);
+      save.catch(e => { console.warn("Cash entry save failed:", e); showError(friendlyError(e, "That cash entry didn't save — try again.")); });
+    }
   }
 
   async function saveBizSettings(fields) {
@@ -3770,7 +5291,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   }, [themeId]);
 
   function exportData() {
-    const data = { _v:2, _at:new Date().toISOString(), biz,weekMode,wk1Start,wk2Start,weeklyBudget,employees,schedule,published,themeId,activeWeek,punches,auditLog,recognition,shiftTypes,salesData };
+    const data = { _v:2, _at:new Date().toISOString(), biz,weekMode,wk1Start,wk2Start,weeklyBudget,employees,schedule,published,themeId,activeWeek,punches,auditLog,recognition,shiftTypes,salesData: rawSales };
     const a = document.createElement("a");
     a.href = URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"}));
     a.download = `${biz.replace(/\s+/g,"_")}_${new Date().toISOString().split("T")[0]}.json`;
@@ -3797,7 +5318,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         if (d.auditLog) setAuditLog(d.auditLog);
         if (d.recognition) setRecognition(d.recognition);
         if (d.shiftTypes) setShiftTypes(d.shiftTypes);
-        if (d.salesData) setSalesData(d.salesData);
+        if (d.salesData) setRawSales(d.salesData.map(r => ({ ...r, source: r.source === "cash" ? "cash" : "square" })));
         if (d.templates) setTemplates(d.templates);
         showToast("Imported successfully ✓");
       } catch { alert("Invalid ShiftWise export file."); }
@@ -4099,6 +5620,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     setTemplates(p => [tpl, ...p]);
     addAudit("Template Saved", `"${tpl.name}"`);
     showToast(`Template "${tpl.name}" saved ✓`);
+    if (bizId) {
+      dbPost("templates", { business_id: bizId, name: tpl.name, schedule_data: tpl.scheduleData, employee_snapshot: tpl.employeeSnapshot })
+        .then(rows => { const id = rows?.[0]?.id; if (id) setTemplates(p => p.map(t => t.id === tpl.id ? { ...t, id } : t)); })
+        .catch(e => showError(friendlyError(e, "That template didn't save — it may disappear on refresh.")));
+    }
   }
 
   function applyTemplate(tpl) {
@@ -4433,6 +5959,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     );
   }
 
+  timePickerImpl.current = TimePickerModal;
+
   const TABS = [
     {key:"grid",        icon:"📋", label:"Schedule"},
     {key:"coverage",    icon:"🚨", label:"Coverage"},
@@ -4441,6 +5969,44 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     {key:"settings",    icon:"⚙️", label:"Settings"},
     ...(isDemoBiz ? [] : [{key:"feedback", icon:"💬", label:"Feedback"}]),
   ];
+
+  // ── SET NEW PASSWORD (arrived from reset email) ──────────────────────────
+  if (authState === "recovery") {
+    const inputStyle = {width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"};
+    return (
+      <div style={{minHeight:"100vh",background:"#0A0F0A",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Inter',system-ui,sans-serif"}}>
+        <style>{CSS}</style>
+        <div style={{width:"100%",maxWidth:400}}>
+          <div style={{textAlign:"center",marginBottom:32}}>
+            <div style={{width:56,height:56,background:"#2D6A4F",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 16px"}}>🔑</div>
+            <div style={{fontSize:22,fontWeight:900,color:"white"}}>Set a new password</div>
+            <div style={{fontSize:13,color:"#9CA3AF",marginTop:6}}>Choose a new password for your ShiftWise account.</div>
+          </div>
+          <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:18,padding:"28px 28px 24px"}}>
+            <form onSubmit={handleSetNewPassword} style={{display:"flex",flexDirection:"column",gap:12}}>
+              <input value={newPass} onChange={e=>setNewPass(e.target.value)} placeholder="New password"
+                type="password" name="new-password" autoComplete="new-password" style={inputStyle}/>
+              <input value={newPass2} onChange={e=>setNewPass2(e.target.value)} placeholder="Confirm new password"
+                type="password" name="confirm-password" autoComplete="new-password" style={inputStyle}/>
+              {authError && (
+                <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
+                  {authError}
+                </div>
+              )}
+              <button type="submit"
+                style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
+                Save New Password
+              </button>
+            </form>
+            <button type="button" onClick={()=>{ setAuthError(""); setAuthMode("forgot"); setResetSent(false); setAuthState("unauthenticated"); }}
+              style={{width:"100%",background:"none",border:"none",color:"#9CA3AF",fontSize:13,fontWeight:600,cursor:"pointer",marginTop:14}}>
+              Request a new reset link
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // ── LOGIN SCREEN ───────────────────────────────────────────────────────────
   if (authState === "unauthenticated") {
@@ -4690,9 +6256,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         setPunchReviews(prev => { const n={...prev}; delete n[p.id]; return n; });
         if (bizId) {
           // Archive the full punch record before deleting it
-          await fetch(`https://kyrjgfeowmflazywsuir.supabase.co/rest/v1/deleted_punches`, {
+          await fetch(`${SUPABASE_URL}/rest/v1/deleted_punches`, {
             method:"POST",
-            headers:{ apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cmpnZmVvd21mbGF6eXdzdWlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzMzMTQsImV4cCI6MjA5NTA0OTMxNH0.njuDREVF4oIgTYN6wLXKw6Hw_KsFzKPoMabkld_jy0E", Authorization:`Bearer ${token}`, "Content-Type":"application/json", Prefer:"return=minimal" },
+            headers:{ apikey:SUPABASE_ANON_KEY, Authorization:`Bearer ${getToken()}`, "Content-Type":"application/json", Prefer:"return=minimal" },
             body: JSON.stringify({
               business_id: bizId,
               original_punch_id: p.id,
@@ -4707,9 +6273,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             })
           }).catch(e=>console.warn("Archive punch failed:", e));
 
-          await fetch(`https://kyrjgfeowmflazywsuir.supabase.co/rest/v1/punches?id=eq.${p.id}`, {
+          await fetch(`${SUPABASE_URL}/rest/v1/punches?id=eq.${p.id}`, {
             method:"DELETE",
-            headers:{ apikey:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cmpnZmVvd21mbGF6eXdzdWlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzMzMTQsImV4cCI6MjA5NTA0OTMxNH0.njuDREVF4oIgTYN6wLXKw6Hw_KsFzKPoMabkld_jy0E", Authorization:`Bearer ${token}` }
+            headers:{ apikey:SUPABASE_ANON_KEY, Authorization:`Bearer ${getToken()}` }
           });
         }
         addAudit("Punch Deleted", `${emp.name} — ${dateStr}: ${typeLabel} at ${new Date(p.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})} removed (${reasonText})`, {empName:emp.name});
@@ -4758,6 +6324,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     );
   }
 
+
+  punchRowImpl.current = PunchRowInline;
+  tsCellPopupImpl.current = TimesheetCellPopup;
 
   function getTsShift(empId, di) {
     return tsSchedKey ? (schedule?.[tsSchedKey]?.[empId]?.[di] || null) : null;
@@ -4853,6 +6422,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
       reviewStatuses: {...punchReviews},
     };
     setTimesheetHistory(p=>[snapshot,...p]);
+    if (bizId) {
+      dbPost("timesheet_locks", {
+        business_id: bizId, week_start: snapshot.weekStart, label: snapshot.label, snapshot,
+        total_hours: snapshot.totalApprovedHrs, total_pay: snapshot.totalApprovedPay,
+      })
+        .then(rows => { const id = rows?.[0]?.id; if (id) setTimesheetHistory(p => p.map(s => s.id === snapshot.id ? { ...s, id } : s)); })
+        .catch(e => showError(friendlyError(e, "That locked timesheet didn't save — export the CSV to be safe.")));
+    }
     addAudit("Timesheet Locked", `Week of ${tsWkLabel} — ${totalApprovedHrs.toFixed(1)}h approved · $${totalApprovedPay.toFixed(0)}`);
     showToast(`Timesheet locked ✓ — ${tsWkLabel}`, 4000);
   }
@@ -5071,7 +6648,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   const typeLabel = p.type==="in"?"Clock in":p.type==="out"?"Clock out":p.type==="break_out"?"Break start":"Break end";
                   const typeColor = p.type==="in"||p.type==="break_in" ? "#2D6A4F" : "#C0392B";
                   return (
-                    <PunchRowInline key={p.id||i} p={p} i={i} total={dp.length}
+                    <PunchRowShell key={p.id||i} p={p} i={i} total={dp.length}
                       typeLabel={typeLabel} typeColor={typeColor}
                       emp={emp} dateStr={dateStr} bizId={bizId}
                       setPunches={setPunches} setPunchReviews={setPunchReviews}
@@ -5381,7 +6958,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       const wkDates = Array.from({length:7},(_,i)=>{ const d=new Date(snap.weekStart+"T12:00:00"); d.setUTCDate(d.getUTCDate()+i); return toLocalDateStr(d); });
                       exportTimesheetCSV(wkDates, snap.label, snap.employees, snap.reviewStatuses);
                     }} style={{background:T.accent,color:"white",border:"none",borderRadius:7,padding:"5px 12px",fontWeight:700,fontSize:11,cursor:"pointer"}}>Export CSV ↓</button>
-                    <button onClick={()=>{ if(window.confirm("Delete this saved timesheet?")) setTimesheetHistory(p=>p.filter(s=>s.id!==snap.id)); }}
+                    <button onClick={()=>{ if(window.confirm("Delete this saved timesheet?")) { setTimesheetHistory(p=>p.filter(s=>s.id!==snap.id)); if (bizId) dbDelete(`timesheet_locks?id=eq.${snap.id}`).catch(e=>showError(friendlyError(e,"Couldn't delete that saved timesheet — try again."))); } }}
                       style={{background:"#FDECEA",color:"#C0392B",border:"none",borderRadius:7,padding:"5px 10px",fontWeight:700,fontSize:11,cursor:"pointer"}}>Delete</button>
                   </div>
                 </div>
@@ -5407,7 +6984,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         </div>
       )}
 
-      <TimesheetCellPopup bizId={bizId}/>
+      <TsCellPopupShell bizId={bizId}/>
     </div>
   );
 })()}
@@ -5556,6 +7133,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         </div>
                       );
                     })()}
+                    {activeWeek && renderWeekCheck(activeWeek)}
                   </div>
                 </div>
               </Card>
@@ -6029,6 +7607,25 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               setOpenShifts(p => [...p, entry]);
               addAudit("Shift Opened", `${employees.find(e=>e.id===empId)?.name} — ${DAY_FULL[dayIdx]} shift marked open`);
               showToast("Shift marked open ✓");
+              // Save it, so it survives a refresh and the nightly job doesn't
+              // count this call-out as a no-show
+              (async () => {
+                if (!bizId) return;
+                try {
+                  let weekId = weekMap[weekKey];
+                  if (!weekId) {
+                    const rows = await dbUpsert("schedule_weeks", [{ business_id:bizId, week_start:weekKey, label:"Week" }]);
+                    weekId = rows?.[0]?.id;
+                    if (weekId) setWeekMap(p => ({ ...p, [weekKey]: weekId }));
+                  }
+                  const saved = await dbPost("open_shifts", {
+                    business_id: bizId, week_id: weekId, employee_id: empId, day_index: dayIdx,
+                    shift_start: shift.start, shift_end: shift.end, reason: entry.reason, status: "open",
+                  });
+                  const realId = saved?.[0]?.id;
+                  if (realId) setOpenShifts(p => p.map(o => o.id === entry.id ? { ...o, id: realId } : o));
+                } catch (e) { showError(friendlyError(e, "That call-out didn't save — it may disappear on refresh.")); }
+              })();
             }
 
             function markClaimed(openId, claimedByEmpId) {
@@ -6036,11 +7633,15 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               setOpenShifts(p => p.map(o => o.id===openId ? {...o, status:"claimed", claimedBy:claimedByEmpId} : o));
               addAudit("Shift Claimed", `${claimer?.name} claimed open shift`);
               showToast(`${claimer?.name} assigned ✓`);
+              if (bizId) dbPatch(`open_shifts?id=eq.${openId}`, { status:"claimed", claimed_by: claimedByEmpId })
+                .catch(e => showError(friendlyError(e, "That assignment didn't save — try again.")));
             }
 
             function cancelOpen(openId) {
               setOpenShifts(p => p.map(o => o.id===openId ? {...o, status:"cancelled"} : o));
               showToast("Open shift cancelled");
+              if (bizId) dbPatch(`open_shifts?id=eq.${openId}`, { status:"cancelled" })
+                .catch(e => showError(friendlyError(e, "That change didn't save — try again.")));
             }
 
             // Week-level open shifts (all weeks)
@@ -6401,10 +8002,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                 const suggestedDailyRevenue = forecastThisWeek.hasEnoughData
                   ? forecastThisWeek.total / 7
                   : totalRevenue > 0 ? totalRevenue / Math.max(1, wkSales.length) : 0;
-                const suggestedDailyLabor = Math.round(suggestedDailyRevenue * 0.3);
+                const suggestedDailyLabor = Math.round(suggestedDailyRevenue * (laborTargetPct||30) / 100);
                 const suggestedWeeklyBudget = suggestedDailyLabor * 7;
 
-                const forecastNext7 = getForecast("next7", salesData);
+                const forecastNext7 = getForecast("next7", salesData, isDemoBiz ? DEMO_TODAY_ANCHOR : undefined);
                 const dayData = salesThisWeek.days.map((d, i) => {
                   const labor = laborThisWeek.days[i].labor;
                   return { day:DAYS[i], date:d.date, revenue:d.revenue, labor, pct:d.revenue>0?(labor/d.revenue)*100:null };
@@ -6464,7 +8065,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           { l:"Forecast (Next 7 Days)",
                             v: forecastNext7.hasEnoughData ? `$${forecastNext7.total.toFixed(0)}` : "Need more data",
                             c: forecastNext7.hasEnoughData ? "#3A9BE8" : T.sub,
-                            sub: forecastNext7.hasEnoughData ? `suggested labor: $${Math.round(forecastNext7.total*0.3)}` : `min ${MIN_DOW_SAMPLES} weeks of history needed` },
+                            sub: forecastNext7.hasEnoughData ? `suggested labor: $${Math.round(forecastNext7.total*(laborTargetPct||30)/100)}` : `min ${MIN_DOW_SAMPLES} weeks of history needed` },
                         ].map(s=>(
                           <div key={s.l} style={{background:T.muted,borderRadius:10,padding:"10px 12px"}}>
                             <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4}}>{s.l}</div>
@@ -6478,7 +8079,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                             ? (payWeekLabor / forecastThisWeek.total) * 100 : null;
                           const actPct  = totalRevenue > 0 ? laborCostPct : null;
                           const dispPct = laborPctMode === "projected" ? projPct : actPct;
-                          const pctColor = dispPct == null ? T.sub : dispPct > 35 ? "#C0392B" : dispPct > 25 ? "#E8A93A" : "#4CAF7D";
+                          const tgtP = laborTargetPct || 30;
+                          const pctColor = dispPct == null ? T.sub : dispPct > tgtP + 5 ? "#C0392B" : dispPct > tgtP - 5 ? "#E8A93A" : "#4CAF7D";
                           const pctSub = laborPctMode === "projected"
                             ? (forecastThisWeek.hasEnoughData ? `vs $${forecastThisWeek.total.toFixed(0)} forecasted` : "need more history")
                             : (totalRevenue > 0 ? `vs $${totalRevenue.toFixed(0)} actual` : "no revenue yet");
@@ -6498,7 +8100,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                               <div style={{fontSize:20,fontWeight:800,color:pctColor,lineHeight:1}}>{dispPct!=null?`${dispPct.toFixed(1)}%`:"-"}</div>
                               <div style={{fontSize:9,color:T.sub,marginTop:4}}>{pctSub}</div>
                               <div style={{fontSize:9,color:T.sub,marginTop:6,padding:"4px 6px",background:laborPctMode==="projected"?"#EAF4EF":"#FEF3E2",borderRadius:5}}>
-                                {dispPct!=null?(dispPct<25?"✓ Under target":dispPct<=35?"✓ On target":"⚠ Over target"):""} target: 25–35%
+                                {dispPct!=null?(dispPct<tgtP-5?"✓ Under target":dispPct<=tgtP+5?"✓ On target":"⚠ Over target"):""} target: {tgtP}%
                               </div>
                             </div>
                           );
@@ -6543,7 +8145,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                               <span style={{color:T.sub,flex:1}}>{d.revenue>0?`$${d.revenue.toFixed(0)} sales`:"no sales data"}</span>
                             )}
                             <span style={{color:T.sub,flex:1,textAlign:"right"}}>{d.labor>0?`$${d.labor.toFixed(0)} labor`:"-"}</span>
-                            <span style={{width:44,textAlign:"right",fontWeight:700,color:d.pct==null?T.sub:d.pct>35?"#C0392B":d.pct>25?"#E8A93A":"#4CAF7D"}}>{d.pct!=null?`${d.pct.toFixed(0)}%`:"-"}</span>
+                            <span style={{width:44,textAlign:"right",fontWeight:700,color:d.pct==null?T.sub:d.pct>(laborTargetPct||30)+5?"#C0392B":d.pct>(laborTargetPct||30)-5?"#E8A93A":"#4CAF7D"}}>{d.pct!=null?`${d.pct.toFixed(0)}%`:"-"}</span>
                           </div>
                         ))}
                       </div>
@@ -6567,7 +8169,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                             <div style={{flex:1,minWidth:200}}>
                               <div style={{fontSize:12,fontWeight:700,color:T.text,marginBottom:2}}>Suggested labor budget</div>
                               <div style={{fontSize:11,color:T.sub,lineHeight:1.5}}>
-                                Based on your historical daily revenue, you should target <strong style={{color:T.text}}>${suggestedDailyLabor}/day</strong> in labor (30% of avg daily revenue). Across 7 days that's <strong style={{color:T.accent}}>${suggestedWeeklyBudget}/week</strong>.
+                                Based on your historical daily revenue, you should target <strong style={{color:T.text}}>${suggestedDailyLabor}/day</strong> in labor ({laborTargetPct||30}% of avg daily revenue). Across 7 days that's <strong style={{color:T.accent}}>${suggestedWeeklyBudget}/week</strong>.
                               </div>
                             </div>
                             <button onClick={()=>{
@@ -6606,7 +8208,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                               Import CSV
                               <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
                             </label>
-                            <button onClick={()=>{ if(window.confirm("Clear all imported sales data?")) { setSalesData([]); if(bizId) dbDelete(`sales_data?business_id=eq.${bizId}`).catch(e=>{ console.warn("Clear sales data failed:", e); showError(friendlyError(e, "Couldn't clear that data — try again.")); }); }; }}
+                            <button onClick={()=>{ if(window.confirm("Clear all imported sales data?")) { setRawSales(p => p.filter(r => r.source === "cash")); if(bizId) dbDelete(`sales_data?business_id=eq.${bizId}`).catch(e=>{ console.warn("Clear sales data failed:", e); showError(friendlyError(e, "Couldn't clear that data — try again.")); }); }; }}
                               style={{background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
                               Clear Data
                             </button>
@@ -6617,6 +8219,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </div>
                 );
               })()}
+
+              {/* Break-even */}
+              {renderBreakEvenCard()}
 
               {/* Your Widgets */}
               <div style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,overflow:"hidden"}}>
@@ -6814,7 +8419,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   <div>
                     <h2 style={{margin:"0 0 4px", fontSize:20, fontWeight:800, color:T.text}}>Business Insights</h2>
                     <p style={{margin:0, fontSize:12, color:T.sub, lineHeight:1.5}}>
-                      AI analysis of your schedule, labor costs, and team — powered by Claude.
+                      Automated analysis of your schedule, labor costs, and team.
                       {insight && <span style={{marginLeft:6, color:T.sub}}>Last updated {new Date(insight.generatedAt).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"})}</span>}
                     </p>
                   </div>
@@ -6856,6 +8461,11 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       title="Flag Patterns report"
                       style={{background:insightsPanel==="flags"?T.accent:T.muted,border:`1px solid ${insightsPanel==="flags"?T.accent:T.border}`,borderRadius:9,height:38,padding:"0 14px",display:"flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:insightsPanel==="flags"?"white":T.sub,cursor:"pointer",transition:"all 0.15s"}}>
                       🚩 Flag Patterns
+                    </button>
+                    <button onClick={()=>{ const next = insightsPanel!=="prices"; setInsightsPanel(next?"prices":null); if (next && !priceData) loadPriceChanges(); }}
+                      title="Price Changes"
+                      style={{background:insightsPanel==="prices"?T.accent:T.muted,border:`1px solid ${insightsPanel==="prices"?T.accent:T.border}`,borderRadius:9,height:38,padding:"0 14px",display:"flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:insightsPanel==="prices"?"white":T.sub,cursor:"pointer",transition:"all 0.15s"}}>
+                      💲 Price Changes{priceData?.changes?.length ? ` · ${priceData.changes.length}` : ""}
                     </button>
                   </div>
                 </div>
@@ -6905,6 +8515,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </Card>
                 )}
 
+                {/* Price Changes panel */}
+                {insightsPanel==="prices" && renderPriceChangesPanel()}
+
                 {/* Flag Patterns report panel */}
                 {insightsPanel==="flags" && (
                   <Card T={T} style={{padding:"14px 16px"}}>
@@ -6942,6 +8555,27 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                           <span style={{fontSize:15,flexShrink:0}}>💬</span>
                           <span>{flagReportData.narrative}</span>
                         </div>
+
+                        {flagReportData.noShows?.length > 0 && (
+                          <div style={{marginBottom:16}}>
+                            <SectionLabel T={T}>No-shows ({flagReportData.noShows.filter(n=>n.status!=="excused").length})</SectionLabel>
+                            <div style={{display:"flex",flexDirection:"column",marginTop:6,border:`1px solid ${T.border}`,borderRadius:9,overflow:"hidden"}}>
+                              {flagReportData.noShows.map((n,i) => (
+                                <div key={n.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",borderTop:i?`1px solid ${T.border}`:"none",opacity:n.status==="excused"?0.6:1}}>
+                                  <div style={{flex:1,minWidth:0}}>
+                                    <div style={{fontSize:12.5,fontWeight:700,color:T.text}}>{n.employee_name || "Employee"}</div>
+                                    <div style={{fontSize:11,color:T.sub}}>{dl(n.event_date)} · {fmt(parseFloat(n.shift_start))}–{fmt(parseFloat(n.shift_end))}{n.status==="excused" ? " · excused" : ""}</div>
+                                  </div>
+                                  <button onClick={()=>excuseNoShow(n)}
+                                    style={{background:n.status==="excused"?"transparent":T.muted,border:`1px solid ${T.border}`,borderRadius:8,padding:"8px 12px",fontSize:11,fontWeight:700,color:T.sub,cursor:"pointer",flexShrink:0}}>
+                                    {n.status==="excused" ? "Undo" : "Excuse"}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <div style={{fontSize:10.5,color:T.sub,marginTop:5}}>Saved each night when a shift ends with no clock-in. Excused no-shows aren't counted.</div>
+                          </div>
+                        )}
 
                         {flagReportData.total > 0 && (
                           <>
@@ -7046,11 +8680,33 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                                     ))}
                                   </div>
                                 </div>
-                                {def.filters.map(fl=>(
+                                {sid==="shifttypes" && (
+                                  <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); }}
+                                    style={{alignSelf:"flex-start",background:"none",border:"none",color:T.accent,fontWeight:700,fontSize:11,cursor:"pointer",padding:0}}>
+                                    Edit shift types
+                                  </button>
+                                )}
+                                {def.filters.map(fl=>{
+                                  const sKey = `${sid}|${fl.id}`;
+                                  const q = (rbFilterSearch[sKey] || "").trim().toLowerCase();
+                                  const chosen = state.filters[fl.id] || [];
+                                  const long = fl.options.length > 12;
+                                  const shown = !long ? fl.options
+                                    : q ? fl.options.filter(o => chosen.includes(o.value) || o.label.toLowerCase().includes(q)).slice(0, 40)
+                                        : fl.options.filter((o, i) => i < 12 || chosen.includes(o.value)); // top sellers first
+                                  return (
                                   <div key={fl.id}>
-                                    <div style={{fontSize:9.5,color:T.sub,fontWeight:700,letterSpacing:0.4,marginBottom:5}}>FILTER · {fl.label.toUpperCase()}</div>
+                                    <div style={{fontSize:9.5,color:T.sub,fontWeight:700,letterSpacing:0.4,marginBottom:5}}>FILTER · {fl.label.toUpperCase()}{long && chosen.length ? ` · ${chosen.length} picked` : ""}</div>
+                                    {sid==="itemsales" && fl.id==="item" && itemNames && itemNames.length===0 && (
+                                      <div style={{fontSize:11,color:T.sub,marginBottom:4}}>No item sales yet — items appear after a Square sync.</div>
+                                    )}
+                                    {long && (
+                                      <input value={rbFilterSearch[sKey] || ""} onChange={e=>setRbFilterSearch(p=>({...p,[sKey]:e.target.value}))}
+                                        placeholder={`Search ${fl.options.length} ${fl.label.toLowerCase()}s…`} aria-label={`Search ${fl.label}`}
+                                        style={{width:"100%",boxSizing:"border-box",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:12,outline:"none",background:T.surface,color:T.text,marginBottom:6}}/>
+                                    )}
                                     <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                                      {fl.options.map(opt=>{
+                                      {shown.map(opt=>{
                                         const active = (state.filters[fl.id]||[]).includes(opt.value);
                                         return (
                                           <button key={opt.value} onClick={()=>rbToggleFilter(sid,fl.id,opt.value)}
@@ -7064,7 +8720,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                                       })}
                                     </div>
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             )}
                           </div>
@@ -7074,8 +8731,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
                     <SectionLabel T={T}>Group By</SectionLabel>
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
-                      {["Day","Week","Day of Week","Employee"].map(g=>(
-                        <button key={g} onClick={()=>{setRbGrouping(g);setRbResult(null);if(g==="Employee"&&rbVizType==="number")setRbVizType(null);}}
+                      {["Day","Week","Day of Week","Employee","Shift Type","Item"].map(g=>(
+                        <button key={g} onClick={()=>{setRbGrouping(g);setRbResult(null);if((g==="Employee"||g==="Shift Type"||g==="Item")&&rbVizType==="number")setRbVizType(null);}}
                           style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
                             border:`1px solid ${rbGrouping===g?T.accent:T.border}`,background:rbGrouping===g?T.accent:"transparent",color:rbGrouping===g?"white":T.sub}}>{g}</button>
                       ))}
@@ -7104,7 +8761,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     <SectionLabel T={T}>Visualization</SectionLabel>
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
                       {[{id:"number",label:"Number"},{id:"line",label:"Line"},{id:"bar",label:"Bar"},{id:"area",label:"Area"},{id:"combo",label:"Combo"},{id:"table",label:"Table"}]
-                        .filter(v => !(rbGrouping==="Employee" && v.id==="number")) // "Number" shows a first-vs-last trend delta, which is meaningless across employee rows rather than a time series
+                        .filter(v => !((rbGrouping==="Employee" || rbGrouping==="Shift Type" || rbGrouping==="Item") && v.id==="number")) // "Number" shows a first-vs-last trend delta, which is meaningless across employee rows rather than a time series
                         .map(v=>(
                         <button key={v.id} onClick={()=>setRbVizType(v.id)}
                           style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
@@ -7427,6 +9084,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                               }}>{section.urgency}</span>
                             </div>
                             <div style={{padding:"13px 16px", fontSize:13, color:T.text, lineHeight:1.7}}>{section.insight}</div>
+                            {section.shiftTypes && renderShiftTypeRows(section.shiftTypes)}
                           </Card>
                         ))}
                       </div>
@@ -7521,6 +9179,58 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                     </Card>
 
                     <div>
+                      <Card T={T} style={{padding:"14px 16px", marginBottom:16}}>
+                        <SectionLabel T={T}>Business Address</SectionLabel>
+                        <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Used to record each day's weather automatically, so you can see how weather affects sales and staffing.</p>
+                        {(() => {
+                          const a = addrDraft || bizAddress;
+                          const setA = f => setAddrDraft({ ...(addrDraft || bizAddress), ...f });
+                          const inp = {width:"100%",boxSizing:"border-box",border:`1.5px solid ${T.border}`,borderRadius:9,padding:"11px 13px",fontSize:14,outline:"none",color:T.text,background:T.surface};
+                          const changed = addrDraft && JSON.stringify(addrDraft) !== JSON.stringify(bizAddress);
+                          const has = bizAddress.line || bizAddress.zip;
+                          const status = !has ? null
+                            : weatherInfo.status === "not_found" ? { c:"#A93226", t:"We couldn't find that address. Check the street and ZIP, then save again." }
+                            : weatherInfo.latestDate ? { c:"#2D6A4F", t:`Weather tracking is on · last recorded ${dl(weatherInfo.latestDate)}` }
+                            : { c:T.sub, t:"Weather tracking starts tonight." };
+                          return (
+                            <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                              <input value={a.line} onChange={e=>setA({line:e.target.value})} placeholder="Street address" aria-label="Street address" autoComplete="street-address" style={inp}/>
+                              <div style={{display:"grid",gridTemplateColumns:"minmax(0,2fr) minmax(0,1fr) minmax(0,1.2fr)",gap:8}}>
+                                <input value={a.city} onChange={e=>setA({city:e.target.value})} placeholder="City" aria-label="City" autoComplete="address-level2" style={inp}/>
+                                <input value={a.state} onChange={e=>setA({state:e.target.value})} placeholder="State" aria-label="State" maxLength={2} autoComplete="address-level1" style={inp}/>
+                                <input value={a.zip} onChange={e=>setA({zip:e.target.value})} placeholder="ZIP" aria-label="ZIP code" inputMode="numeric" maxLength={10} autoComplete="postal-code" style={inp}/>
+                              </div>
+                              {status && !changed && <div style={{fontSize:11.5,color:status.c,lineHeight:1.5}}>{status.t}</div>}
+                              {changed && (
+                                <div style={{display:"grid",gridTemplateColumns:"1fr 2fr",gap:8}}>
+                                  <button onClick={()=>setAddrDraft(null)} style={{background:"transparent",border:`1px solid ${T.border}`,borderRadius:9,padding:"11px 0",fontWeight:700,fontSize:13,color:T.sub,cursor:"pointer"}}>Cancel</button>
+                                  <button onClick={async ()=>{
+                                    const d = { line:a.line.trim(), city:a.city.trim(), state:a.state.trim().toUpperCase(), zip:a.zip.trim() };
+                                    try {
+                                      // Clearing the stored location makes the nightly job look the new address up again
+                                      await dbPatch(`businesses?id=eq.${bizId}`, { address_line:d.line||null, city:d.city||null, state:d.state||null, zip:d.zip||null, latitude:null, longitude:null, weather_station:null, geocode_status:null });
+                                      setBizAddress(d); setAddrDraft(null);
+                                      setWeatherInfo(w => ({ ...w, status:null }));
+                                      showToast("Address saved ✓");
+                                    } catch (e) { showError(friendlyError(e, "Couldn't save the address — try again.")); }
+                                  }} style={{background:T.accent,border:"none",borderRadius:9,padding:"11px 0",fontWeight:700,fontSize:13,color:"white",cursor:"pointer"}}>Save address</button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </Card>
+                      <Card T={T} style={{padding:"14px 16px", marginBottom:16}}>
+                        <SectionLabel T={T}>Labor Cost Target</SectionLabel>
+                        <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Labor as a % of sales you're aiming for. 30% is a common average; set what fits your business. Break-even, the week check, suggested budgets, and Insights all use it.</p>
+                        <div style={{display:"flex", alignItems:"center", gap:8}}>
+                          <input type="number" min="1" max="99" step="0.5" key={`lt-${laborTargetPct}`} defaultValue={laborTargetPct} aria-label="Labor cost target percent"
+                            onBlur={e=>{ const n=parseFloat(e.target.value); if(isNaN(n)||n<=0||n>=100){ e.target.value=laborTargetPct; showToast("Enter a number between 1 and 99"); return; } if(n===laborTargetPct) return; setLaborTargetPct(n); saveBizSettings({labor_target_pct:n}); showToast(`Labor target set to ${n}% ✓`); }}
+                            onKeyDown={e=>{ if(e.key==="Enter") e.target.blur(); }}
+                            style={{width:100, border:`1.5px solid ${T.border}`, borderRadius:9, padding:"11px 13px", fontSize:16, fontWeight:700, outline:"none", color:T.text, background:T.surface}}/>
+                          <span style={{fontSize:15, fontWeight:700, color:T.sub}}>% of sales</span>
+                        </div>
+                      </Card>
                       <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:4, paddingLeft:2}}>Shift Types</div>
                       <div style={{fontSize:12, color:T.sub, marginBottom:12, paddingLeft:2}}>Customize shift types available when scheduling.</div>
                       <Card T={T} style={{overflow:"hidden", marginBottom:10}}>
@@ -7873,16 +9583,24 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                                     placeholder="e.g. Part-time, no Sundays..."
                                     style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"9px 11px",fontSize:13,outline:"none",resize:"vertical",background:T.surface,fontFamily:"inherit"}}/>
                                 </div>
-                                <button onClick={()=>rmEmp(emp.id)}
-                                  style={{width:"100%",background:"#FDECEA",color:"#C0392B",border:"none",borderRadius:8,padding:"10px 0",fontSize:13,fontWeight:700,cursor:"pointer"}}>
-                                  Remove Employee
+                                <button onClick={()=>deactivateEmp(emp)} disabled={exitBusy}
+                                  style={{width:"100%",background:"#FDECEA",color:"#C0392B",border:"none",borderRadius:8,padding:"11px 0",fontSize:13,fontWeight:700,cursor:"pointer",opacity:exitBusy?0.6:1}}>
+                                  {exitBusy ? "Building exit summary…" : "Deactivate employee"}
                                 </button>
+                                <div style={{fontSize:10.5,color:T.sub,textAlign:"center",marginTop:6,lineHeight:1.5}}>
+                                  Keeps their history and saves an exit summary.{" "}
+                                  <button onClick={()=>{ if(window.confirm(`Delete ${emp.name||"this employee"} completely? Use this only for someone added by mistake — their shifts are deleted too and nothing is kept.`)) rmEmp(emp.id); }}
+                                    style={{background:"none",border:"none",padding:0,color:T.sub,textDecoration:"underline",fontSize:10.5,cursor:"pointer"}}>
+                                    Added by mistake? Delete instead
+                                  </button>
+                                </div>
                               </div>
                             )}
                           </div>
                         );
                       })}
                     </div>
+                    {renderFormerEmployees()}
                   </div>
                 )}
 
@@ -8321,7 +10039,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
       {(()=>{
         const ACTIONABLE_FLAGS = ["NO_SHIFT","ADJUSTMENT"];
-        const thirtyDaysAgo = new Date(Date.now() - 30*24*60*60*1000);
+        const drawerNow = isDemoBiz ? new Date(DEMO_TODAY_ANCHOR+"T12:00:00") : new Date();
+        const thirtyDaysAgo = new Date(drawerNow - 30*24*60*60*1000);
         const flagged = punches.filter(p=>
           p.flags?.some(f=>ACTIONABLE_FLAGS.includes(f)) &&
           new Date(p.time) > thirtyDaysAgo &&
@@ -8561,9 +10280,9 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         )}
 
         {/* FEEDBACK TAB */}
-        {tab==="feedback" && !isDemoBiz && <FeedbackTab bizId={bizId} T={T} Card={Card} showToast={showToast} addAudit={addAudit} getSession={getSession} dbPost={dbPost}/>}
+        {tab==="feedback" && !isDemoBiz && <FeedbackTab bizId={bizId} T={T} Card={Card} showToast={showToast} showError={showError} friendlyError={friendlyError} addAudit={addAudit} getSession={getSession} dbPost={dbPost}/>}
 
-                <TimePickerModal/>
+                <TimePickerShell/>
 
         {/* PULSE READY MODAL */}
         {pulsePrompt && (
@@ -8573,7 +10292,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
               <div style={{background:T.dark,padding:"20px 24px",textAlign:"center"}}>
                 <div style={{fontSize:40,marginBottom:8}}>🧠</div>
                 <div style={{color:"white",fontWeight:800,fontSize:18,marginBottom:4}}>Your Weekly Pulse is Ready</div>
-                <div style={{color:"#888",fontSize:12,lineHeight:1.5}}>Get your AI-powered scheduling analysis — labor costs, attendance patterns, and what to focus on next week.</div>
+                <div style={{color:"#888",fontSize:12,lineHeight:1.5}}>Get your weekly scheduling analysis — labor costs, attendance patterns, and what to focus on next week.</div>
               </div>
               {/* Body */}
               <div style={{padding:"20px 24px",display:"flex",flexDirection:"column",gap:10}}>
