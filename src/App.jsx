@@ -443,6 +443,7 @@ input,select,button,textarea { font-family:inherit; }
   .controls-bar { flex-direction:column !important; gap:10px !important; }
   .controls-divider { display:none !important; }
   .sched-strip { grid-template-columns:1fr !important; gap:10px !important; }
+  .rb-dd-row { grid-template-columns:1fr !important; }
   .sched-stat  { border-left:none !important; padding-left:0 !important; }
   .mobile-compact { padding:12px 14px !important; }
 }
@@ -1485,6 +1486,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   const [priceData,     setPriceData]     = useState(null); // { loading, error, changes, hasTracking }
   const [itemNames,     setItemNames]     = useState(null); // [{ key, name, units }] for the Item Sales filter
   const [rbFilterSearch, setRbFilterSearch] = useState({}); // { "source|filter": text }
+  const [rbOpenFacets,   setRbOpenFacets]   = useState({}); // { "source|facet": true } — facet sections open only when tapped
   const [pulsePrompt,    setPulsePrompt]    = useState(false);
 
   const [notifFreq,      setNotifFreq]      = useState(() => { try { return localStorage.getItem("sw_notif_freq")||"login"; } catch { return "login"; } });
@@ -1609,6 +1611,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     setRbVizType(null);
     setRbResult(null);
     setRbLineItemsOpen(false);
+    setRbOpenFacets({});
   }
   // Report Builder selections never carry over — leaving the panel any way
   // (X button, toggling it off, or switching straight to History/Flag
@@ -1631,19 +1634,19 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     if (!rbPreset) missing.push("a date range");
     else if (rbPreset === "custom" && (!rbCustomStart || !rbCustomEnd)) missing.push("both custom dates");
     if (!rbVizType) missing.push("a visualization type");
-    if (rbGrouping === "Employee" && activeIds.some(sid => sid !== "timesheet" && sid !== "laborcost")) {
-      missing.push("only Timesheet and Labor Cost can be grouped by Employee — remove the other sources");
-    }
-    if (activeIds.includes("weather") && ["Employee","Shift Type","Item"].includes(rbGrouping)) {
-      missing.push("Weather can only be grouped by Day, Week, or Day of Week");
-    }
-    if (rbGrouping === "Item" && activeIds.some(sid => sid !== "itemsales")) {
-      missing.push("only Item Sales can be grouped by Item — remove the other sources");
-    }
-    if (rbGrouping === "Shift Type" && activeIds.some(sid => sid !== "shifttypes")) {
-      missing.push("only Shift Types can be grouped by Shift Type — remove the other sources");
-    }
     if (missing.length) { showToast("Still needed: " + missing.join(", ")); return; }
+
+    // Combos that can't produce rows still "run" — they return 0 results with the reason.
+    let noResultReason = null;
+    if (rbGrouping === "Employee" && activeIds.some(sid => sid !== "timesheet" && sid !== "laborcost")) {
+      noResultReason = "Only Timesheet and Labor Cost can be grouped by Employee.";
+    } else if (activeIds.includes("weather") && ["Employee","Shift Type","Item"].includes(rbGrouping)) {
+      noResultReason = "Weather can only be grouped by Day, Week, or Day of Week.";
+    } else if (rbGrouping === "Item" && activeIds.some(sid => sid !== "itemsales")) {
+      noResultReason = "Only Item Sales can be grouped by Item.";
+    } else if (rbGrouping === "Shift Type" && activeIds.some(sid => sid !== "shifttypes")) {
+      noResultReason = "Only Shift Types can be grouped by Shift Type.";
+    }
 
     let startDate, endDate;
     if (rbPreset === "custom") {
@@ -1652,6 +1655,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       const dates = getFilterDates(rbPreset, salesData, isDemoBiz ? DEMO_TODAY_ANCHOR : undefined);
       startDate = dates[0]; endDate = dates[dates.length-1];
     }
+    if (noResultReason) { setRbResult({ data: [], truncated: false, startDate, endDate, emptyReason: noResultReason }); return; }
     setRbLoading(true);
     try {
       const sourceFilters = {};
@@ -3687,9 +3691,12 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   }
   const fmtReportVal = v => v == null ? "—" : typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : v;
 
-  function renderReportResult(data, vizType, grouping, fieldKeys, truncated) {
+  function renderReportResult(data, vizType, grouping, fieldKeys, truncated, emptyReason) {
     if (fieldKeys.length===0 || data.length===0) return (
-      <div style={{fontSize:12.5,color:UI.sub,textAlign:"center",padding:"24px 0"}}>No data found for this selection.</div>
+      <div role="status" style={{textAlign:"center",padding:"24px 12px",marginBottom:12,border:`1px dashed ${UI.line}`,borderRadius:12}}>
+        <div style={{fontSize:14,fontWeight:800,color:UI.ink}}>0 results found</div>
+        <div style={{fontSize:12,color:UI.sub,marginTop:4,lineHeight:1.5}}>{emptyReason || "Nothing matches these filters for this date range. Try fewer filters or a wider range."}</div>
+      </div>
     );
     const numKeys = fieldKeys.filter(f => !f.text);
     let body;
@@ -5409,6 +5416,57 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                       </div>
                     </div>
 
+                    {/* UI Batch 10b — Group by / Date range / Visualization as dropdowns at the top */}
+                    {(()=>{
+                      const sel = (on) => ({width:"100%",appearance:"none",WebkitAppearance:"none",height:40,border:`1.5px solid ${on?T.accent:T.border}`,borderRadius:9,background:T.surface,padding:"0 34px 0 12px",fontSize:13,fontWeight:on?700:500,color:on?T.text:T.sub,fontFamily:"inherit",boxSizing:"border-box",cursor:"pointer"});
+                      const lab = {fontSize:11,fontWeight:700,color:T.sub};
+                      const chev = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.sub} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{position:"absolute",right:12,top:13,pointerEvents:"none"}}><path d="m6 9 6 6 6-6"/></svg>;
+                      const vizOpts = [{id:"number",label:"Number"},{id:"line",label:"Line"},{id:"bar",label:"Bar"},{id:"area",label:"Area"},{id:"combo",label:"Combo"},{id:"list",label:"List"},{id:"table",label:"Table"}]
+                        .filter(v => !((rbGrouping==="Employee" || rbGrouping==="Shift Type" || rbGrouping==="Item") && v.id==="number")); // "Number" is a first-vs-last delta — meaningless across rows
+                      return (
+                        <div style={{marginBottom:16}}>
+                          <div className="rb-dd-row" style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10}}>
+                            <div style={{display:"flex",flexDirection:"column",gap:5,minWidth:0}}>
+                              <label htmlFor="rb-group" style={lab}>Group by</label>
+                              <div style={{position:"relative"}}>
+                                <select id="rb-group" value={rbGrouping||""} onChange={e=>{ const g=e.target.value||null; setRbGrouping(g); setRbResult(null); if((g==="Employee"||g==="Shift Type"||g==="Item")&&rbVizType==="number") setRbVizType(null); }} style={sel(!!rbGrouping)}>
+                                  <option value="">Choose…</option>
+                                  {["Day","Week","Day of Week","Employee","Shift Type","Item"].map(g=><option key={g} value={g}>{g}</option>)}
+                                </select>{chev}
+                              </div>
+                            </div>
+                            <div style={{display:"flex",flexDirection:"column",gap:5,minWidth:0}}>
+                              <label htmlFor="rb-date" style={lab}>Date range</label>
+                              <div style={{position:"relative"}}>
+                                <select id="rb-date" value={rbPreset||""} onChange={e=>{ setRbPreset(e.target.value||null); setRbResult(null); }} style={sel(!!rbPreset)}>
+                                  <option value="">Choose…</option>
+                                  {FILTERS.filter(f=>f.kind==="history").map(f=><option key={f.key} value={f.key}>{f.label}</option>)}
+                                  <option value="custom">Custom…</option>
+                                </select>{chev}
+                              </div>
+                            </div>
+                            <div style={{display:"flex",flexDirection:"column",gap:5,minWidth:0}}>
+                              <label htmlFor="rb-viz" style={lab}>Visualization</label>
+                              <div style={{position:"relative"}}>
+                                <select id="rb-viz" value={rbVizType||""} onChange={e=>setRbVizType(e.target.value||null)} style={sel(!!rbVizType)}>
+                                  <option value="">Choose…</option>
+                                  {vizOpts.map(v=><option key={v.id} value={v.id}>{v.label}</option>)}
+                                </select>{chev}
+                              </div>
+                            </div>
+                          </div>
+                          {rbPreset==="custom" && (
+                            <div style={{display:"flex",gap:8,marginTop:8}}>
+                              <input type="date" aria-label="Start date" value={rbCustomStart} onChange={e=>{setRbCustomStart(e.target.value);setRbResult(null);}}
+                                style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"7px 8px",fontSize:12,background:T.surface,color:T.text}}/>
+                              <input type="date" aria-label="End date" value={rbCustomEnd} onChange={e=>{setRbCustomEnd(e.target.value);setRbResult(null);}}
+                                style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"7px 8px",fontSize:12,background:T.surface,color:T.text}}/>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+
                     <SectionLabel T={T}>Data Sources ({rbActiveSourceIds().length}/3)</SectionLabel>
                     <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6,marginBottom:16}}>
                       {Object.entries(REPORT_SOURCES).map(([sid,def])=>{
@@ -5423,61 +5481,87 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                               {state.active && <span style={{fontSize:10,color:T.sub}}>{state.fields.length} field{state.fields.length!==1?"s":""}</span>}
                             </button>
                             {state.active && (
-                              <div style={{padding:"0 12px 12px",display:"flex",flexDirection:"column",gap:10}}>
-                                <div>
-                                  <div style={{fontSize:9.5,color:T.sub,fontWeight:700,letterSpacing:0.4,marginBottom:5}}>FIELDS TO PULL</div>
-                                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                                    {def.fields.map(f=>(
-                                      <button key={f.id} onClick={()=>rbToggleField(sid,f.id)}
-                                        style={{padding:"4px 9px",borderRadius:999,fontSize:10.5,fontWeight:600,cursor:"pointer",
-                                          border:`1px solid ${state.fields.includes(f.id)?def.color:T.border}`,
-                                          background:state.fields.includes(f.id)?def.color+"22":"transparent",
-                                          color:state.fields.includes(f.id)?T.text:T.sub}}>
-                                        {state.fields.includes(f.id)?"✓ ":""}{f.label}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                                {sid==="shifttypes" && (
-                                  <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); }}
-                                    style={{alignSelf:"flex-start",background:"none",border:"none",color:T.accent,fontWeight:700,fontSize:11,cursor:"pointer",padding:0}}>
-                                    Edit shift types
-                                  </button>
-                                )}
-                                {def.filters.map(fl=>{
-                                  const sKey = `${sid}|${fl.id}`;
-                                  const q = (rbFilterSearch[sKey] || "").trim().toLowerCase();
-                                  const chosen = state.filters[fl.id] || [];
-                                  const long = fl.options.length > 12;
-                                  const shown = !long ? fl.options
-                                    : q ? fl.options.filter(o => chosen.includes(o.value) || o.label.toLowerCase().includes(q)).slice(0, 40)
-                                        : fl.options.filter((o, i) => i < 12 || chosen.includes(o.value)); // top sellers first
-                                  return (
-                                  <div key={fl.id}>
-                                    <div style={{fontSize:9.5,color:T.sub,fontWeight:700,letterSpacing:0.4,marginBottom:5}}>FILTER · {fl.label.toUpperCase()}{long && chosen.length ? ` · ${chosen.length} picked` : ""}</div>
-                                    {sid==="itemsales" && fl.id==="item" && itemNames && itemNames.length===0 && (
-                                      <div style={{fontSize:11,color:T.sub,marginBottom:4}}>No item sales yet — items appear after a Square sync.</div>
-                                    )}
-                                    {long && (
-                                      <input value={rbFilterSearch[sKey] || ""} onChange={e=>setRbFilterSearch(p=>({...p,[sKey]:e.target.value}))}
-                                        placeholder={`Search ${fl.options.length} ${fl.label.toLowerCase()}s…`} aria-label={`Search ${fl.label}`}
-                                        style={{width:"100%",boxSizing:"border-box",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:12,outline:"none",background:T.surface,color:T.text,marginBottom:6}}/>
-                                    )}
-                                    <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                                      {shown.map(opt=>{
-                                        const active = (state.filters[fl.id]||[]).includes(opt.value);
-                                        return (
-                                          <button key={opt.value} onClick={()=>rbToggleFilter(sid,fl.id,opt.value)}
+                              <div style={{padding:"0 12px 12px",display:"flex",flexDirection:"column",gap:6}}>
+                                {/* UI Batch 10 — faceted: each section opens only when tapped */}
+                                {[{ key:"fields", label:"Fields", count: state.fields.length, fl:null }, ...def.filters.map(fl => ({ key: fl.id, label: fl.label, count: (state.filters[fl.id]||[]).length, fl }))].map(facet => {
+                                  const fk = `${sid}|${facet.key}`;
+                                  const open = !!rbOpenFacets[fk];
+                                  const fl = facet.fl;
+                                  let body = null;
+                                  if (open && !fl) {
+                                    body = (
+                                      <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                                        {def.fields.map(f=>(
+                                          <button key={f.id} onClick={()=>rbToggleField(sid,f.id)}
                                             style={{padding:"4px 9px",borderRadius:999,fontSize:10.5,fontWeight:600,cursor:"pointer",
-                                              border:`1px solid ${active?def.color:T.border}`,
-                                              background:active?def.color+"22":"transparent",
-                                              color:active?T.text:T.sub}}>
-                                            {opt.label}
+                                              border:`1px solid ${state.fields.includes(f.id)?def.color:T.border}`,
+                                              background:state.fields.includes(f.id)?def.color+"22":"transparent",
+                                              color:state.fields.includes(f.id)?T.text:T.sub}}>
+                                            {state.fields.includes(f.id)?"✓ ":""}{f.label}
                                           </button>
-                                        );
-                                      })}
+                                        ))}
+                                        {sid==="shifttypes" && (
+                                          <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); }}
+                                            style={{background:"none",border:"none",color:T.accent,fontWeight:700,fontSize:11,cursor:"pointer",padding:"4px 2px"}}>
+                                            Edit shift types
+                                          </button>
+                                        )}
+                                      </div>
+                                    );
+                                  } else if (open && fl) {
+                                    const sKey = `${sid}|${fl.id}`;
+                                    const q = (rbFilterSearch[sKey] || "").trim().toLowerCase();
+                                    const chosen = state.filters[fl.id] || [];
+                                    const long = fl.options.length > 12;
+                                    const shown = !long ? fl.options
+                                      : q ? fl.options.filter(o => chosen.includes(o.value) || o.label.toLowerCase().includes(q)).slice(0, 40)
+                                          : fl.options.filter((o, i) => i < 12 || chosen.includes(o.value)); // top sellers first
+                                    body = (
+                                      <div>
+                                        {sid==="itemsales" && fl.id==="item" && itemNames && itemNames.length===0 && (
+                                          <div style={{fontSize:11,color:T.sub,marginBottom:4}}>No item sales yet — items appear after a Square sync.</div>
+                                        )}
+                                        {long && (
+                                          <input value={rbFilterSearch[sKey] || ""} onChange={e=>setRbFilterSearch(p=>({...p,[sKey]:e.target.value}))}
+                                            placeholder={`Search ${fl.options.length} ${fl.label.toLowerCase()}s…`} aria-label={`Search ${fl.label}`}
+                                            style={{width:"100%",boxSizing:"border-box",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:12,outline:"none",background:T.surface,color:T.text,marginBottom:6}}/>
+                                        )}
+                                        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                                          {shown.map(opt=>{
+                                            const active = chosen.includes(opt.value);
+                                            return (
+                                              <button key={opt.value} onClick={()=>rbToggleFilter(sid,fl.id,opt.value)}
+                                                style={{padding:"4px 9px",borderRadius:999,fontSize:10.5,fontWeight:600,cursor:"pointer",
+                                                  border:`1px solid ${active?def.color:T.border}`,
+                                                  background:active?def.color+"22":"transparent",
+                                                  color:active?T.text:T.sub}}>
+                                                {opt.label}
+                                              </button>
+                                            );
+                                          })}
+                                        </div>
+                                        {chosen.length > 0 && (
+                                          <button onClick={()=>{ setRbResult(null); setRbSources(p=>({...p,[sid]:{...p[sid],filters:{...p[sid].filters,[fl.id]:[]}}})); }}
+                                            style={{background:"none",border:"none",color:T.sub,fontSize:10.5,fontWeight:600,cursor:"pointer",padding:"6px 0 0",textDecoration:"underline"}}>
+                                            Clear {fl.label.toLowerCase()}
+                                          </button>
+                                        )}
+                                      </div>
+                                    );
+                                  }
+                                  return (
+                                    <div key={facet.key} style={{background:T.surface,border:`1px solid ${open?def.color+"55":T.border}`,borderRadius:8}}>
+                                      <button onClick={()=>setRbOpenFacets(p=>({...p,[fk]:!p[fk]}))} aria-expanded={open}
+                                        style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 10px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
+                                        <span style={{fontSize:11.5,fontWeight:700,color:T.text}}>
+                                          {fl ? `Filter: ${fl.label}` : "Fields to pull"}
+                                          {facet.count > 0 && <span style={{marginLeft:6,background:def.color+"33",color:T.text,borderRadius:999,padding:"1px 7px",fontSize:10}}>{facet.count}</span>}
+                                          {!fl && facet.count === 0 && <span style={{marginLeft:6,fontSize:10,fontWeight:600,color:T.sub}}>pick at least one</span>}
+                                        </span>
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.sub} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{transform:open?"rotate(180deg)":"none",transition:"transform 0.15s",flexShrink:0}}><path d="m6 9 6 6 6-6"/></svg>
+                                      </button>
+                                      {body && <div style={{padding:"0 10px 10px"}}>{body}</div>}
                                     </div>
-                                  </div>
                                   );
                                 })}
                               </div>
@@ -5485,46 +5569,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                           </div>
                         );
                       })}
-                    </div>
-
-                    <SectionLabel T={T}>Group By</SectionLabel>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
-                      {["Day","Week","Day of Week","Employee","Shift Type","Item"].map(g=>(
-                        <button key={g} onClick={()=>{setRbGrouping(g);setRbResult(null);if((g==="Employee"||g==="Shift Type"||g==="Item")&&rbVizType==="number")setRbVizType(null);}}
-                          style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
-                            border:`1px solid ${rbGrouping===g?T.accent:T.border}`,background:rbGrouping===g?T.accent:"transparent",color:rbGrouping===g?"white":T.sub}}>{g}</button>
-                      ))}
-                    </div>
-
-                    <SectionLabel T={T}>Date Range</SectionLabel>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
-                      {FILTERS.filter(f=>f.kind==="history").map(f=>(
-                        <button key={f.key} onClick={()=>{setRbPreset(f.key);setRbResult(null);}}
-                          style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
-                            border:`1px solid ${rbPreset===f.key?T.accent:T.border}`,background:rbPreset===f.key?T.accent:"transparent",color:rbPreset===f.key?"white":T.sub}}>{f.label}</button>
-                      ))}
-                      <button onClick={()=>{setRbPreset("custom");setRbResult(null);}}
-                        style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
-                          border:`1px solid ${rbPreset==="custom"?"#C0392B":T.border}`,background:rbPreset==="custom"?"#C0392B":"transparent",color:rbPreset==="custom"?"white":T.sub}}>📅 Custom</button>
-                    </div>
-                    {rbPreset==="custom" && (
-                      <div style={{display:"flex",gap:8,marginTop:8}}>
-                        <input type="date" value={rbCustomStart} onChange={e=>{setRbCustomStart(e.target.value);setRbResult(null);}}
-                          style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"7px 8px",fontSize:12,background:T.surface,color:T.text}}/>
-                        <input type="date" value={rbCustomEnd} onChange={e=>{setRbCustomEnd(e.target.value);setRbResult(null);}}
-                          style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"7px 8px",fontSize:12,background:T.surface,color:T.text}}/>
-                      </div>
-                    )}
-
-                    <SectionLabel T={T}>Visualization</SectionLabel>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
-                      {[{id:"number",label:"Number"},{id:"line",label:"Line"},{id:"bar",label:"Bar"},{id:"area",label:"Area"},{id:"combo",label:"Combo"},{id:"list",label:"List"},{id:"table",label:"Table"}]
-                        .filter(v => !((rbGrouping==="Employee" || rbGrouping==="Shift Type" || rbGrouping==="Item") && v.id==="number")) // "Number" shows a first-vs-last trend delta, which is meaningless across employee rows rather than a time series
-                        .map(v=>(
-                        <button key={v.id} onClick={()=>setRbVizType(v.id)}
-                          style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
-                            border:`1px solid ${rbVizType===v.id?"#4CAF7D":T.border}`,background:rbVizType===v.id?"#4CAF7D":"transparent",color:rbVizType===v.id?"white":T.sub}}>{v.label}</button>
-                      ))}
                     </div>
 
                     <button onClick={runCustomReportUI} disabled={rbLoading}
@@ -5536,17 +5580,17 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                       const fieldKeys = rbActiveFieldKeys();
                       return (
                         <>
-                          {renderReportResult(rbResult.data, rbVizType, rbGrouping, fieldKeys, rbResult.truncated)}
+                          {renderReportResult(rbResult.data, rbVizType, rbGrouping, fieldKeys, rbResult.truncated, rbResult.emptyReason)}
 
-                          <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                          {rbResult.data.length > 0 && <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
                             <button onClick={rbExportCSV} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:9,border:`1px solid ${T.border}`,background:"transparent",color:T.text,fontSize:11,fontWeight:600,cursor:"pointer"}}>⬇ Export CSV</button>
                             <button onClick={()=>{
                               const t = window.prompt("Name this widget for your Dashboard:", "Custom Report");
                               if (t !== null) addReportWidgetToDashboard(t);
                             }} disabled={widgetSaving} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:9,border:"none",background:T.accent,color:"white",fontSize:11,fontWeight:700,cursor:widgetSaving?"default":"pointer",opacity:widgetSaving?0.6:1}}>+ Add to Dashboard</button>
-                          </div>
+                          </div>}
 
-                          {rbVizType!=="table" && (
+                          {rbVizType!=="table" && rbResult.data.length > 0 && (
                             <div style={{border:`1px solid ${T.border}`,borderRadius:10,overflow:"hidden"}}>
                               <button onClick={()=>setRbLineItemsOpen(o=>!o)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left"}}>
                                 <span style={{fontSize:11.5,fontWeight:700,color:T.text}}>View Line Items ({rbResult.data.length} rows)</span>
