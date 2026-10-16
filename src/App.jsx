@@ -45,6 +45,8 @@ const DEMO_OWNER_ID = "aeee94c4-64af-44ab-abda-7d72da38fd0b";
 // Ties a cloned demo business_id to this specific browser tab/session only —
 // so multiple people sharing the demo login each land in their own sandbox.
 const DEMO_BIZ_SESSION_KEY = "sw_demo_biz_id";
+// "Try the Cedar & Sage demo" fills this into Email; the password is never in code — shared separately.
+const DEMO_EMAIL = "demo@shiftwise.app";
 // The "virtual today" for demo sessions — Cedar & Sage's seeded data lives in
 // June 2026, not the real live date. Used anywhere a report/filter needs a
 // date anchor (flag patterns, report builder) so defaults land on real data.
@@ -1318,6 +1320,8 @@ export default function App() {
   const [newPass2,    setNewPass2]    = useState("");
   const bizCreateRef = useRef(null); // guards against creating two businesses for one new account
   const [authBizName, setAuthBizName] = useState("");
+  const [showPass,    setShowPass]    = useState(false);
+  const [authBusy,    setAuthBusy]    = useState(false);
   const [bizId,       setBizId]       = useState(null);
   const [isDemoBiz,   setIsDemoBiz]   = useState(false);
 
@@ -1330,7 +1334,7 @@ export default function App() {
     const valid = ["grid","coverage","insights","dashboard","recognition","settings","feedback"];
     return valid.includes(hash) ? hash : "grid";
   });
-  const [themeId,     setThemeId]     = useState("fieldwork");
+  const [themeId,     setThemeId]     = useState(() => { try { const t = localStorage.getItem("sw_theme"); return t && THEMES[t] ? t : "fieldwork"; } catch { return "fieldwork"; } });
   const T = THEMES[themeId] || THEMES.fieldwork;
   const [biz,         setBiz]         = useState("My Business");
   const [setupComplete, setSetupComplete] = useState(true);   // true = skip setup
@@ -6681,149 +6685,186 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     ...(isDemoBiz ? [] : [{key:"feedback", icon:"💬", label:"Feedback"}]),
   ];
 
-  // ── SET NEW PASSWORD (arrived from reset email) ──────────────────────────
-  if (authState === "recovery") {
-    const inputStyle = {width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"};
-    return (
-      <div style={{minHeight:"100vh",background:"#0A0F0A",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Inter',system-ui,sans-serif"}}>
-        <style>{CSS}</style>
-        <div style={{width:"100%",maxWidth:400}}>
-          <div style={{textAlign:"center",marginBottom:32}}>
-            <div style={{width:56,height:56,background:"#2D6A4F",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 16px"}}>🔑</div>
-            <div style={{fontSize:22,fontWeight:900,color:"white"}}>Set a new password</div>
-            <div style={{fontSize:13,color:"#9CA3AF",marginTop:6}}>Choose a new password for your ShiftWise account.</div>
+  // ── AUTH SCREENS: shared look (UI refresh — login) ─────────────────────────
+  // Login follows the app theme saved on this device (sw_theme), same as the rest of the app.
+  const authLabel  = {display:"block",fontSize:14,fontWeight:600,color:T.text,marginBottom:8};
+  const authErrBox = {background:"rgba(239,68,68,0.12)",border:"1px solid rgba(239,68,68,0.35)",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#DC2626",lineHeight:1.5};
+  const authOkBox  = {background:"rgba(16,185,129,0.12)",border:"1px solid rgba(16,185,129,0.35)",borderRadius:10,padding:"12px 14px",fontSize:13,color:T.text,lineHeight:1.6};
+  const authLink   = {background:"none",border:"none",color:T.accent,fontSize:13,fontWeight:600,cursor:"pointer",padding:0,fontFamily:"inherit"};
+  const authBtn    = (enabled) => ({width:"100%",background:T.accent,opacity:enabled?1:0.45,color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:700,fontSize:15,cursor:enabled?"pointer":"not-allowed",transition:"background 0.15s",fontFamily:"inherit"});
+  const AuthIcon = {
+    mail: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>,
+    lock: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>,
+    store:<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 10v10h16V10"/><path d="M3 10 5 4h14l2 6"/><path d="M10 20v-5h4v5"/></svg>,
+    eye:  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>,
+    eyeOff:<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 4.2M6.6 6.6C3.8 8.4 2 12 2 12s3.5 7 10 7c1.8 0 3.4-.5 4.8-1.3"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>,
+  };
+  const authField = ({id, label, icon, value, onChange, placeholder, type="text", name, autoComplete, toggle}) => (
+    <div>
+      <label htmlFor={id} style={authLabel}>{label}</label>
+      <div style={{position:"relative"}}>
+        <span style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)",color:T.sub,display:"flex",pointerEvents:"none"}}>{icon}</span>
+        <input id={id} className="sw-auth-input" value={value} onChange={onChange} placeholder={placeholder}
+          type={type} name={name} autoComplete={autoComplete}
+          style={{width:"100%",background:T.muted,border:`1px solid ${T.border}`,borderRadius:10,padding:toggle?"14px 46px 14px 44px":"14px 14px 14px 44px",fontSize:15,color:T.text,outline:"none",boxSizing:"border-box",fontFamily:"inherit"}}/>
+        {toggle && (
+          <button type="button" onClick={()=>setShowPass(s=>!s)} aria-label={showPass?"Hide password":"Show password"}
+            style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:T.sub,cursor:"pointer",padding:4,display:"flex"}}>
+            {showPass ? AuthIcon.eyeOff : AuthIcon.eye}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+  const authToday = new Date().toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"});
+  const authShell = (content) => (
+    <div style={{minHeight:"100vh",background:T.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Inter',system-ui,sans-serif"}}>
+      <style>{CSS}</style>
+      <style>{`.sw-auth-input::placeholder{color:${T.sub};opacity:.8}.sw-auth-input:focus{background:${T.surface} !important;border-color:${T.accent} !important;box-shadow:0 0 0 3px ${T.accent}26}`}</style>
+      <div style={{width:"100%",maxWidth:420}}>
+        {/* Logo — original ShiftWise | Veredian lockup */}
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{width:56,height:56,background:T.accent,borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 16px"}}>📅</div>
+          <div style={{fontSize:26,fontWeight:900,color:T.text,letterSpacing:"-0.01em",display:"inline-flex",alignItems:"center",gap:0}}>
+            ShiftWise
+            <span style={{color:T.sub,margin:"0 7px",fontWeight:300}}>|</span>
+            Veredian
+            <span style={{fontSize:11,fontWeight:400,color:T.accent,position:"relative",bottom:"9px",marginLeft:3,letterSpacing:"0.06em"}}>Beta</span>
           </div>
-          <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:18,padding:"28px 28px 24px"}}>
-            <form onSubmit={handleSetNewPassword} style={{display:"flex",flexDirection:"column",gap:12}}>
-              <input value={newPass} onChange={e=>setNewPass(e.target.value)} placeholder="New password"
-                type="password" name="new-password" autoComplete="new-password" style={inputStyle}/>
-              <input value={newPass2} onChange={e=>setNewPass2(e.target.value)} placeholder="Confirm new password"
-                type="password" name="confirm-password" autoComplete="new-password" style={inputStyle}/>
-              {authError && (
-                <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
-                  {authError}
-                </div>
-              )}
-              <button type="submit"
-                style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
-                Save New Password
-              </button>
-            </form>
-            <button type="button" onClick={()=>{ setAuthError(""); setAuthMode("forgot"); setResetSent(false); setAuthState("unauthenticated"); }}
-              style={{width:"100%",background:"none",border:"none",color:"#9CA3AF",fontSize:13,fontWeight:600,cursor:"pointer",marginTop:14}}>
-              Request a new reset link
-            </button>
-          </div>
+          <div style={{fontSize:13,color:T.sub,marginTop:4}}>Schedule smarter. Run better.</div>
+          <div style={{fontSize:12,color:T.sub,marginTop:6,opacity:0.8}}>{authToday}</div>
+        </div>
+
+        {/* Card */}
+        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:18,padding:"28px 28px 24px",boxShadow:T.shadowMd}}>
+          {content}
+        </div>
+
+        <div style={{textAlign:"center",marginTop:20,fontSize:11,color:T.sub,lineHeight:1.6}}>
+          Your data is stored securely in Supabase.<br/>
+          Schedule, payroll, and team data sync across all your devices.
         </div>
       </div>
+    </div>
+  );
+  const authHeading = (title, sub) => (
+    <div style={{marginBottom:22}}>
+      <div style={{fontSize:18,fontWeight:700,color:T.text,marginBottom:6}}>{title}</div>
+      <div style={{fontSize:14,color:T.sub,lineHeight:1.5}}>{sub}</div>
+    </div>
+  );
+
+  // ── SET NEW PASSWORD (arrived from reset email) ──────────────────────────
+  if (authState === "recovery") {
+    const canSave = newPass.length > 0 && newPass2.length > 0;
+    return authShell(
+      <>
+        {authHeading("Set a new password", "Choose a new password for your ShiftWise account.")}
+        <form onSubmit={handleSetNewPassword} style={{display:"flex",flexDirection:"column",gap:16}}>
+          {authField({id:"sw-new-pass", label:"New password", icon:AuthIcon.lock, value:newPass, onChange:e=>setNewPass(e.target.value),
+            placeholder:"At least 6 characters", type:showPass?"text":"password", name:"new-password", autoComplete:"new-password", toggle:true})}
+          {authField({id:"sw-new-pass2", label:"Confirm new password", icon:AuthIcon.lock, value:newPass2, onChange:e=>setNewPass2(e.target.value),
+            placeholder:"Re-enter your new password", type:showPass?"text":"password", name:"confirm-password", autoComplete:"new-password"})}
+          {authError && <div style={authErrBox}>{authError}</div>}
+          <button type="submit" disabled={!canSave} style={{...authBtn(canSave),marginTop:4}}>Save New Password</button>
+        </form>
+        <div style={{textAlign:"center",marginTop:16}}>
+          <button type="button" onClick={()=>{ setAuthError(""); setAuthMode("forgot"); setResetSent(false); setAuthState("unauthenticated"); }} style={authLink}>
+            Request a new reset link
+          </button>
+        </div>
+      </>
     );
   }
 
   // ── LOGIN SCREEN ───────────────────────────────────────────────────────────
   if (authState === "unauthenticated") {
-    return (
-      <div style={{minHeight:"100vh",background:"#0A0F0A",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"'Inter',system-ui,sans-serif"}}>
-        <style>{CSS}</style>
-        <div style={{width:"100%",maxWidth:400}}>
-          {/* Logo */}
-          <div style={{textAlign:"center",marginBottom:32}}>
-            <div style={{width:56,height:56,background:"#2D6A4F",borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 16px"}}>📅</div>
-            <div style={{fontSize:26,fontWeight:900,color:"white",letterSpacing:"-0.01em",display:"inline-flex",alignItems:"center",gap:0}}>
-              ShiftWise
-              <span style={{color:"#6B7280",margin:"0 7px",fontWeight:300}}>|</span>
-              Veredian
-              <span style={{fontSize:11,fontWeight:400,color:"#93c5fd",position:"relative",bottom:"9px",marginLeft:3,letterSpacing:"0.06em"}}>Beta</span>
+    const isSignup = authMode === "signup";
+    const canSubmit = !authBusy && authEmail.trim() && authPass && (!isSignup || authBizName.trim());
+    const submitAuth = async (e) => {
+      e.preventDefault();
+      if (!canSubmit) return;
+      setAuthBusy(true);
+      try { isSignup ? await handleSignUp(e) : await handleSignIn(e); }
+      finally { setAuthBusy(false); }
+    };
+
+    if (authMode === "forgot") {
+      return authShell(
+        <>
+          {authHeading("Reset your password", "Enter the email on your account and we'll send you a link to set a new password.")}
+          {resetSent ? (
+            <div style={authOkBox}>
+              ✓ If an account exists for <strong>{authEmail}</strong>, a reset link is on its way. Check your inbox (and spam folder).
             </div>
-            <div style={{fontSize:13,color:"#4B5563",marginTop:4}}>Schedule smarter. Run better.</div>
+          ) : (
+            <form onSubmit={e=>{ e.preventDefault(); handleForgotPassword(); }} style={{display:"flex",flexDirection:"column",gap:16}}>
+              {authField({id:"sw-reset-email", label:"Email", icon:AuthIcon.mail, value:authEmail, onChange:e=>setAuthEmail(e.target.value),
+                placeholder:"you@yourbusiness.com", type:"email", name:"email", autoComplete:"username"})}
+              {authError && <div style={authErrBox}>{authError}</div>}
+              <button type="submit" disabled={!authEmail.trim()} style={{...authBtn(!!authEmail.trim()),marginTop:4}}>Send Reset Link</button>
+            </form>
+          )}
+          <div style={{textAlign:"center",marginTop:16}}>
+            <button type="button" onClick={()=>{setAuthMode("signin");setAuthError("");setResetSent(false);}} style={authLink}>
+              ← Back to sign in
+            </button>
           </div>
+        </>
+      );
+    }
 
-          {/* Card */}
-          <div style={{background:"rgba(255,255,255,0.05)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:18,padding:"28px 28px 24px"}}>
+    return authShell(
+      <>
+        {isSignup
+          ? authHeading("Create your account", "Set up ShiftWise for your business. Takes about 5 minutes.")
+          : authHeading("Sign in", "Enter your email and password to continue.")}
 
-            {authMode==="forgot" ? (
-              <div style={{display:"flex",flexDirection:"column",gap:12}}>
-                <div style={{marginBottom:4}}>
-                  <div style={{fontSize:16,fontWeight:800,color:"white",marginBottom:4}}>Reset your password</div>
-                  <div style={{fontSize:12,color:"#9CA3AF",lineHeight:1.5}}>Enter the email on your account and we'll send you a link to set a new password.</div>
-                </div>
-                {resetSent ? (
-                  <div style={{background:"rgba(45,106,79,0.15)",border:"1px solid rgba(45,106,79,0.4)",borderRadius:10,padding:"14px",fontSize:13,color:"#6FCF97",lineHeight:1.6}}>
-                    ✓ If an account exists for <strong>{authEmail}</strong>, a reset link is on its way. Check your inbox (and spam folder).
-                  </div>
-                ) : (
-                  <form onSubmit={e=>{ e.preventDefault(); handleForgotPassword(); }} style={{display:"flex",flexDirection:"column",gap:12}}>
-                    <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
-                      placeholder="Email address" type="email" name="email" autoComplete="username"
-                      style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-                    {authError && (
-                      <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
-                        {authError}
-                      </div>
-                    )}
-                    <button type="submit"
-                      style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
-                      Send Reset Link
-                    </button>
-                  </form>
-                )}
-                <button type="button" onClick={()=>{setAuthMode("signin");setAuthError("");setResetSent(false);}}
-                  style={{background:"none",border:"none",color:"#9CA3AF",fontSize:13,fontWeight:600,cursor:"pointer",marginTop:4,textAlign:"center"}}>
-                  ← Back to Sign In
+        <form onSubmit={submitAuth} style={{display:"flex",flexDirection:"column",gap:16}}>
+          {isSignup && authField({id:"sw-auth-biz", label:"Business name", icon:AuthIcon.store, value:authBizName, onChange:e=>setAuthBizName(e.target.value),
+            placeholder:"e.g. Sneaux Ball Cafe", name:"organization", autoComplete:"organization"})}
+          {authField({id:"sw-auth-email", label:"Email", icon:AuthIcon.mail, value:authEmail, onChange:e=>setAuthEmail(e.target.value),
+            placeholder:"you@yourbusiness.com", type:"email", name:"email", autoComplete:"username"})}
+          <div>
+            {authField({id:"sw-auth-pass", label:"Password", icon:AuthIcon.lock, value:authPass, onChange:e=>setAuthPass(e.target.value),
+              placeholder:isSignup?"At least 6 characters":"Enter your password", type:showPass?"text":"password", name:"password",
+              autoComplete:isSignup?"new-password":"current-password", toggle:true})}
+            {!isSignup && (
+              <div style={{textAlign:"right",marginTop:8}}>
+                <button type="button" onClick={()=>{setAuthMode("forgot");setAuthError("");setResetSent(false);}} style={{...authLink,fontSize:12}}>
+                  Forgot password?
                 </button>
               </div>
-            ) : (
-              <>
-                <div style={{display:"flex",background:"rgba(0,0,0,0.3)",borderRadius:10,padding:4,marginBottom:24}}>
-                  {[["signin","Sign In"],["signup","Create Account"]].map(([m,lbl])=>(
-                    <button key={m} onClick={()=>{setAuthMode(m);setAuthError("");}}
-                      style={{flex:1,background:authMode===m?"white":"transparent",color:authMode===m?"#1C1C1C":"#6B7280",border:"none",borderRadius:7,padding:"9px 0",fontWeight:700,fontSize:13,cursor:"pointer",transition:"all 0.15s"}}>
-                      {lbl}
-                    </button>
-                  ))}
-                </div>
-
-                <form onSubmit={e=>{ e.preventDefault(); authMode==="signin" ? handleSignIn(e) : handleSignUp(e); }}
-                  style={{display:"flex",flexDirection:"column",gap:12}}>
-                  {authMode==="signup" && (
-                    <input value={authBizName} onChange={e=>setAuthBizName(e.target.value)}
-                      placeholder="Business name" name="organization" autoComplete="organization"
-                      style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-                  )}
-                  <input value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
-                    placeholder="Email address" type="email" name="email" autoComplete="username"
-                    style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-                  <input value={authPass} onChange={e=>setAuthPass(e.target.value)}
-                    placeholder="Password" type="password" name="password" autoComplete={authMode==="signin"?"current-password":"new-password"}
-                    style={{width:"100%",background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:10,padding:"13px 14px",fontSize:15,color:"white",outline:"none",boxSizing:"border-box"}}/>
-
-                  {authMode==="signin" && (
-                    <button type="button" onClick={()=>{setAuthMode("forgot");setAuthError("");setResetSent(false);}}
-                      style={{background:"none",border:"none",color:"#9CA3AF",fontSize:12,fontWeight:600,cursor:"pointer",textAlign:"right",padding:0,marginTop:-4}}>
-                      Forgot password?
-                    </button>
-                  )}
-
-                  {authError && (
-                    <div style={{background:"rgba(239,68,68,0.15)",border:"1px solid rgba(239,68,68,0.3)",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#F87171",lineHeight:1.5}}>
-                      {authError}
-                    </div>
-                  )}
-
-                  <button type="submit"
-                    style={{width:"100%",background:"#2D6A4F",color:"white",border:"none",borderRadius:10,padding:"14px 0",fontWeight:800,fontSize:15,cursor:"pointer",marginTop:4}}>
-                    {authMode==="signin" ? "Sign In" : "Create Account"}
-                  </button>
-                </form>
-              </>
             )}
           </div>
 
-          <div style={{textAlign:"center",marginTop:20,fontSize:11,color:"#374151",lineHeight:1.6}}>
-            Your data is stored securely in Supabase.<br/>
-            Schedule, payroll, and team data sync across all your devices.
-          </div>
+          {authError && <div style={authErrBox}>{authError}</div>}
+
+          <button type="submit" disabled={!canSubmit} style={{...authBtn(!!canSubmit),marginTop:4}}>
+            {authBusy ? (isSignup ? "Creating account…" : "Signing in…") : (isSignup ? "Create Account" : "Sign In")}
+          </button>
+        </form>
+
+        <div style={{textAlign:"center",marginTop:16,fontSize:13,color:T.sub}}>
+          {isSignup ? "Already have an account? " : "New to ShiftWise? "}
+          <button type="button" onClick={()=>{setAuthMode(isSignup?"signin":"signup");setAuthError("");}} style={authLink}>
+            {isSignup ? "Sign in" : "Create an account"}
+          </button>
         </div>
-      </div>
+
+        {!isSignup && (
+          <>
+            <div style={{height:1,background:T.border,margin:"22px 0 18px"}}/>
+            <div style={{textAlign:"center",fontSize:13,color:T.sub,marginBottom:12}}>Just looking? Explore a sample business.</div>
+            <button type="button" onClick={()=>{ setAuthError(""); setAuthEmail(DEMO_EMAIL); setAuthPass(""); setTimeout(()=>document.getElementById("sw-auth-pass")?.focus(), 0); }}
+              style={{width:"100%",background:T.surface,color:T.text,border:`1px solid ${T.border}`,borderRadius:10,padding:"12px 0",fontWeight:700,fontSize:14,cursor:"pointer",fontFamily:"inherit"}}>
+              Try the Cedar & Sage demo
+            </button>
+
+          </>
+        )}
+
+      </>
     );
   }
 
