@@ -494,6 +494,60 @@ const Card = ({ children, style={}, T }) => (
   </div>
 );
 
+// UI Batch 10c — small range calendar for Report Builder custom dates.
+// Values are "YYYY-MM-DD" strings. First tap = start, second tap = end.
+function RangeCalendar({ start, end, onChange, T, anchor }) {
+  const iso = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const parse = s => { const [y,m,d] = s.split("-").map(Number); return new Date(y, m-1, d); };
+  const base = start ? parse(start) : anchor ? parse(anchor) : new Date();
+  const [view, setView] = useState(() => new Date(base.getFullYear(), base.getMonth(), 1));
+  const y = view.getFullYear(), m = view.getMonth();
+  const first = new Date(y, m, 1).getDay();
+  const days = new Date(y, m+1, 0).getDate();
+  const cells = [...Array(first).fill(null), ...Array.from({length:days}, (_, i) => iso(new Date(y, m, i+1)))];
+  const todayIso = anchor || iso(new Date());
+  const pick = d => {
+    if (!start || (start && end)) onChange(d, "");
+    else if (d < start) onChange(d, "");
+    else onChange(start, d);
+  };
+  const fmt = s => s ? parse(s).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
+  const nav = { width:32, height:32, borderRadius:8, border:`1px solid ${T.border}`, background:T.surface, color:T.text, cursor:"pointer", fontSize:15, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center" };
+  return (
+    <div style={{ border:`1px solid ${T.border}`, borderRadius:12, background:T.surface, padding:12, maxWidth:320 }}>
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8 }}>
+        <button type="button" aria-label="Previous month" onClick={()=>setView(new Date(y, m-1, 1))} style={nav}>‹</button>
+        <div style={{ fontSize:13, fontWeight:800, color:T.text }}>{view.toLocaleDateString("en-US",{month:"long",year:"numeric"})}</div>
+        <button type="button" aria-label="Next month" onClick={()=>setView(new Date(y, m+1, 1))} style={nav}>›</button>
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,minmax(0,1fr))", gap:2, fontSize:10.5, fontWeight:700, color:T.sub, textAlign:"center", marginBottom:4 }}>
+        {["Su","Mo","Tu","We","Th","Fr","Sa"].map(d => <div key={d}>{d}</div>)}
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(7,minmax(0,1fr))", gap:2 }}>
+        {cells.map((d, i) => {
+          if (!d) return <div key={"b"+i}/>;
+          const isEnd = d === start || d === end;
+          const inRange = start && end && d > start && d < end;
+          return (
+            <button key={d} type="button" onClick={()=>pick(d)} aria-pressed={isEnd}
+              aria-label={parse(d).toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"})}
+              style={{ height:34, borderRadius:8, border: d===todayIso && !isEnd ? `1px solid ${T.accent}` : "1px solid transparent",
+                background: isEnd ? T.accent : inRange ? T.accent+"22" : "transparent",
+                color: isEnd ? "white" : T.text, fontSize:12, fontWeight: isEnd ? 800 : 600, cursor:"pointer", fontFamily:"inherit" }}>
+              {Number(d.slice(8))}
+            </button>
+          );
+        })}
+      </div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:10, fontSize:11.5, color:T.sub, gap:8 }}>
+        <span><strong style={{color:T.text}}>{fmt(start)}</strong> – <strong style={{color:T.text}}>{fmt(end)}</strong></span>
+        {(start || end) && <button type="button" onClick={()=>onChange("", "")} style={{ background:"none", border:"none", color:T.sub, fontSize:11, fontWeight:600, cursor:"pointer", textDecoration:"underline", padding:0 }}>Clear</button>}
+      </div>
+      {start && !end && <div style={{ fontSize:11, color:T.sub, marginTop:4 }}>Now tap an end date.</div>}
+    </div>
+  );
+}
+
 const SectionLabel = ({ children, T }) => (
   <div style={{ fontSize:10, fontWeight:700, color:T.sub, letterSpacing:"0.08em", marginBottom:6, textTransform:"uppercase" }}>
     {children}
@@ -5456,11 +5510,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                             </div>
                           </div>
                           {rbPreset==="custom" && (
-                            <div style={{display:"flex",gap:8,marginTop:8}}>
-                              <input type="date" aria-label="Start date" value={rbCustomStart} onChange={e=>{setRbCustomStart(e.target.value);setRbResult(null);}}
-                                style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"7px 8px",fontSize:12,background:T.surface,color:T.text}}/>
-                              <input type="date" aria-label="End date" value={rbCustomEnd} onChange={e=>{setRbCustomEnd(e.target.value);setRbResult(null);}}
-                                style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"7px 8px",fontSize:12,background:T.surface,color:T.text}}/>
+                            <div style={{marginTop:10}}>
+                              <RangeCalendar T={T} start={rbCustomStart} end={rbCustomEnd} anchor={isDemoBiz ? DEMO_TODAY_ANCHOR : undefined}
+                                onChange={(s,e)=>{ setRbCustomStart(s); setRbCustomEnd(e); setRbResult(null); }}/>
                             </div>
                           )}
                         </div>
@@ -5554,7 +5606,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                       <button onClick={()=>setRbOpenFacets(p=>({...p,[fk]:!p[fk]}))} aria-expanded={open}
                                         style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 10px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
                                         <span style={{fontSize:11.5,fontWeight:700,color:T.text}}>
-                                          {fl ? `Filter: ${fl.label}` : "Fields to pull"}
+                                          {fl ? fl.label : "Fields to pull"}
                                           {facet.count > 0 && <span style={{marginLeft:6,background:def.color+"33",color:T.text,borderRadius:999,padding:"1px 7px",fontSize:10}}>{facet.count}</span>}
                                           {!fl && facet.count === 0 && <span style={{marginLeft:6,fontSize:10,fontWeight:600,color:T.sub}}>pick at least one</span>}
                                         </span>
