@@ -5280,10 +5280,13 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
               <div style={{ fontSize: 12.5, color: C.sub }}>{biz} · {pwLabel}</div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <div className="sw-datebar" style={{ display: "flex", alignItems: "center", gap: 6, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 4 }}>
               <button aria-label="Previous week" onClick={() => setPayWeek(getSunday(addDays(payWeek, -7)))} style={{ ...btnGhost, width: 40, padding: 0 }}>‹</button>
               <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, padding: "0 4px", whiteSpace: "nowrap", minWidth: 132, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{payWeek === paySun ? "This week" : pwLabel}</span>
               <button aria-label="Next week" onClick={() => setPayWeek(getSunday(addDays(payWeek, 7)))} style={{ ...btnGhost, width: 40, padding: 0 }}>›</button>
-              {payWeek !== paySun && <button onClick={() => setPayWeek(paySun)} style={{ ...btnGhost, color: T.accent }}>Today</button>}
+              <button onClick={() => setPayWeek(paySun)} disabled={payWeek === paySun} title={payWeek === paySun ? "Already on this week" : "Jump to this week"}
+                style={{ ...btnGhost, color: T.accent, opacity: payWeek === paySun ? 0.45 : 1, cursor: payWeek === paySun ? "default" : "pointer" }}>Today</button>
+              </div>
               {squareConnected && <button onClick={handleSyncSquare} disabled={squareSyncing} style={{ ...btnGhost, opacity: squareSyncing ? 0.6 : 1 }}>{squareSyncing ? "Syncing…" : "Sync Square"}</button>}
             </div>
           </div>
@@ -7542,9 +7545,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       </div>
 
       {/* Week picker — matches Schedule tab's Prev / range / calendar / Next pattern */}
-      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+      <div className="sw-datebar" style={{display:"inline-flex",alignItems:"center",gap:6,marginBottom:14,flexWrap:"wrap",background:T.muted,border:`1px solid ${T.border}`,borderRadius:12,padding:4,boxShadow:"inset 0 1px 0 rgba(255,255,255,0.6)"}}>
         <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,-7)))}
-          style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
+          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
         <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
           <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",justifyContent:"center",gap:6,minWidth:170,boxSizing:"border-box",fontVariantNumeric:"tabular-nums"}}>
             <span style={{fontSize:10}}>●</span>
@@ -7557,10 +7560,11 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           </div>
         </div>
         <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,7)))}
-          style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
-        {tsWeekStart !== getSunday(demoToday) && (
-          <button onClick={()=>setTsWeekStart(getSunday(demoToday))} style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,padding:"0 14px",height:36,fontSize:12,fontWeight:700,color:T.accent,cursor:"pointer",flexShrink:0}}>Today</button>
-        )}
+          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
+        {(()=>{ const atToday = tsWeekStart === getSunday(demoToday); return (
+          <button onClick={()=>setTsWeekStart(getSunday(demoToday))} disabled={atToday} aria-disabled={atToday} title={atToday ? "Already on this week" : "Jump to this week"}
+                          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,padding:"0 14px",height:36,fontSize:12,fontWeight:700,color:T.accent,cursor:atToday?"default":"pointer",opacity:atToday?0.45:1,flexShrink:0}}>Today</button>
+        ); })()}
       </div>
 
       {/* Grid */}
@@ -7749,9 +7753,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                     </div>
                   </div>
                   <div>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div className="sw-datebar" style={{display:"flex",alignItems:"center",gap:6,background:T.muted,border:`1px solid ${T.border}`,borderRadius:12,padding:4,boxShadow:"inset 0 1px 0 rgba(255,255,255,0.6)"}}>
                       <button onClick={()=>{ const prev=getSunday(addDays(activeWeek||wk1Start,-7)); setWk1Start(prev); setActiveWeek(prev); setPrintWeek(prev); }}
-                        style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
+                        style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
                       <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
                         <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",justifyContent:"center",gap:6,minWidth:170,boxSizing:"border-box",fontVariantNumeric:"tabular-nums"}}>
                           <span style={{fontSize:10}}>●</span>
@@ -7764,10 +7768,11 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         </div>
                       </div>
                       <button onClick={()=>{ const next=getSunday(addDays(activeWeek||wk1Start,7)); setWk1Start(next); setActiveWeek(next); setPrintWeek(next); }}
-                        style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
-                      {(activeWeek !== getSunday(demoToday) || (schedView==="daily" && activeDay !== demoToday)) && (
-                        <button onClick={goToTodaySchedule} style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,padding:"0 14px",height:36,fontSize:12,fontWeight:700,color:T.accent,cursor:"pointer",flexShrink:0}}>Today</button>
-                      )}
+                        style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
+                      {(()=>{ const atToday = !(activeWeek !== getSunday(demoToday) || (schedView==="daily" && activeDay !== demoToday)); return (
+                        <button onClick={goToTodaySchedule} disabled={atToday} aria-disabled={atToday} title={atToday ? "Already on this week" : "Jump to this week"}
+                          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,padding:"0 14px",height:36,fontSize:12,fontWeight:700,color:T.accent,cursor:atToday?"default":"pointer",opacity:atToday?0.45:1,flexShrink:0}}>Today</button>
+                      ); })()}
                     </div>
                   </div>
 
@@ -8418,9 +8423,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 </div>
 
                 {/* Week selector */}
-                <div style={{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
+                <div className="sw-datebar" style={{display:"flex", alignItems:"center", gap:6, flexWrap:"wrap", background:T.muted,border:`1px solid ${T.border}`,borderRadius:12,padding:4,boxShadow:"inset 0 1px 0 rgba(255,255,255,0.6)"}}>
                   <button onClick={()=>{ const w=getSunday(addDays(coverageWeek,-7)); setCoverageWeek(w); setCoverageDay(covWkDates[0]); }}
-                    style={{background:T.muted, border:`1px solid ${T.border}`, borderRadius:8, width:34, height:36, fontSize:16, cursor:"pointer", color:T.sub, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, flexShrink:0}}>‹</button>
+                    style={{background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, width:34, height:36, fontSize:16, cursor:"pointer", color:T.sub, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, flexShrink:0}}>‹</button>
                   <div style={{display:"flex", alignItems:"center", borderRadius:9, overflow:"hidden", border:`2px solid ${T.accent}`, boxShadow:`0 0 0 2px ${T.accent}28`}}>
                     <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",justifyContent:"center",gap:6,minWidth:170,boxSizing:"border-box",fontVariantNumeric:"tabular-nums"}}>
                       {isCurrentWeek && <span style={{fontSize:10}}>●</span>}
@@ -8433,11 +8438,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                     </div>
                   </div>
                   <button onClick={()=>{ const w=getSunday(addDays(coverageWeek,7)); setCoverageWeek(w); setCoverageDay(w); }}
-                    style={{background:T.muted, border:`1px solid ${T.border}`, borderRadius:8, width:34, height:36, fontSize:16, cursor:"pointer", color:T.sub, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, flexShrink:0}}>›</button>
-                  {!isCurrentWeek && (
-                    <button onClick={()=>{ setCoverageWeek(getSunday(todayStr)); setCoverageDay(todayStr); }}
-                      style={{background:T.muted, border:`1px solid ${T.border}`, borderRadius:8, padding:"0 12px", height:36, fontSize:11, fontWeight:700, color:T.sub, cursor:"pointer"}}>Today</button>
-                  )}
+                    style={{background:T.surface, border:`1px solid ${T.border}`, borderRadius:8, width:34, height:36, fontSize:16, cursor:"pointer", color:T.sub, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, flexShrink:0}}>›</button>
+                  <button onClick={()=>{ setCoverageWeek(getSunday(todayStr)); setCoverageDay(todayStr); }} disabled={isCurrentWeek} aria-disabled={isCurrentWeek} title={isCurrentWeek ? "Already on this week" : "Jump to this week"}
+                          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,padding:"0 14px",height:36,fontSize:12,fontWeight:700,color:T.accent,cursor:isCurrentWeek?"default":"pointer",opacity:isCurrentWeek?0.45:1,flexShrink:0}}>Today</button>
                 </div>
 
                 {/* Day pills */}
@@ -10053,9 +10056,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                           {/* Week picker */}
                           <div>
                             <label style={{fontSize:10,fontWeight:700,color:T.sub,display:"block",marginBottom:6,textTransform:"uppercase",letterSpacing:"0.06em"}}>Schedule Week</label>
-                            <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <div className="sw-datebar" style={{display:"inline-flex",alignItems:"center",gap:6,background:T.muted,border:`1px solid ${T.border}`,borderRadius:12,padding:4,boxShadow:"inset 0 1px 0 rgba(255,255,255,0.6)"}}>
                               <button onClick={()=>setPrintWeek(getSunday(addDays(printWeek,-7)))}
-                                style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
+                                style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
                               <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
                                 <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",justifyContent:"center",gap:6,minWidth:170,boxSizing:"border-box",fontVariantNumeric:"tabular-nums"}}>
                                   <span style={{fontSize:10}}>●</span>
@@ -10068,7 +10071,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                 </div>
                               </div>
                               <button onClick={()=>setPrintWeek(getSunday(addDays(printWeek,7)))}
-                                style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
+                                style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
                             </div>
                           </div>
                           {/* View toggle */}
