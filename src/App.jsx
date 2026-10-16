@@ -1540,7 +1540,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   const [priceData,     setPriceData]     = useState(null); // { loading, error, changes, hasTracking }
   const [itemNames,     setItemNames]     = useState(null); // [{ key, name, units }] for the Item Sales filter
   const [rbFilterSearch, setRbFilterSearch] = useState({}); // { "source|filter": text }
-  const [rbOpenFacets,   setRbOpenFacets]   = useState({}); // { "source|facet": true } — facet sections open only when tapped
+  const [rbMenu,         setRbMenu]         = useState(null); // "source|fields" or "source|filterId" — the one open filter menu
   const [pulsePrompt,    setPulsePrompt]    = useState(false);
 
   const [notifFreq,      setNotifFreq]      = useState(() => { try { return localStorage.getItem("sw_notif_freq")||"login"; } catch { return "login"; } });
@@ -1665,7 +1665,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     setRbVizType(null);
     setRbResult(null);
     setRbLineItemsOpen(false);
-    setRbOpenFacets({});
+    setRbMenu(null);
   }
   // Report Builder selections never carry over — leaving the panel any way
   // (X button, toggling it off, or switching straight to History/Flag
@@ -5519,109 +5519,138 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                       );
                     })()}
 
-                    <SectionLabel T={T}>Data Sources ({rbActiveSourceIds().length}/3)</SectionLabel>
-                    <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6,marginBottom:16}}>
-                      {Object.entries(REPORT_SOURCES).map(([sid,def])=>{
-                        const state = rbSources[sid] || { active:false, fields:[], filters:{} };
-                        return (
-                          <div key={sid} style={{border:`1px solid ${state.active?def.color+"66":T.border}`,borderRadius:10,background:state.active?def.color+"0D":T.muted,overflow:"hidden"}}>
-                            <button onClick={()=>rbToggleSource(sid)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left"}}>
-                              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                                <span style={{width:16,height:16,borderRadius:5,border:`1.5px solid ${state.active?def.color:T.sub}`,background:state.active?def.color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:10,color:"white"}}>{state.active?"✓":""}</span>
-                                <span style={{fontSize:12.5,fontWeight:700,color:T.text}}>{def.label}</span>
-                              </div>
-                              {state.active && <span style={{fontSize:10,color:T.sub}}>{state.fields.length} field{state.fields.length!==1?"s":""}</span>}
-                            </button>
-                            {state.active && (
-                              <div style={{padding:"0 12px 12px",display:"flex",flexDirection:"column",gap:6}}>
-                                {/* UI Batch 10 — faceted: each section opens only when tapped */}
-                                {[{ key:"fields", label:"Fields", count: state.fields.length, fl:null }, ...def.filters.map(fl => ({ key: fl.id, label: fl.label, count: (state.filters[fl.id]||[]).length, fl }))].map(facet => {
-                                  const fk = `${sid}|${facet.key}`;
-                                  const open = !!rbOpenFacets[fk];
-                                  const fl = facet.fl;
-                                  let body = null;
-                                  if (open && !fl) {
-                                    body = (
-                                      <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                                        {def.fields.map(f=>(
-                                          <button key={f.id} onClick={()=>rbToggleField(sid,f.id)}
-                                            style={{padding:"4px 9px",borderRadius:999,fontSize:10.5,fontWeight:600,cursor:"pointer",
-                                              border:`1px solid ${state.fields.includes(f.id)?def.color:T.border}`,
-                                              background:state.fields.includes(f.id)?def.color+"22":"transparent",
-                                              color:state.fields.includes(f.id)?T.text:T.sub}}>
-                                            {state.fields.includes(f.id)?"✓ ":""}{f.label}
-                                          </button>
-                                        ))}
-                                        {sid==="shifttypes" && (
-                                          <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); }}
-                                            style={{background:"none",border:"none",color:T.accent,fontWeight:700,fontSize:11,cursor:"pointer",padding:"4px 2px"}}>
-                                            Edit shift types
-                                          </button>
-                                        )}
-                                      </div>
-                                    );
-                                  } else if (open && fl) {
-                                    const sKey = `${sid}|${fl.id}`;
-                                    const q = (rbFilterSearch[sKey] || "").trim().toLowerCase();
-                                    const chosen = state.filters[fl.id] || [];
-                                    const long = fl.options.length > 12;
-                                    const shown = !long ? fl.options
-                                      : q ? fl.options.filter(o => chosen.includes(o.value) || o.label.toLowerCase().includes(q)).slice(0, 40)
-                                          : fl.options.filter((o, i) => i < 12 || chosen.includes(o.value)); // top sellers first
-                                    body = (
-                                      <div>
-                                        {sid==="itemsales" && fl.id==="item" && itemNames && itemNames.length===0 && (
-                                          <div style={{fontSize:11,color:T.sub,marginBottom:4}}>No item sales yet — items appear after a Square sync.</div>
-                                        )}
-                                        {long && (
-                                          <input value={rbFilterSearch[sKey] || ""} onChange={e=>setRbFilterSearch(p=>({...p,[sKey]:e.target.value}))}
-                                            placeholder={`Search ${fl.options.length} ${fl.label.toLowerCase()}s…`} aria-label={`Search ${fl.label}`}
-                                            style={{width:"100%",boxSizing:"border-box",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:12,outline:"none",background:T.surface,color:T.text,marginBottom:6}}/>
-                                        )}
-                                        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                                          {shown.map(opt=>{
-                                            const active = chosen.includes(opt.value);
-                                            return (
-                                              <button key={opt.value} onClick={()=>rbToggleFilter(sid,fl.id,opt.value)}
-                                                style={{padding:"4px 9px",borderRadius:999,fontSize:10.5,fontWeight:600,cursor:"pointer",
-                                                  border:`1px solid ${active?def.color:T.border}`,
-                                                  background:active?def.color+"22":"transparent",
-                                                  color:active?T.text:T.sub}}>
-                                                {opt.label}
-                                              </button>
-                                            );
-                                          })}
-                                        </div>
-                                        {chosen.length > 0 && (
-                                          <button onClick={()=>{ setRbResult(null); setRbSources(p=>({...p,[sid]:{...p[sid],filters:{...p[sid].filters,[fl.id]:[]}}})); }}
-                                            style={{background:"none",border:"none",color:T.sub,fontSize:10.5,fontWeight:600,cursor:"pointer",padding:"6px 0 0",textDecoration:"underline"}}>
-                                            Clear {fl.label.toLowerCase()}
-                                          </button>
-                                        )}
-                                      </div>
-                                    );
-                                  }
-                                  return (
-                                    <div key={facet.key} style={{background:T.surface,border:`1px solid ${open?def.color+"55":T.border}`,borderRadius:8}}>
-                                      <button onClick={()=>setRbOpenFacets(p=>({...p,[fk]:!p[fk]}))} aria-expanded={open}
-                                        style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 10px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
-                                        <span style={{fontSize:11.5,fontWeight:700,color:T.text}}>
-                                          {fl ? fl.label : "Fields to pull"}
-                                          {facet.count > 0 && <span style={{marginLeft:6,background:def.color+"33",color:T.text,borderRadius:999,padding:"1px 7px",fontSize:10}}>{facet.count}</span>}
-                                          {!fl && facet.count === 0 && <span style={{marginLeft:6,fontSize:10,fontWeight:600,color:T.sub}}>pick at least one</span>}
-                                        </span>
-                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={T.sub} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{transform:open?"rotate(180deg)":"none",transition:"transform 0.15s",flexShrink:0}}><path d="m6 9 6 6 6-6"/></svg>
-                                      </button>
-                                      {body && <div style={{padding:"0 10px 10px"}}>{body}</div>}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            )}
+                    {/* UI Batch 11 — Option A: source chips, then per-source filter buttons that open scroll menus */}
+                    {(()=>{
+                      const activeIds = rbActiveSourceIds();
+                      const CheckBox = ({on, color}) => (
+                        <span aria-hidden="true" style={{width:18,height:18,borderRadius:5,border:`1.5px solid ${on?color:T.border}`,background:on?color:T.surface,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                          {on && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3.2" strokeLinecap="round" strokeLinejoin="round"><path d="m5 12 5 5L20 7"/></svg>}
+                        </span>
+                      );
+                      const chev = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.sub} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>;
+                      const xIcon = <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.8" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>;
+                      const clearFilter = (sid, fid) => { setRbResult(null); setRbSources(p=>({...p,[sid]:{...p[sid],filters:{...p[sid].filters,[fid]:[]}}})); };
+                      return (
+                        <div style={{marginBottom:16}}>
+                          <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:8}}>
+                            <div style={{fontSize:14,fontWeight:800,color:T.text}}>Data sources</div>
+                            <div style={{fontSize:12.5,fontWeight:600,color:T.sub}}>{activeIds.length} of 3</div>
                           </div>
-                        );
-                      })}
-                    </div>
+                          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                            {Object.entries(REPORT_SOURCES).map(([sid,def])=>{
+                              const on = !!rbSources[sid]?.active;
+                              const capped = !on && activeIds.length >= 3;
+                              return (
+                                <button key={sid} onClick={()=>{ if (!capped) { rbToggleSource(sid); setRbMenu(null); } }} aria-pressed={on} disabled={capped}
+                                  title={capped ? "Up to 3 sources — turn one off first" : undefined}
+                                  style={{display:"flex",alignItems:"center",gap:8,minHeight:40,padding:"0 14px",borderRadius:999,border:`1.5px solid ${on?def.color:T.border}`,background:on?def.color+"14":T.surface,fontSize:13,fontWeight:700,color:T.text,cursor:capped?"not-allowed":"pointer",opacity:capped?0.45:1,fontFamily:"inherit"}}>
+                                  <CheckBox on={on} color={def.color}/>{def.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+
+                          {activeIds.map(sid=>{
+                            const def = REPORT_SOURCES[sid];
+                            const state = rbSources[sid];
+                            const chips = [
+                              ...state.fields.map(fid => ({ key:"f"+fid, label: def.fields.find(f=>f.id===fid)?.label || fid, remove: ()=>rbToggleField(sid,fid) })),
+                              ...def.filters.filter(fl => (state.filters[fl.id]||[]).length).map(fl => {
+                                const picked = state.filters[fl.id];
+                                const names = picked.map(v => fl.options.find(o=>o.value===v)?.label || v);
+                                const short = names.length > 2 ? `${names.slice(0,2).join(", ")} +${names.length-2}` : names.join(", ");
+                                return { key:"x"+fl.id, label:`${fl.label}: ${short}`, remove: ()=>clearFilter(sid, fl.id) };
+                              }),
+                            ];
+                            const menus = [{ key:"fields", label:"Fields", count: state.fields.length, fl:null }, ...def.filters.map(fl => ({ key:fl.id, label:fl.label, count:(state.filters[fl.id]||[]).length, fl }))];
+                            return (
+                              <div key={sid} style={{marginTop:14,border:`1px solid ${def.color}55`,borderRadius:12,padding:14,background:def.color+"08"}}>
+                                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10}}>
+                                  <div style={{fontSize:14,fontWeight:800,color:T.text}}>{def.label}</div>
+                                  {sid==="shifttypes" && (
+                                    <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); }}
+                                      style={{background:"none",border:"none",color:T.accent,fontWeight:700,fontSize:12,cursor:"pointer",padding:0}}>Edit shift types</button>
+                                  )}
+                                </div>
+                                {chips.length > 0 ? (
+                                  <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:12}}>
+                                    {chips.map(c => (
+                                      <span key={c.key} style={{display:"inline-flex",alignItems:"center",gap:6,background:T.muted,border:`1px solid ${T.border}`,borderRadius:999,padding:"5px 6px 5px 12px",fontSize:12.5,fontWeight:600,color:T.text,maxWidth:"100%"}}>
+                                        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.label}</span>
+                                        <button onClick={c.remove} aria-label={`Remove ${c.label}`}
+                                          style={{width:24,height:24,borderRadius:999,border:"none",background:T.surface,color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}>{xIcon}</button>
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div style={{fontSize:12.5,color:T.sub,marginBottom:12}}>Pick at least one field. Filters are optional.</div>
+                                )}
+                                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                                  {menus.map(m => {
+                                    const mk = `${sid}|${m.key}`;
+                                    const open = rbMenu === mk;
+                                    const fl = m.fl;
+                                    let items, search = null;
+                                    if (!fl) {
+                                      items = def.fields.map(f => ({ value:f.id, label:f.label, on: state.fields.includes(f.id), toggle: ()=>rbToggleField(sid,f.id) }));
+                                    } else {
+                                      const sKey = `${sid}|${fl.id}`;
+                                      const q = (rbFilterSearch[sKey] || "").trim().toLowerCase();
+                                      const chosen = state.filters[fl.id] || [];
+                                      const long = fl.options.length > 8;
+                                      const shown = !long ? fl.options
+                                        : q ? fl.options.filter(o => chosen.includes(o.value) || o.label.toLowerCase().includes(q)).slice(0, 40)
+                                            : fl.options.filter((o, i) => i < 12 || chosen.includes(o.value)); // top sellers first
+                                      items = shown.map(o => ({ value:o.value, label:o.label, on: chosen.includes(o.value), toggle: ()=>rbToggleFilter(sid,fl.id,o.value) }));
+                                      if (long) search = (
+                                        <input value={rbFilterSearch[sKey] || ""} onChange={e=>setRbFilterSearch(p=>({...p,[sKey]:e.target.value}))}
+                                          placeholder={`Search ${fl.options.length} ${fl.label.toLowerCase()}s…`} aria-label={`Search ${fl.label}`} autoFocus
+                                          style={{width:"100%",height:38,boxSizing:"border-box",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"0 12px",fontSize:13,outline:"none",background:T.surface,color:T.text,marginBottom:6}}/>
+                                      );
+                                    }
+                                    return (
+                                      <div key={m.key} style={{position:"relative"}}>
+                                        <button onClick={()=>setRbMenu(open ? null : mk)} aria-expanded={open}
+                                          style={{display:"flex",alignItems:"center",gap:8,minHeight:40,padding:"0 12px",borderRadius:9,border:`1.5px solid ${open||m.count?def.color:T.border}`,background:T.surface,fontSize:13,fontWeight:700,color:T.text,cursor:"pointer",fontFamily:"inherit"}}>
+                                          {m.label}
+                                          {m.count > 0 && <span style={{background:def.color,color:"white",borderRadius:999,padding:"1px 8px",fontSize:11}}>{m.count}</span>}
+                                          <span style={{display:"flex",transform:open?"rotate(180deg)":"none",transition:"transform 0.15s"}}>{chev}</span>
+                                        </button>
+                                        {open && (
+                                          <>
+                                            <div onClick={()=>setRbMenu(null)} style={{position:"fixed",inset:0,zIndex:550}}/>
+                                            <div role="dialog" aria-label={m.label} style={{position:"absolute",top:"calc(100% + 6px)",left:0,width:300,maxWidth:"calc(100vw - 48px)",background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,boxShadow:T.shadowMd,padding:10,zIndex:600}}>
+                                              {sid==="itemsales" && fl?.id==="item" && itemNames && itemNames.length===0 && (
+                                                <div style={{fontSize:12,color:T.sub,padding:"4px 6px 8px"}}>No item sales yet — items appear after a Square sync.</div>
+                                              )}
+                                              {search}
+                                              <div style={{maxHeight:220,overflowY:"auto",display:"flex",flexDirection:"column",gap:2,paddingRight:2}}>
+                                                {items.length === 0 && <div style={{fontSize:12.5,color:T.sub,padding:"8px 6px"}}>No matches.</div>}
+                                                {items.map(it => (
+                                                  <button key={it.value} onClick={it.toggle} aria-pressed={it.on}
+                                                    style={{display:"flex",alignItems:"center",gap:10,padding:"9px 10px",borderRadius:8,border:"none",background:it.on?def.color+"14":"transparent",fontSize:13.5,fontWeight:it.on?700:500,color:T.text,cursor:"pointer",textAlign:"left",fontFamily:"inherit"}}>
+                                                    <CheckBox on={it.on} color={def.color}/><span>{it.label}</span>
+                                                  </button>
+                                                ))}
+                                              </div>
+                                              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:`1px solid ${T.border}`,marginTop:8,paddingTop:8}}>
+                                                <button onClick={()=>{ if (!fl) { state.fields.slice().forEach(fid=>rbToggleField(sid,fid)); } else clearFilter(sid, fl.id); }}
+                                                  disabled={!m.count} style={{background:"none",border:"none",color:T.sub,fontSize:12.5,fontWeight:600,textDecoration:"underline",cursor:m.count?"pointer":"default",opacity:m.count?1:0.5,padding:0}}>Clear</button>
+                                                <button onClick={()=>setRbMenu(null)} style={{background:T.accent,color:"white",border:"none",borderRadius:8,padding:"8px 16px",fontSize:13,fontWeight:700,cursor:"pointer"}}>Done</button>
+                                              </div>
+                                            </div>
+                                          </>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
 
                     <button onClick={runCustomReportUI} disabled={rbLoading}
                       style={{width:"100%",background:rbLoading?T.muted:T.accent,border:"none",borderRadius:10,padding:"11px 0",fontSize:13,fontWeight:800,color:rbLoading?T.sub:"white",cursor:rbLoading?"not-allowed":"pointer",marginBottom:16}}>
