@@ -439,6 +439,8 @@ input,select,button,textarea { font-family:inherit; }
   button { min-height:40px; touch-action:manipulation; }
   .controls-bar { flex-direction:column !important; gap:10px !important; }
   .controls-divider { display:none !important; }
+  .sched-strip { grid-template-columns:1fr !important; gap:10px !important; }
+  .sched-stat  { border-left:none !important; padding-left:0 !important; }
   .mobile-compact { padding:12px 14px !important; }
 }
 `;
@@ -1419,7 +1421,6 @@ export default function App() {
   const [costsOpen,      setCostsOpen]      = useState(false);
   const [costDraft,      setCostDraft]      = useState(null); // {id?, name, amount, kind, frequency} while adding/editing
   const [beView,         setBeView]         = useState("breakeven"); // "breakeven" | "target"
-  const [weekCheckOpen,  setWeekCheckOpen]  = useState(false);
   const [showAddWidget,  setShowAddWidget]  = useState(false);
   const [newWidget,      setNewWidget]      = useState({ data_source:"sales", time_range:"last7", display:"stat", color:null, size:"sm", show_axis:true, show_legend:true });
   const [sizeMenuFor,    setSizeMenuFor]    = useState(null); // widget id whose size picker is open, or null
@@ -4977,60 +4978,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
 
   const fmtMoney = n => "$" + Math.round(n).toLocaleString("en-US");
 
-  // Schedule tab — Option C: one collapsed "Week check" line under the budget
-  function renderWeekCheck(weekKey) {
-    const be = computeBreakEven(weekKey);
-    const targetPct = laborTargetPct || 30;
-    const laborPct = be.sales > 0 ? (be.labor / be.sales) * 100 : null;
-    const belowDays = be.pctOk ? be.days.filter(d => d.sales != null && d.breakEven > 0 && d.sales < d.breakEven) : [];
-    const overtime = employees.filter(e => eWkH(weekKey, e.id) > 40);
-    const checks = [
-      {
-        label: "Labor % of sales",
-        value: laborPct == null ? "Needs 2+ weeks of sales history" : `${laborPct.toFixed(0)}% · target ${targetPct}%`,
-        flag: laborPct != null && laborPct > targetPct,
-      },
-      {
-        label: "Break-even",
-        value: !be.pctOk ? "Check your % costs" : !be.salesKnown && !be.days.some(d => d.sales != null) ? "Needs 2+ weeks of sales history"
-          : belowDays.length === 0 ? "All days covered" : `${belowDays.map(d => d.day).join(", ")} below`,
-        flag: belowDays.length > 0,
-      },
-      {
-        label: "Over 40 hours",
-        value: overtime.length === 0 ? "No one" : overtime.map(e => `${e.name || "Unnamed"} · ${eWkH(weekKey, e.id)}h`).join(", "),
-        flag: overtime.length > 0,
-      },
-    ];
-    const flagged = checks.filter(c => c.flag).length;
-    return (
-      <div style={{marginTop:8}}>
-        <button onClick={()=>setWeekCheckOpen(o=>!o)} aria-expanded={weekCheckOpen}
-          style={{display:"flex",alignItems:"center",justifyContent:"space-between",width:"100%",background:T.bg,border:`1px solid ${T.border}`,borderRadius:9,padding:"9px 11px",cursor:"pointer",minHeight:40}}>
-          <span style={{display:"flex",alignItems:"center",gap:8,fontSize:12,fontWeight:700,color:T.text}}>
-            <span style={{background:flagged?"#C0392B":"#4CAF7D",color:"white",borderRadius:999,minWidth:20,height:20,padding:"0 6px",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>{flagged || "✓"}</span>
-            Week check
-          </span>
-          <span style={{fontSize:11,color:T.sub}}>{weekCheckOpen ? "Hide ▴" : "Show ▾"}</span>
-        </button>
-        {weekCheckOpen && (
-          <div style={{marginTop:6,border:`1px solid ${T.border}`,borderRadius:9,overflow:"hidden",background:T.surface}}>
-            {checks.map((c, i) => (
-              <div key={c.label} style={{display:"flex",justifyContent:"space-between",gap:10,padding:"8px 11px",borderTop:i?`1px solid ${T.border}`:"none",fontSize:11.5}}>
-                <span style={{color:T.sub,flexShrink:0}}>{c.label}</span>
-                <span style={{fontWeight:700,textAlign:"right",color:c.flag?"#C0392B":T.text}}>{c.value}</span>
-              </div>
-            ))}
-            <button onClick={()=>setTab("dashboard")}
-              style={{width:"100%",background:"transparent",border:"none",borderTop:`1px solid ${T.border}`,padding:"9px 0",fontSize:11,fontWeight:700,color:T.accent,cursor:"pointer"}}>
-              Open break-even on Dashboard →
-            </button>
-          </div>
-        )}
-      </div>
-    );
-  }
-
   // Dashboard — Break-even card (its own card, not a user widget)
   function renderBreakEvenCard() {
     const be = computeBreakEven(payWeek);
@@ -7652,19 +7599,17 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
 
 
 {schedSubTab==="schedule" && <>
-              <Card T={T} style={{marginBottom:14,padding:"11px 14px",overflow:"visible",position:"relative",zIndex:300}}>
-                <div className="controls-bar" style={{display:"flex",gap:11,alignItems:"flex-start",flexWrap:"wrap"}}>
+              <Card T={T} style={{marginBottom:14,padding:0,overflow:"visible",position:"relative",zIndex:300}}>
+                {/* UI Batch 6 — Option B: controls row + always-visible budget/checks strip */}
+                <div className="controls-bar" style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",padding:"10px 14px"}}>
                   <div>
-                    <SectionLabel T={T}>View</SectionLabel>
                     <div style={{display:"flex",gap:5}}>
                       {[["daily","Day"],["weekly","Week"],["monthly","Month"]].map(([v,lbl])=>(
                         <Pill key={v} T={T} active={schedView===v} onClick={()=>setSchedView(v)}>{lbl}</Pill>
                       ))}
                     </div>
                   </div>
-                  <Divider T={T}/>
                   <div>
-                    <SectionLabel T={T}>Schedule Week</SectionLabel>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <button onClick={()=>{ const prev=getSunday(addDays(activeWeek||wk1Start,-7)); setWk1Start(prev); setActiveWeek(prev); setPrintWeek(prev); }}
                         style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
@@ -7687,34 +7632,21 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                     </div>
                   </div>
 
-                  <Divider T={T}/>
+                  <div style={{flex:"1 1 20px"}}/>
+                  <button onClick={()=>setHistoryOpen(true)}
+                    style={{background:T.surface,color:T.text,border:`1px solid ${T.border}`,borderRadius:8,height:36,padding:"0 14px",fontWeight:700,fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap"}}>
+                    History
+                    {published.length>0&&<span style={{background:T.accent,color:"white",borderRadius:10,padding:"1px 6px",fontSize:9}}>{published.length}</span>}
+                  </button>
                   <div style={{position:"relative"}}>
-                    <SectionLabel T={T}>Actions</SectionLabel>
                     <button onClick={()=>setActionsOpen(p=>!p)}
-                      style={{background:actionsOpen?T.accent:T.muted,color:actionsOpen?"white":T.text,border:"none",borderRadius:8,padding:"7px 14px",fontWeight:700,fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap"}}>
+                      style={{background:actionsOpen?T.accent:T.muted,color:actionsOpen?"white":T.text,border:"none",borderRadius:8,height:36,padding:"0 14px",fontWeight:700,fontSize:12,cursor:"pointer",display:"flex",alignItems:"center",gap:6,whiteSpace:"nowrap"}}>
                       Actions {actionsOpen?"▲":"▼"}
-                      {published.length>0&&<span style={{background:actionsOpen?"rgba(255,255,255,0.3)":T.accent,color:"white",borderRadius:10,padding:"1px 6px",fontSize:9,marginLeft:2}}>{published.length}</span>}
                     </button>
                     {actionsOpen&&(
                       <>
                         <div onClick={()=>setActionsOpen(false)} style={{position:"fixed",inset:0,zIndex:550}}/>
-                        <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,background:T.surface,border:`1px solid ${T.border}`,borderRadius:10,boxShadow:T.shadowMd,zIndex:600,minWidth:240,overflow:"hidden"}}>
-
-                          {/* ── Publish ── */}
-                          <div style={{padding:"6px 14px 4px",fontSize:9,fontWeight:700,color:T.sub,letterSpacing:"0.1em",textTransform:"uppercase",background:T.muted}}>Publish</div>
-                          <button onClick={()=>{ setActionsOpen(false); if(window.confirm("Publish this schedule? It will be saved as a locked version in History.")) publishSchedule(); }}
-                            style={{width:"100%",background:"transparent",border:"none",borderBottom:`1px solid ${T.border}`,padding:"11px 14px",textAlign:"left",fontSize:13,cursor:"pointer",color:T.text,fontWeight:600,display:"flex",alignItems:"center",gap:10}}>
-                            <span style={{fontSize:16}}>✅</span>
-                            <div><div style={{fontWeight:700}}>Publish Week</div><div style={{fontSize:10,color:T.sub}}>Lock and save a timestamped version</div></div>
-                          </button>
-                          <button onClick={()=>{ setActionsOpen(false); setHistoryOpen(true); }}
-                            style={{width:"100%",background:"transparent",border:"none",borderBottom:`1px solid ${T.border}`,padding:"11px 14px",textAlign:"left",fontSize:13,cursor:"pointer",color:T.text,fontWeight:600,display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
-                            <div style={{display:"flex",alignItems:"center",gap:10}}>
-                              <span style={{fontSize:16}}>🕐</span>
-                              <div><div style={{fontWeight:700}}>History</div><div style={{fontSize:10,color:T.sub}}>View and restore published schedules</div></div>
-                            </div>
-                            {published.length>0&&<span style={{background:T.accent,color:"white",borderRadius:10,padding:"1px 7px",fontSize:9,flexShrink:0}}>{published.length}</span>}
-                          </button>
+                        <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,background:T.surface,border:`1px solid ${T.border}`,borderRadius:10,boxShadow:T.shadowMd,zIndex:600,minWidth:240,overflow:"hidden"}}>
 
                           {/* ── Copy / Paste (2-week mode only) ── */}
                           {weekMode==="2"&&<>
@@ -7763,43 +7695,65 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                     )}
                   </div>
 
-                  <Divider T={T}/>
-                  <div style={{marginLeft:"auto",minWidth:200}}>
-                    <SectionLabel T={T}>Weekly Budget</SectionLabel>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
-                      <div style={{position:"relative"}}>
-                        <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",fontWeight:700,fontSize:13,color:T.sub}}>$</span>
-                        <input type="number" min="0" step="10" value={weeklyBudget}
-                          onChange={e=>{ const v=e.target.value; if(v===""||(!isNaN(v)&&parseFloat(v)>=0)) setWeeklyBudget(v); }}
-                          onBlur={e=>{ const v=parseFloat(e.target.value); const val=isNaN(v)||v<0?"":String(Math.round(v)); setWeeklyBudget(val); if(bizId) saveBizSettings({weekly_budget:parseFloat(val)||null}).catch(()=>{}); }}
-                          placeholder="Set budget..."
-                          style={{width:130,border:`1.5px solid ${weeklyBudget&&parseFloat(weeklyBudget)>0?"#4CAF7D":T.border}`,borderRadius:8,padding:"7px 8px 7px 22px",fontSize:13,outline:"none",fontWeight:700,transition:"border 0.15s"}}/>
+                  <button onClick={()=>{ if(window.confirm("Publish this schedule? It will be saved as a locked version in History.")) publishSchedule(); }}
+                    style={{background:T.accent,color:"white",border:"none",borderRadius:8,height:36,padding:"0 16px",fontWeight:700,fontSize:12,cursor:"pointer",whiteSpace:"nowrap"}}>
+                    Publish week
+                  </button>
+                </div>
+
+                {(()=>{
+                  const budget=parseFloat(weeklyBudget)||0;
+                  const spent=activeWkPay;
+                  const pct=budget>0?Math.min((spent/budget)*100,100):0;
+                  const over=budget>0&&spent>budget;
+                  const warn=!over&&pct>85;
+                  const barColor=over?"#C0392B":warn?"#E8A93A":"#4CAF7D";
+                  const be = activeWeek ? computeBreakEven(activeWeek) : null;
+                  const targetPct = laborTargetPct || 30;
+                  const laborPct = be && be.sales > 0 ? (be.labor / be.sales) * 100 : null;
+                  const overtime = activeWeek ? employees.filter(e => eWkH(activeWeek, e.id) > 40) : [];
+                  const statLabel = {fontSize:11.5,color:T.sub,fontWeight:600};
+                  const statVal = {fontSize:14,fontWeight:800,marginTop:2,color:T.text};
+                  const statCell = {borderLeft:`1px solid ${T.border}`,paddingLeft:16,minWidth:0};
+                  return (
+                    <div className="sched-strip" style={{background:T.muted,borderTop:`1px solid ${T.border}`,borderRadius:`0 0 ${T.radius}px ${T.radius}px`,padding:"12px 14px",display:"grid",gridTemplateColumns:"minmax(280px,1.6fr) repeat(2,minmax(0,1fr))",gap:18,alignItems:"center"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0}}>
+                        <label htmlFor="sw-weekly-budget" style={{fontSize:12,fontWeight:700,color:T.sub,whiteSpace:"nowrap"}}>Weekly budget</label>
+                        <div style={{position:"relative",flexShrink:0}}>
+                          <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",fontWeight:700,fontSize:13,color:T.sub}}>$</span>
+                          <input id="sw-weekly-budget" type="number" min="0" step="10" value={weeklyBudget}
+                            onChange={e=>{ const v=e.target.value; if(v===""||(!isNaN(v)&&parseFloat(v)>=0)) setWeeklyBudget(v); }}
+                            onBlur={e=>{ const v=parseFloat(e.target.value); const val=isNaN(v)||v<0?"":String(Math.round(v)); setWeeklyBudget(val); if(bizId) saveBizSettings({weekly_budget:parseFloat(val)||null}).catch(()=>{}); }}
+                            placeholder="Set budget"
+                            style={{width:100,height:34,border:`1.5px solid ${budget>0?"#4CAF7D":T.border}`,borderRadius:8,padding:"0 8px 0 22px",fontSize:13,outline:"none",fontWeight:700,background:T.surface,color:T.text,boxSizing:"border-box",transition:"border 0.15s"}}/>
+                        </div>
+                        <div style={{flex:1,minWidth:120}}>
+                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:5,gap:8}}>
+                            <span style={{fontWeight:800,fontSize:14,color:over?"#C0392B":T.text}}>${spent.toFixed(0)}{budget>0&&<span style={{fontWeight:400,fontSize:12,color:T.sub}}> of ${budget.toFixed(0)}</span>}</span>
+                            {budget>0&&<span style={{fontSize:12,fontWeight:700,color:barColor,whiteSpace:"nowrap"}}>{over?`$${(spent-budget).toFixed(0)} over`:`$${(budget-spent).toFixed(0)} left`}</span>}
+                          </div>
+                          <div style={{height:6,background:T.surface,borderRadius:4,overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${pct}%`,background:barColor,borderRadius:4,transition:"width 0.3s,background 0.3s"}}/>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="sched-stat" style={statCell}>
+                        <div style={statLabel}>Labor % of sales</div>
+                        <div style={{...statVal,color:laborPct!=null&&laborPct>targetPct?"#C0392B":T.text}}>
+                          {laborPct==null ? <span style={{fontWeight:600,fontSize:12,color:T.sub}}>Needs 2+ weeks of sales history</span>
+                            : <>{laborPct.toFixed(0)}% <span style={{fontWeight:500,fontSize:12,color:T.sub}}>target {targetPct}%</span></>}
+                        </div>
+                      </div>
+                      <div className="sched-stat" style={statCell}>
+                        <div style={statLabel}>Over 40 hours</div>
+                        <div style={{...statVal,color:overtime.length?"#C0392B":T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}
+                          title={overtime.map(e=>`${e.name||"Unnamed"} · ${eWkH(activeWeek,e.id)}h`).join(", ")}>
+                          {overtime.length===0 ? "No one" : overtime.map(e=>`${(e.name||"Unnamed").split(" ")[0]} · ${eWkH(activeWeek,e.id)}h`).join(", ")}
+                        </div>
                       </div>
                     </div>
-                    {(()=>{
-                      const budget=parseFloat(weeklyBudget)||0;
-                      const spent=activeWkPay;
-                      const pct=budget>0?Math.min((spent/budget)*100,100):0;
-                      const over=budget>0&&spent>budget;
-                      const warn=!over&&pct>85;
-                      const barColor=over?"#C0392B":warn?"#E8A93A":"#4CAF7D";
-                      return (
-                        <div>
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:5}}>
-                            <span style={{fontWeight:800,fontSize:15,color:over?"#C0392B":T.text}}>${spent.toFixed(0)}{budget>0&&<span style={{fontWeight:400,fontSize:11,color:T.sub}}> / ${budget.toFixed(0)}</span>}</span>
-                            {budget>0&&<span style={{fontSize:11,fontWeight:700,color:barColor}}>{over?`$${(spent-budget).toFixed(0)} OVER`:`$${(budget-spent).toFixed(0)} left`}</span>}
-                          </div>
-                          {budget>0&&(
-                            <div style={{height:7,background:T.muted,borderRadius:4,overflow:"hidden"}}>
-                              <div style={{height:"100%",width:`${pct}%`,background:barColor,borderRadius:4,transition:"width 0.3s,background 0.3s"}}/>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })()}
-                    {activeWeek && renderWeekCheck(activeWeek)}
-                  </div>
-                </div>
+                  );
+                })()}
               </Card>
 
               {/* DAILY VIEW */}
