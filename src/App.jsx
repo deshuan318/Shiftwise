@@ -407,6 +407,9 @@ input,select,button,textarea { font-family:inherit; }
 .page-pad { padding-bottom:24px; }
 .ov-wrap { display:grid; grid-template-columns:minmax(0,1fr); gap:22px; align-items:start; }
 .ov-main { display:flex; flex-direction:column; gap:16px; min-width:0; }
+/* UI Batch 8 — framed Overview: one bordered surface holding every section */
+.ov-frame { background:#FFFFFF; border:1px solid #E6E8E4; border-radius:22px; padding:22px; box-shadow:0 1px 2px rgba(28,43,34,0.04), 0 10px 28px rgba(28,43,34,0.06); }
+@media (max-width:767px) { .ov-frame { padding:14px; border-radius:16px; } }
 .ov-rail { display:flex; flex-direction:column; gap:22px; padding:16px 16px 20px; border-left:1px solid #E6E8E4; position:sticky; top:66px; }
 .ov-kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
 .ov-row-2-1 { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:14px; }
@@ -5207,7 +5210,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
 
     return (
       <div className="ov-wrap">
-        <div className="ov-main">
+        <div className="ov-main ov-frame">
           {/* Header */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
             <div>
