@@ -405,7 +405,7 @@ input,select,button,textarea { font-family:inherit; }
 .bottom-nav button.active { color:#2D6A4F; }
 .nav-icon { font-size:20px; line-height:1; }
 .page-pad { padding-bottom:24px; }
-.ov-wrap { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:22px; align-items:start; }
+.ov-wrap { display:grid; grid-template-columns:minmax(0,1fr); gap:22px; align-items:start; }
 .ov-main { display:flex; flex-direction:column; gap:16px; min-width:0; }
 .ov-rail { display:flex; flex-direction:column; gap:22px; padding:16px 16px 20px; border-left:1px solid #E6E8E4; position:sticky; top:66px; }
 .ov-kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
@@ -2976,7 +2976,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           ? `No sales are recorded for this week yet. If you're closed or between seasons, that's expected. Revenue per labor hour fills in automatically as soon as sales come in.`
           : salesGap === "unsynced"
           ? `Square is connected, but no sales have synced yet. Tap Sync Now on the Dashboard to pull in your sales history, then generate the Pulse again.`
-          : `No sales data is connected yet. When you link Square, ShiftWise calculates revenue per labor hour for every day of the week — the single clearest signal of whether your staffing is earning its cost. Connect Square in the Dashboard tab or import a sales CSV to unlock this section.`,
+          : `No sales data is connected yet. When you link Square, ShiftWise calculates revenue per labor hour for every day of the week — the single clearest signal of whether your staffing is earning its cost. Connect Square or import a sales CSV in Settings → Data & Backup to unlock this section.`,
       });
     }
 
@@ -3111,7 +3111,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         ? `No sales this week yet to plan around. When sales pick up, build the schedule around your busiest days first — the Pulse will name them once there's data for the week.`
         : salesGap === "unsynced"
         ? `Tap Sync Now on the Dashboard before building next week. With your sales in, the Pulse can show which days earn the most per labor hour.`
-        : `The most impactful thing you can do before next week is connect your Square account. Revenue per labor hour is the one number that tells you whether your staffing is earning its cost — and right now ShiftWise can't calculate it without sales data. Five minutes in the Dashboard tab unlocks it permanently.`;
+        : `The most impactful thing you can do before next week is connect your Square account. Revenue per labor hour is the one number that tells you whether your staffing is earning its cost — and right now ShiftWise can't calculate it without sales data. Five minutes in Settings → Data & Backup unlocks it permanently.`;
     } else if (topSalesDay) {
       nextWeekFocus = `${topSalesDay.day} is your best revenue day at ${$$(topSalesDay.revenue)}. Make sure it's fully staffed next week before filling in the rest. The schedule should start with your highest-volume days and work backward — not the other way around.`;
     } else {
@@ -5258,99 +5258,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     const items = ovItems && ovItems.week === payWeek ? ovItems : null;
     const maxItem = items?.rows?.length ? Math.max(...items.rows.map(r => r.sales)) : 0;
 
-    const rail = (
-      <aside className="ov-rail" aria-label="Supporting information">
-        <div>
-          <h3 style={railTitle}>Needs attention</h3>
-          {flagCount === 0 && openCallouts === 0 ? (
-            <div style={{ fontSize: 12.5, color: C.sub }}>All clear: no unreviewed flags or open call-outs.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              {flagCount > 0 && <button onClick={() => setAlertsOpen(true)} style={{ ...btnGhost, textAlign: "left" }}>⚑ {flagCount} unreviewed punch flag{flagCount !== 1 ? "s" : ""}</button>}
-              {openCallouts > 0 && <button onClick={() => setTab("coverage")} style={{ ...btnGhost, textAlign: "left" }}>◷ {openCallouts} open shift{openCallouts !== 1 ? "s" : ""} to cover</button>}
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h3 style={railTitle}>On the schedule today</h3>
-          {todayTeam.length === 0 ? <div style={{ fontSize: 12.5, color: C.sub }}>No one is scheduled today.</div> : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
-              {todayTeam.map(({ e, s }) => (
-                <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 9 }}>
-                  <span style={{ width: 28, height: 28, borderRadius: "50%", background: e.color, color: "white", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{(e.name || "?")[0].toUpperCase()}</span>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.name || "Unnamed"}</span>
-                  <span style={{ fontSize: 11.5, color: C.sub, whiteSpace: "nowrap" }}>{fmt(s.start)}–{fmt(s.end)}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h3 style={railTitle}>Recent activity</h3>
-          {auditLog.length === 0 ? <div style={{ fontSize: 12.5, color: C.sub }}>No activity yet.</div> : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-              {auditLog.slice(0, 6).map(a => (
-                <div key={a.id} style={{ borderLeft: `2px solid ${C.line}`, paddingLeft: 10 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, lineHeight: 1.35 }}>{a.action}</div>
-                  <div style={{ fontSize: 11, color: C.sub, lineHeight: 1.35, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.detail}</div>
-                  <div style={{ fontSize: 10.5, color: C.sub }}>{ago(a.at)}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h3 style={railTitle}>Weekly budget</h3>
-          {bgt > 0 ? (() => {
-            const over = payWeekLabor > bgt, warn = !over && payWeekLabor / bgt > 0.85;
-            const bc = over ? "#C0392B" : warn ? "#E8A93A" : "#4CAF7D";
-            return (
-              <div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 6 }}>
-                  <span style={{ fontWeight: 700, color: C.ink }}>{fmtMoney(payWeekLabor)} <span style={{ fontWeight: 400, color: C.sub }}>of {fmtMoney(bgt)}</span></span>
-                  <span style={{ fontWeight: 700, color: bc }}>{over ? `${fmtMoney(payWeekLabor - bgt)} over` : `${fmtMoney(bgt - payWeekLabor)} left`}</span>
-                </div>
-                <div style={{ height: 7, background: C.line, borderRadius: 4, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, payWeekLabor / bgt * 100)}%`, background: bc }} /></div>
-              </div>
-            );
-          })() : <div style={{ fontSize: 12.5, color: C.sub }}>No weekly budget set.</div>}
-          {suggestedDailyLabor > 0 && (
-            <div style={{ marginTop: 10, fontSize: 12, color: C.sub, lineHeight: 1.5 }}>
-              Suggested: <strong style={{ color: C.ink }}>{fmtMoney(suggestedWeeklyBudget)}/week</strong> ({fmtMoney(suggestedDailyLabor)}/day at your {tgt}% target).
-              <button onClick={() => { setWeeklyBudget(String(suggestedWeeklyBudget)); saveBizSettings({ weekly_budget: suggestedWeeklyBudget }); showToast(`Weekly budget set to ${fmtMoney(suggestedWeeklyBudget)} ✓`); }}
-                style={{ ...btnGhost, display: "block", marginTop: 6, color: T.accent }}>Apply {fmtMoney(suggestedWeeklyBudget)}</button>
-            </div>
-          )}
-        </div>
-
-        <div>
-          <h3 style={railTitle}>Sales data</h3>
-          {squareConnected ? (
-            <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.5 }}>
-              <div style={{ fontWeight: 700, color: C.ink }}>Square connected{squareMerchantName ? ` · ${squareMerchantName}` : ""}</div>
-              <div>Last synced {squareLastSync ? new Date(squareLastSync).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "never"}</div>
-              <button onClick={handleDisconnectSquare} style={{ background: "none", border: "none", padding: "6px 0", color: C.sub, textDecoration: "underline", fontSize: 11.5, cursor: "pointer" }}>Disconnect</button>
-            </div>
-          ) : (
-            <button onClick={handleConnectSquare} disabled={squareLoading} style={{ ...btnGhost, background: T.accent, color: "white", border: "none" }}>Connect Square</button>
-          )}
-          <div style={{ fontSize: 11.5, color: C.sub, marginTop: 6 }}>{salesData.length ? `${salesData.length} days of sales · ${dl(salesData[0].date)} – ${dl(salesData[salesData.length - 1].date)}` : "No sales history yet."}</div>
-          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
-            <label style={{ ...btnGhost, display: "inline-flex", alignItems: "center" }}>
-              Import CSV<input type="file" accept=".csv" onChange={e => { importSquareCSV(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
-            </label>
-            {salesData.length > 0 && (
-              <button onClick={() => { if (window.confirm("Clear all imported Square sales data? Cash entries are kept.")) { setRawSales(p => p.filter(r => r.source === "cash")); if (bizId) dbDelete(`sales_data?business_id=eq.${bizId}&source=eq.square`).catch(e => showError(friendlyError(e, "Couldn't clear that data — try again."))); } }}
-                style={{ ...btnGhost, color: C.sub }}>Clear Data</button>
-            )}
-          </div>
-        </div>
-      </aside>
-    );
-
     return (
       <div className="ov-wrap">
         <div className="ov-main">
@@ -5522,7 +5429,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             )}
           </section>
         </div>
-        {rail}
       </div>
     );
   }
@@ -10309,6 +10215,35 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 {/* DATA & BACKUP */}
                 {settingsSection==="data" && (
                   <div style={{display:"flex", flexDirection:"column", gap:11}}>
+                    <Card T={T} style={{padding:"14px 16px"}}>
+                      <SectionLabel T={T}>Sales Data</SectionLabel>
+                      {squareConnected ? (
+                        <div style={{fontSize:12, color:T.sub, lineHeight:1.5, marginBottom:8}}>
+                          <div style={{fontWeight:700, color:T.text}}>Square connected{squareMerchantName ? ` · ${squareMerchantName}` : ""}</div>
+                          <div>Last synced {squareLastSync ? new Date(squareLastSync).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : "never"}</div>
+                        </div>
+                      ) : (
+                        <p style={{margin:"0 0 10px", fontSize:12, color:T.sub, lineHeight:1.5}}>Connect Square to pull in sales automatically, or import a Square CSV.</p>
+                      )}
+                      <div style={{fontSize:12, color:T.sub, marginBottom:10}}>{salesData.length ? `${salesData.length} days of sales · ${dl(salesData[0].date)} – ${dl(salesData[salesData.length-1].date)}` : "No sales history yet."}</div>
+                      <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
+                        {squareConnected ? (
+                          <>
+                            <button onClick={handleSyncSquare} disabled={squareSyncing} style={{background:T.accent,color:"white",border:"none",borderRadius:9,padding:"9px 14px",fontWeight:700,fontSize:12,cursor:"pointer",opacity:squareSyncing?0.6:1}}>{squareSyncing ? "Syncing…" : "Sync Square"}</button>
+                            <button onClick={handleDisconnectSquare} style={{background:T.surface,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"9px 14px",fontWeight:700,fontSize:12,cursor:"pointer"}}>Disconnect</button>
+                          </>
+                        ) : (
+                          <button onClick={handleConnectSquare} disabled={squareLoading} style={{background:T.accent,color:"white",border:"none",borderRadius:9,padding:"9px 14px",fontWeight:700,fontSize:12,cursor:"pointer"}}>Connect Square</button>
+                        )}
+                        <label style={{background:T.surface,color:T.text,border:`1px solid ${T.border}`,borderRadius:9,padding:"9px 14px",fontWeight:700,fontSize:12,cursor:"pointer",display:"inline-flex",alignItems:"center"}}>
+                          Import CSV<input type="file" accept=".csv" onChange={e=>{ importSquareCSV(e.target.files[0]); e.target.value=""; }} style={{display:"none"}}/>
+                        </label>
+                        {salesData.length > 0 && (
+                          <button onClick={()=>{ if (window.confirm("Clear all imported Square sales data? Cash entries are kept.")) { setRawSales(p=>p.filter(r=>r.source==="cash")); if (bizId) dbDelete(`sales_data?business_id=eq.${bizId}&source=eq.square`).catch(e=>showError(friendlyError(e,"Couldn't clear that data — try again."))); } }}
+                            style={{background:T.surface,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"9px 14px",fontWeight:700,fontSize:12,cursor:"pointer"}}>Clear Data</button>
+                        )}
+                      </div>
+                    </Card>
                     <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Auto-Save</SectionLabel>
                       <p style={{margin:"0 0 10px", fontSize:12, color:T.sub, lineHeight:1.5}}>ShiftWise automatically saves everything to this device every time you make a change.</p>
