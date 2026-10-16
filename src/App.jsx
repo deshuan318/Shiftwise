@@ -2,8 +2,15 @@ import { useState, useMemo, useRef, useEffect, useCallback } from "react";
 import {
   ResponsiveContainer, LineChart as RLineChart, BarChart as RBarChart,
   AreaChart as RAreaChart, ComposedChart as RComposedChart,
-  Line, Bar, Area as RArea, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend as RLegend,
+  Line, Bar, Area as RArea, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Legend as RLegend, LabelList,
 } from "recharts";
+
+// UI Batch 1/2 look: pastel metric cards, light panels, quiet axes
+const UI = {
+  ink: "#1C2B22", sub: "#5E6B63", line: "#E6E8E4", panel: "#F7F8F6",
+  pastels: ["#E4EFFB", "#ECEAFB", "#E4F3EC", "#F7EFE2"],
+  up: "#1F6B48", down: "#A93226",
+};
 
 // Preset color palette for widget styling — kept small and on-theme
 const WIDGET_COLORS = [
@@ -396,6 +403,25 @@ input,select,button,textarea { font-family:inherit; }
 .bottom-nav button.active { color:#2D6A4F; }
 .nav-icon { font-size:20px; line-height:1; }
 .page-pad { padding-bottom:24px; }
+.ov-wrap { display:grid; grid-template-columns:minmax(0,1fr) 290px; gap:22px; align-items:start; }
+.ov-main { display:flex; flex-direction:column; gap:16px; min-width:0; }
+.ov-rail { display:flex; flex-direction:column; gap:22px; padding:16px 16px 20px; border-left:1px solid #E6E8E4; position:sticky; top:66px; }
+.ov-kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
+.ov-row-2-1 { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:14px; }
+.ov-row-1-1 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.ov-widgets { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+@media (max-width:1199px) {
+  .ov-wrap { grid-template-columns:minmax(0,1fr); }
+  .ov-rail { position:static; border-left:none; border-top:1px solid #E6E8E4; padding:18px 2px 0; display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
+}
+@media (max-width:899px) {
+  .ov-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .ov-row-2-1, .ov-row-1-1 { grid-template-columns:minmax(0,1fr); }
+}
+@media (max-width:520px) {
+  .ov-widgets { grid-template-columns:minmax(0,1fr); }
+  .ov-widgets > * { grid-column:auto !important; }
+}
 @media (min-width:768px) { .bottom-nav { display:none !important; } }
 @media (max-width:1024px) { .controls-bar { flex-wrap:wrap !important; } }
 @media (max-width:767px) {
@@ -3641,53 +3667,93 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // than reading Report Builder's own state — this lets the exact same
   // rendering be reused for dashboard widgets, which have their own
   // independently-computed result.
+  // Color for one row of a single-field chart/list: the shift type's or
+  // employee's own color when grouped that way, otherwise the source color.
+  function reportRowColor(label, grouping, fallback) {
+    if (grouping === "Shift Type") return shiftTypes.find(s => s.label === label)?.color || fallback;
+    if (grouping === "Employee") return allEmployees.find(e => e.name === label)?.color || fallback;
+    return fallback;
+  }
+  const fmtReportVal = v => v == null ? "—" : typeof v === "number" ? v.toLocaleString(undefined, { maximumFractionDigits: 2 }) : v;
+
   function renderReportResult(data, vizType, grouping, fieldKeys, truncated) {
     if (fieldKeys.length===0 || data.length===0) return (
-      <div style={{fontSize:12,color:T.sub,textAlign:"center",padding:"20px 0"}}>No data found for this selection.</div>
+      <div style={{fontSize:12.5,color:UI.sub,textAlign:"center",padding:"24px 0"}}>No data found for this selection.</div>
     );
+    const numKeys = fieldKeys.filter(f => !f.text);
+    let body;
+    if (vizType === "number") {
+      body = (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:12,marginBottom:12}}>
+          {numKeys.map((f, i) => {
+            const vals = data.map(r => r[f.key]).filter(v => v !== undefined && v !== null);
+            const cur = vals[vals.length-1] ?? 0, first = vals[0];
+            const delta = vals.length > 1 && first ? ((cur - first) / Math.abs(first)) * 100 : null;
+            return (
+              <div key={f.key} style={{background:UI.pastels[i % UI.pastels.length],borderRadius:16,padding:"14px 16px",minWidth:0}}>
+                <div style={{fontSize:12,fontWeight:600,color:UI.sub}}>{f.label}</div>
+                <div style={{fontSize:24,fontWeight:800,color:UI.ink,marginTop:4,lineHeight:1.1}}>{fmtReportVal(cur)}</div>
+                {delta != null && <div style={{fontSize:11.5,fontWeight:700,color:delta>=0?UI.up:UI.down,marginTop:3}}>{delta>=0?"▲":"▼"} {Math.abs(delta).toFixed(1)}% vs. start</div>}
+              </div>
+            );
+          })}
+        </div>
+      );
+    } else if (vizType === "list") {
+      const f0 = numKeys[0];
+      const rows = f0 ? [...data].filter(r => r[f0.key] != null).sort((x, y) => (y[f0.key]||0) - (x[f0.key]||0)) : [];
+      const max = rows.length ? Math.max(...rows.map(r => Math.abs(r[f0.key]||0))) : 0;
+      body = !f0 ? <div style={{fontSize:12.5,color:UI.sub}}>Pick at least one number field for a list.</div> : (
+        <div style={{display:"flex",flexDirection:"column",gap:11,marginBottom:12,maxHeight:420,overflowY:"auto"}}>
+          {rows.map((r, i) => (
+            <div key={i}>
+              <div style={{display:"flex",justifyContent:"space-between",gap:10,fontSize:12.5}}>
+                <span style={{color:UI.ink,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.label}</span>
+                <span style={{color:UI.sub,whiteSpace:"nowrap"}}>
+                  <strong style={{color:UI.ink}}>{fmtReportVal(r[f0.key])}</strong>
+                  {numKeys.slice(1, 3).map(f => <span key={f.key}> · {fmtReportVal(r[f.key])}</span>)}
+                </span>
+              </div>
+              <div style={{height:4,background:UI.line,borderRadius:2,marginTop:5}}>
+                <div style={{height:"100%",width:`${max ? Math.abs(r[f0.key]||0)/max*100 : 0}%`,background:reportRowColor(r.label, grouping, f0.color),borderRadius:2}}/>
+              </div>
+            </div>
+          ))}
+          <div style={{fontSize:10.5,color:UI.sub}}>Ranked by {f0.label}{numKeys.length > 1 ? ` · also: ${numKeys.slice(1,3).map(f=>f.label).join(", ")}` : ""}</div>
+        </div>
+      );
+    } else if (vizType === "table") {
+      body = (
+        <div style={{maxHeight:360,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch",marginBottom:12}}>
+          <table style={{width:"100%",minWidth:420,borderCollapse:"collapse",fontSize:12.5}}>
+            <thead><tr>
+              <th style={{textAlign:"left",padding:"8px 6px",fontSize:11,fontWeight:700,color:UI.sub,borderBottom:`1px solid ${UI.line}`,position:"sticky",top:0,background:UI.panel}}>{grouping}</th>
+              {fieldKeys.map(f=><th key={f.key} style={{textAlign:f.text?"left":"right",padding:"8px 6px",fontSize:11,fontWeight:700,color:UI.sub,borderBottom:`1px solid ${UI.line}`,position:"sticky",top:0,background:UI.panel}}>{f.label}</th>)}
+            </tr></thead>
+            <tbody>
+              {data.map((row,i)=>(
+                <tr key={i}>
+                  <td style={{padding:"9px 6px",borderBottom:`1px solid ${UI.line}`,color:UI.ink,fontWeight:600}}>{row.label}</td>
+                  {fieldKeys.map(f=><td key={f.key} style={{padding:"9px 6px",borderBottom:`1px solid ${UI.line}`,textAlign:f.text?"left":"right",color:f.text?UI.sub:UI.ink}}>{fmtReportVal(row[f.key])}</td>)}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    } else {
+      body = (
+        <div style={{marginBottom:12}}>
+          {renderCustomReportChart(data, vizType, numKeys, grouping)}
+          {fieldKeys.some(f=>f.text) && <div style={{fontSize:10.5,color:UI.sub,marginTop:4}}>Text fields like Conditions show in Table view and CSV export.</div>}
+        </div>
+      );
+    }
     return (
       <>
-        {vizType==="number" ? (
-          <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12}}>
-            {fieldKeys.filter(f=>!f.text).map(f=>{
-              const vals = data.map(r=>r[f.key]).filter(v=>v!==undefined && v!==null);
-              const cur = vals[vals.length-1] ?? 0, first = vals[0] ?? 0;
-              const delta = first!==0 ? ((cur-first)/Math.abs(first))*100 : 0;
-              return (
-                <div key={f.key} style={{background:T.muted,borderRadius:10,padding:"11px 14px",flex:"1 1 140px"}}>
-                  <div style={{fontSize:10,color:T.sub,fontWeight:600,marginBottom:6}}>{f.label}</div>
-                  <div style={{fontSize:22,fontWeight:800,color:f.color}}>{cur.toLocaleString()}</div>
-                  <div style={{fontSize:11,fontWeight:700,color:delta>=0?"#4CAF7D":"#C0392B",marginTop:2}}>{delta>=0?"↑":"↓"} {Math.abs(delta).toFixed(0)}%</div>
-                </div>
-              );
-            })}
-          </div>
-        ) : vizType==="table" ? (
-          <div style={{maxHeight:320,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch",marginBottom:12}}>
-            <table style={{width:"100%",minWidth:420,borderCollapse:"collapse",fontSize:11.5}}>
-              <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-                <th style={{textAlign:"left",padding:"6px 8px",color:T.sub,fontWeight:700}}>{grouping}</th>
-                {fieldKeys.map(f=><th key={f.key} style={{textAlign:"left",padding:"6px 8px",color:T.sub,fontWeight:700}}>{f.label}</th>)}
-              </tr></thead>
-              <tbody>
-                {data.map((row,i)=>(
-                  <tr key={i} style={{borderBottom:`1px solid ${T.border}`}}>
-                    <td style={{padding:"6px 8px",color:T.text}}>{row.label}</td>
-                    {fieldKeys.map(f=><td key={f.key} style={{padding:"6px 8px",color:T.text}}>{row[f.key] ?? "—"}</td>)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div style={{marginBottom:12}}>
-            {renderCustomReportChart(data, vizType, fieldKeys.filter(f=>!f.text))}
-            {fieldKeys.some(f=>f.text) && <div style={{fontSize:10.5,color:T.sub,marginTop:4}}>Text fields like Conditions show in Table view and CSV export.</div>}
-          </div>
-        )}
-
+        {body}
         {truncated && (
-          <div style={{fontSize:11,color:"#E8A93A",marginBottom:10,display:"flex",gap:6,alignItems:"flex-start"}}>
+          <div style={{fontSize:11,color:"#8A5A00",marginBottom:10,display:"flex",gap:6,alignItems:"flex-start"}}>
             <span>⚠️</span><span>One or more sources hit their data cap for this range — pick a shorter range for a complete picture.</span>
           </div>
         )}
@@ -3712,6 +3778,21 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // every report widget's computation whenever the underlying data changes,
   // so they stay live without ever needing to be recreated.
   const [reportWidgetData, setReportWidgetData] = useState({}); // { [widgetId]: {loading, result, error} }
+
+  // Overview "Top items this week" (from Square item sales)
+  const [ovItems, setOvItems] = useState(null); // { week, loading, error, rows }
+  async function loadOverviewItems(week) {
+    if (!bizId) return;
+    setOvItems({ week, loading: true, rows: [] });
+    try {
+      const end = addDays(week, 6);
+      const rows = (await dbGet(`sales_items_daily?select=item_key,item_name,quantity,revenue&business_id=eq.${bizId}&sale_date=gte.${week}&sale_date=lte.${end}&limit=5000`)) || [];
+      const by = {};
+      rows.forEach(r => { const b = (by[r.item_key] ||= { key: r.item_key, name: r.item_name || "Item", units: 0, sales: 0 }); b.units += Number(r.quantity) || 0; b.sales += Number(r.revenue) || 0; });
+      setOvItems({ week, loading: false, rows: Object.values(by).sort((a, b) => b.sales - a.sales).slice(0, 6) });
+    } catch (e) { console.warn("Top items unavailable:", e); setOvItems({ week, loading: false, error: true, rows: [] }); }
+  }
+  useEffect(() => { if (tab === "dashboard" && bizId) loadOverviewItems(payWeek); }, [tab, payWeek, bizId]);
 
   useEffect(() => {
     const reportWidgets = widgets.filter(w => w.config?.report);
@@ -3770,38 +3851,46 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     }
   }
 
-  function renderCustomReportChart(data, vizType, fieldKeys) {
+  function renderCustomReportChart(data, vizType, fieldKeys, grouping) {
     const height = 260;
     const axes = (
       <>
-        <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
-        <XAxis dataKey="label" stroke={T.sub} fontSize={10} tickLine={false} axisLine={{stroke:T.border}}/>
-        <YAxis stroke={T.sub} fontSize={10} tickLine={false} axisLine={false} width={40}/>
-        <RTooltip contentStyle={{fontSize:11,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface}}/>
-        <RLegend wrapperStyle={{fontSize:10}}/>
+        <CartesianGrid stroke={UI.line} vertical={false}/>
+        <XAxis dataKey="label" stroke={UI.sub} fontSize={11} tickLine={false} axisLine={false} minTickGap={12}/>
+        <YAxis stroke={UI.sub} fontSize={11} tickLine={false} axisLine={false} width={44}/>
+        <RTooltip formatter={v => fmtReportVal(v)} contentStyle={{fontSize:11.5,borderRadius:10,border:`1px solid ${UI.line}`,background:"#FFFFFF"}}/>
+        {fieldKeys.length > 1 && <RLegend iconType="plainline" wrapperStyle={{fontSize:11,color:UI.sub}}/>}
       </>
     );
+    const margin = { top: 18, right: 8, left: -6, bottom: 0 };
+    const single = fieldKeys.length === 1;
+    const valueLabels = data.length <= 14; // value labels only when they'll fit
     if (vizType === "line") return (
-      <ResponsiveContainer width="100%" height={height}><RLineChart data={data}>{axes}
-        {fieldKeys.map(f=><Line key={f.key} type="monotone" dataKey={f.key} name={f.label} stroke={f.color} strokeWidth={2} dot={{r:3}}/>)}
+      <ResponsiveContainer width="100%" height={height}><RLineChart data={data} margin={margin}>{axes}
+        {fieldKeys.map(f=><Line key={f.key} type="monotone" dataKey={f.key} name={f.label} stroke={f.color} strokeWidth={2.4} dot={data.length <= 14 ? {r:2.5} : false} activeDot={{r:4}} connectNulls/>)}
       </RLineChart></ResponsiveContainer>
     );
     if (vizType === "bar") return (
-      <ResponsiveContainer width="100%" height={height}><RBarChart data={data}>{axes}
-        {fieldKeys.map(f=><Bar key={f.key} dataKey={f.key} name={f.label} fill={f.color} radius={[3,3,0,0]}/>)}
+      <ResponsiveContainer width="100%" height={height}><RBarChart data={data} margin={margin}>{axes}
+        {fieldKeys.map(f=>(
+          <Bar key={f.key} dataKey={f.key} name={f.label} fill={f.color} radius={[9,9,9,9]} maxBarSize={34}>
+            {single && data.map((r, i) => <Cell key={i} fill={reportRowColor(r.label, grouping, f.color)}/>)}
+            {single && valueLabels && <LabelList dataKey={f.key} position="top" formatter={v => fmtReportVal(v)} style={{fontSize:11,fontWeight:700,fill:UI.ink}}/>}
+          </Bar>
+        ))}
       </RBarChart></ResponsiveContainer>
     );
     if (vizType === "area") return (
-      <ResponsiveContainer width="100%" height={height}><RAreaChart data={data}>{axes}
-        {fieldKeys.map(f=><RArea key={f.key} type="monotone" dataKey={f.key} name={f.label} stroke={f.color} fill={f.color} fillOpacity={0.25}/>)}
+      <ResponsiveContainer width="100%" height={height}><RAreaChart data={data} margin={margin}>{axes}
+        {fieldKeys.map(f=><RArea key={f.key} type="monotone" dataKey={f.key} name={f.label} stroke={f.color} strokeWidth={2.4} fill={f.color} fillOpacity={0.12} connectNulls/>)}
       </RAreaChart></ResponsiveContainer>
     );
     if (vizType === "combo") return (
-      <ResponsiveContainer width="100%" height={height}><RComposedChart data={data}>{axes}
+      <ResponsiveContainer width="100%" height={height}><RComposedChart data={data} margin={margin}>{axes}
         {fieldKeys.map((f,i)=>{
-          if (i===0) return <RArea key={f.key} dataKey={f.key} name={f.label} stroke={f.color} fill={f.color} fillOpacity={0.25}/>;
-          if (i===1) return <Line key={f.key} type="monotone" dataKey={f.key} name={f.label} stroke={f.color} strokeWidth={2} dot={{r:3}}/>;
-          return <Bar key={f.key} dataKey={f.key} name={f.label} fill={f.color} radius={[3,3,0,0]}/>;
+          if (i===0) return <RArea key={f.key} type="monotone" dataKey={f.key} name={f.label} stroke={f.color} strokeWidth={2} fill={f.color} fillOpacity={0.12}/>;
+          if (i===1) return <Line key={f.key} type="monotone" dataKey={f.key} name={f.label} stroke={f.color} strokeWidth={2.4} dot={false}/>;
+          return <Bar key={f.key} dataKey={f.key} name={f.label} fill={f.color} radius={[9,9,9,9]} maxBarSize={30}/>;
         })}
       </RComposedChart></ResponsiveContainer>
     );
@@ -5080,6 +5169,358 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     );
   }
 
+  // ── OVERVIEW (Dashboard tab) ────────────────────────────────────────────
+  // Layout: compact header → pastel KPI cards → light panels (charts, top
+  // items, hours, daily breakdown, break-even, widgets) → right rail on wide
+  // screens (attention, today's team, activity, budget, sales data source).
+  // Every number comes from existing data; comparisons only when data exists.
+  function renderOverview() {
+    const paySun = getSunday(demoToday);
+    const pwDates = weekDatesFromSunday(payWeek).map(toInputDate);
+    const pwLabel = dl(pwDates[0]) + " – " + dl(pwDates[6]);
+    const tgt = laborTargetPct || 30;
+    const bgt = parseFloat(weeklyBudget) || 0;
+
+    const salesWk = getSales("thisWeek", salesData, payWeek);
+    const laborWk = getLabor("thisWeek", salesData, employees, eDayH, payWeek);
+    const lastWkStart = addDays(payWeek, -7);
+    const salesLast = getSales("thisWeek", salesData, lastWkStart);
+    const totalRevenue = salesWk.total;
+    const payWeekLabor = laborWk.total;
+    const pwHrs = employees.reduce((s, e) => s + eWkH(payWeek, e.id), 0);
+    const pwStaff = employees.filter(e => eWkH(payWeek, e.id) > 0).length;
+
+    // Sales vs. last week — same days only (so a week in progress compares fairly)
+    const daysIn = salesWk.days.filter(d => d.date <= demoToday).length;
+    const curToDate = salesWk.days.slice(0, daysIn).reduce((s, d) => s + d.revenue, 0);
+    const prevToDate = salesLast.days.slice(0, daysIn).reduce((s, d) => s + d.revenue, 0);
+    const salesDelta = daysIn > 0 && prevToDate > 0 && curToDate > 0 ? (curToDate - prevToDate) / prevToDate * 100 : null;
+
+    // Labor % (actual = labor on days that had sales ÷ those sales)
+    const laborOnSalesDays = salesWk.days.reduce((s, d, i) => s + (d.revenue > 0 ? laborWk.days[i].labor : 0), 0);
+    const actualPct = totalRevenue > 0 ? laborOnSalesDays / totalRevenue * 100 : null;
+    const forecastWk = getForecast("thisWeek", salesData, payWeek);
+    const projPct = forecastWk.hasEnoughData && forecastWk.total > 0 ? payWeekLabor / forecastWk.total * 100 : null;
+    const shownPct = laborPctMode === "projected" ? projPct : actualPct;
+    const pctTone = shownPct == null ? T.sub : shownPct > tgt + 5 ? "#A93226" : shownPct > tgt - 5 ? "#8A5A00" : "#1F6B48";
+    const forecastNext7 = getForecast("next7", salesData, isDemoBiz ? DEMO_TODAY_ANCHOR : undefined);
+
+    // Suggested budget (unchanged logic)
+    const wkSalesDays = salesWk.days.filter(d => d.hasData);
+    const suggestedDailyRevenue = forecastWk.hasEnoughData ? forecastWk.total / 7 : totalRevenue > 0 ? totalRevenue / Math.max(1, wkSalesDays.length) : 0;
+    const suggestedDailyLabor = Math.round(suggestedDailyRevenue * tgt / 100);
+    const suggestedWeeklyBudget = suggestedDailyLabor * 7;
+
+    const chartData = salesWk.days.map((d, i) => ({
+      day: DAYS[i],
+      Sales: d.hasData ? Math.round(d.revenue) : null,
+      Labor: Math.round(laborWk.days[i].labor),
+      "Last week": salesLast.days[i].hasData ? Math.round(salesLast.days[i].revenue) : null,
+    }));
+    const hasLastWeek = salesLast.days.some(d => d.hasData);
+    const hoursData = employees.map(e => ({ name: (e.name || "Unnamed").split(" ")[0], hours: Math.round(eWkH(payWeek, e.id) * 10) / 10, color: e.color || T.accent }))
+      .filter(x => x.hours > 0).sort((a, b) => b.hours - a.hours);
+
+    // Right rail data
+    const thirtyAgo = new Date(new Date(demoToday + "T12:00:00") - 30 * 86400000);
+    const flagCount = punches.filter(p => p.flags?.includes("NO_SHIFT") && !punchReviews[p.id] && new Date(p.time) > thirtyAgo && employees.some(e => e.id === p.empId)).length;
+    const openCallouts = openShifts.filter(o => o.status === "open").length;
+    const todayIdx = new Date(demoToday + "T12:00:00").getDay();
+    const todayWk = getSunday(demoToday);
+    const todayTeam = employees.map(e => ({ e, s: schedule?.[todayWk]?.[e.id]?.[todayIdx] })).filter(x => x.s).sort((a, b) => a.s.start - b.s.start);
+    const ago = iso => {
+      const m = Math.round((Date.now() - new Date(iso)) / 60000);
+      if (m < 1) return "Just now"; if (m < 60) return `${m} min ago`;
+      const h = Math.round(m / 60); if (h < 24) return `${h} hr ago`;
+      return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    };
+
+    // Styles for this page
+    const C = { blue:"#E4EFFB", lav:"#ECEAFB", mint:"#E4F3EC", sand:"#F7EFE2", panel:"#F7F8F6", ink:"#1C2B22", sub:"#5E6B63", line:"#E6E8E4" };
+    const panel = { background: C.panel, borderRadius: 18, padding: "16px 18px", border: `1px solid ${C.line}` };
+    const panelTitle = { fontSize: 13.5, fontWeight: 800, color: C.ink, margin: 0 };
+    const kpi = bg => ({ background: bg, borderRadius: 18, padding: "16px 18px", minWidth: 0, display: "flex", flexDirection: "column", gap: 6 });
+    const kpiLabel = { fontSize: 12.5, fontWeight: 600, color: C.sub };
+    const kpiValue = { fontSize: 26, fontWeight: 800, color: C.ink, lineHeight: 1.1 };
+    const railTitle = { fontSize: 12.5, fontWeight: 800, color: C.ink, margin: "0 0 8px" };
+    const btnGhost = { background: "#FFFFFF", border: `1px solid ${C.line}`, borderRadius: 9, padding: "8px 12px", fontSize: 12, fontWeight: 700, color: C.ink, cursor: "pointer", minHeight: 36 };
+    const deltaChip = (v, upGood = true) => {
+      if (v == null) return null;
+      const good = upGood ? v >= 0 : v < 0;
+      return <span style={{ fontSize: 11.5, fontWeight: 700, color: good ? "#1F6B48" : "#A93226" }}>{v >= 0 ? "▲" : "▼"} {Math.abs(v).toFixed(1)}%</span>;
+    };
+    const items = ovItems && ovItems.week === payWeek ? ovItems : null;
+    const maxItem = items?.rows?.length ? Math.max(...items.rows.map(r => r.sales)) : 0;
+
+    const rail = (
+      <aside className="ov-rail" aria-label="Supporting information">
+        <div>
+          <h3 style={railTitle}>Needs attention</h3>
+          {flagCount === 0 && openCallouts === 0 ? (
+            <div style={{ fontSize: 12.5, color: C.sub }}>All clear: no unreviewed flags or open call-outs.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+              {flagCount > 0 && <button onClick={() => setAlertsOpen(true)} style={{ ...btnGhost, textAlign: "left" }}>⚑ {flagCount} unreviewed punch flag{flagCount !== 1 ? "s" : ""}</button>}
+              {openCallouts > 0 && <button onClick={() => setTab("coverage")} style={{ ...btnGhost, textAlign: "left" }}>◷ {openCallouts} open shift{openCallouts !== 1 ? "s" : ""} to cover</button>}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <h3 style={railTitle}>On the schedule today</h3>
+          {todayTeam.length === 0 ? <div style={{ fontSize: 12.5, color: C.sub }}>No one is scheduled today.</div> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
+              {todayTeam.map(({ e, s }) => (
+                <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 9 }}>
+                  <span style={{ width: 28, height: 28, borderRadius: "50%", background: e.color, color: "white", fontSize: 11, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{(e.name || "?")[0].toUpperCase()}</span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.name || "Unnamed"}</span>
+                  <span style={{ fontSize: 11.5, color: C.sub, whiteSpace: "nowrap" }}>{fmt(s.start)}–{fmt(s.end)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <h3 style={railTitle}>Recent activity</h3>
+          {auditLog.length === 0 ? <div style={{ fontSize: 12.5, color: C.sub }}>No activity yet.</div> : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {auditLog.slice(0, 6).map(a => (
+                <div key={a.id} style={{ borderLeft: `2px solid ${C.line}`, paddingLeft: 10 }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: C.ink, lineHeight: 1.35 }}>{a.action}</div>
+                  <div style={{ fontSize: 11, color: C.sub, lineHeight: 1.35, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.detail}</div>
+                  <div style={{ fontSize: 10.5, color: C.sub }}>{ago(a.at)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div>
+          <h3 style={railTitle}>Weekly budget</h3>
+          {bgt > 0 ? (() => {
+            const over = payWeekLabor > bgt, warn = !over && payWeekLabor / bgt > 0.85;
+            const bc = over ? "#C0392B" : warn ? "#E8A93A" : "#4CAF7D";
+            return (
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 6 }}>
+                  <span style={{ fontWeight: 700, color: C.ink }}>{fmtMoney(payWeekLabor)} <span style={{ fontWeight: 400, color: C.sub }}>of {fmtMoney(bgt)}</span></span>
+                  <span style={{ fontWeight: 700, color: bc }}>{over ? `${fmtMoney(payWeekLabor - bgt)} over` : `${fmtMoney(bgt - payWeekLabor)} left`}</span>
+                </div>
+                <div style={{ height: 7, background: C.line, borderRadius: 4, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, payWeekLabor / bgt * 100)}%`, background: bc }} /></div>
+              </div>
+            );
+          })() : <div style={{ fontSize: 12.5, color: C.sub }}>No weekly budget set.</div>}
+          {suggestedDailyLabor > 0 && (
+            <div style={{ marginTop: 10, fontSize: 12, color: C.sub, lineHeight: 1.5 }}>
+              Suggested: <strong style={{ color: C.ink }}>{fmtMoney(suggestedWeeklyBudget)}/week</strong> ({fmtMoney(suggestedDailyLabor)}/day at your {tgt}% target).
+              <button onClick={() => { setWeeklyBudget(String(suggestedWeeklyBudget)); saveBizSettings({ weekly_budget: suggestedWeeklyBudget }); showToast(`Weekly budget set to ${fmtMoney(suggestedWeeklyBudget)} ✓`); }}
+                style={{ ...btnGhost, display: "block", marginTop: 6, color: T.accent }}>Apply {fmtMoney(suggestedWeeklyBudget)}</button>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <h3 style={railTitle}>Sales data</h3>
+          {squareConnected ? (
+            <div style={{ fontSize: 12, color: C.sub, lineHeight: 1.5 }}>
+              <div style={{ fontWeight: 700, color: C.ink }}>Square connected{squareMerchantName ? ` · ${squareMerchantName}` : ""}</div>
+              <div>Last synced {squareLastSync ? new Date(squareLastSync).toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "never"}</div>
+              <button onClick={handleDisconnectSquare} style={{ background: "none", border: "none", padding: "6px 0", color: C.sub, textDecoration: "underline", fontSize: 11.5, cursor: "pointer" }}>Disconnect</button>
+            </div>
+          ) : (
+            <button onClick={handleConnectSquare} disabled={squareLoading} style={{ ...btnGhost, background: T.accent, color: "white", border: "none" }}>Connect Square</button>
+          )}
+          <div style={{ fontSize: 11.5, color: C.sub, marginTop: 6 }}>{salesData.length ? `${salesData.length} days of sales · ${dl(salesData[0].date)} – ${dl(salesData[salesData.length - 1].date)}` : "No sales history yet."}</div>
+          <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+            <label style={{ ...btnGhost, display: "inline-flex", alignItems: "center" }}>
+              Import CSV<input type="file" accept=".csv" onChange={e => { importSquareCSV(e.target.files[0]); e.target.value = ""; }} style={{ display: "none" }} />
+            </label>
+            {salesData.length > 0 && (
+              <button onClick={() => { if (window.confirm("Clear all imported Square sales data? Cash entries are kept.")) { setRawSales(p => p.filter(r => r.source === "cash")); if (bizId) dbDelete(`sales_data?business_id=eq.${bizId}&source=eq.square`).catch(e => showError(friendlyError(e, "Couldn't clear that data — try again."))); } }}
+                style={{ ...btnGhost, color: C.sub }}>Clear Data</button>
+            )}
+          </div>
+        </div>
+      </aside>
+    );
+
+    return (
+      <div className="ov-wrap">
+        <div className="ov-main">
+          {/* Header */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <h1 style={{ fontSize: 20, fontWeight: 800, color: C.ink, margin: 0 }}>Overview</h1>
+              <div style={{ fontSize: 12.5, color: C.sub }}>{biz} · {pwLabel}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+              <button aria-label="Previous week" onClick={() => setPayWeek(getSunday(addDays(payWeek, -7)))} style={{ ...btnGhost, width: 40, padding: 0 }}>‹</button>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, padding: "0 4px", whiteSpace: "nowrap" }}>{payWeek === paySun ? "This week" : pwLabel}</span>
+              <button aria-label="Next week" onClick={() => setPayWeek(getSunday(addDays(payWeek, 7)))} style={{ ...btnGhost, width: 40, padding: 0 }}>›</button>
+              {payWeek !== paySun && <button onClick={() => setPayWeek(paySun)} style={{ ...btnGhost, color: T.accent }}>Today</button>}
+              {squareConnected && <button onClick={handleSyncSquare} disabled={squareSyncing} style={{ ...btnGhost, opacity: squareSyncing ? 0.6 : 1 }}>{squareSyncing ? "Syncing…" : "Sync Square"}</button>}
+            </div>
+          </div>
+
+          {/* KPI cards */}
+          <div className="ov-kpis">
+            <div style={kpi(C.blue)}>
+              <span style={kpiLabel}>Sales this week</span>
+              <span style={kpiValue}>{totalRevenue > 0 ? fmtMoney(totalRevenue) : "—"}</span>
+              <span style={{ fontSize: 11.5, color: C.sub }}>{salesDelta != null ? <>{deltaChip(salesDelta)} vs. same days last week</> : totalRevenue > 0 ? `${wkSalesDays.length} day${wkSalesDays.length !== 1 ? "s" : ""} of sales` : "No sales recorded yet"}</span>
+            </div>
+            <div style={kpi(C.lav)}>
+              <span style={kpiLabel}>Labor cost</span>
+              <span style={kpiValue}>{fmtMoney(payWeekLabor)}</span>
+              <span style={{ fontSize: 11.5, color: C.sub }}>{pwHrs.toFixed(1)}h · {pwStaff} of {employees.length} staff{bgt > 0 ? ` · budget ${fmtMoney(bgt)}` : ""}</span>
+            </div>
+            <div style={kpi(C.mint)}>
+              <span style={{ ...kpiLabel, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+                Labor % of sales
+                <span role="group" aria-label="Actual or projected" style={{ display: "flex", background: "rgba(255,255,255,0.7)", borderRadius: 999, padding: 2 }}>
+                  {["actual", "projected"].map(m => (
+                    <button key={m} onClick={() => setLaborPctMode(m)} aria-pressed={laborPctMode === m}
+                      style={{ border: "none", borderRadius: 999, padding: "4px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer", textTransform: "capitalize", background: laborPctMode === m ? C.ink : "transparent", color: laborPctMode === m ? "white" : C.sub }}>{m}</button>
+                  ))}
+                </span>
+              </span>
+              <span style={{ ...kpiValue, color: pctTone }}>{shownPct != null ? `${shownPct.toFixed(1)}%` : "—"}</span>
+              <span style={{ fontSize: 11.5, color: C.sub }}>{shownPct != null ? `Target ${tgt}%` : laborPctMode === "projected" ? "Needs recent sales history" : "No sales recorded yet"}</span>
+            </div>
+            <div style={kpi(C.sand)}>
+              <span style={kpiLabel}>Forecast · next 7 days</span>
+              <span style={kpiValue}>{forecastNext7.hasEnoughData ? fmtMoney(forecastNext7.total) : "—"}</span>
+              <span style={{ fontSize: 11.5, color: C.sub }}>{forecastNext7.hasEnoughData ? `Suggested labor ${fmtMoney(forecastNext7.total * tgt / 100)}` : "No recent sales to forecast from"}</span>
+            </div>
+          </div>
+
+          {/* Sales vs labor + top items */}
+          <div className="ov-row-2-1">
+            <section style={panel} aria-label="Sales and labor by day">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+                <h2 style={panelTitle}>Sales vs. labor</h2>
+                <div style={{ display: "flex", gap: 12, fontSize: 11.5, color: C.sub }}>
+                  <span><span style={{ display: "inline-block", width: 10, height: 2, background: C.ink, verticalAlign: "middle", marginRight: 5 }} />Sales</span>
+                  <span><span style={{ display: "inline-block", width: 10, height: 2, background: T.accent, verticalAlign: "middle", marginRight: 5 }} />Labor</span>
+                  {hasLastWeek && <span><span style={{ display: "inline-block", width: 10, borderTop: "2px dashed #8EA4D2", verticalAlign: "middle", marginRight: 5 }} />Last week</span>}
+                </div>
+              </div>
+              {totalRevenue === 0 && payWeekLabor === 0 ? (
+                <div style={{ fontSize: 12.5, color: C.sub, padding: "40px 0", textAlign: "center" }}>No sales or scheduled labor this week yet.</div>
+              ) : (
+                <ResponsiveContainer width="100%" height={220}>
+                  <RLineChart data={chartData} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
+                    <CartesianGrid stroke={C.line} vertical={false} />
+                    <XAxis dataKey="day" tickLine={false} axisLine={false} fontSize={11} stroke={C.sub} />
+                    <YAxis tickLine={false} axisLine={false} fontSize={11} stroke={C.sub} width={44} tickFormatter={v => `$${v >= 1000 ? (v / 1000).toFixed(1) + "k" : v}`} />
+                    <RTooltip formatter={v => v == null ? "—" : fmtMoney(v)} contentStyle={{ fontSize: 11, borderRadius: 10, border: `1px solid ${C.line}` }} />
+                    {hasLastWeek && <Line type="monotone" dataKey="Last week" stroke="#8EA4D2" strokeDasharray="4 4" strokeWidth={1.5} dot={false} connectNulls />}
+                    <Line type="monotone" dataKey="Labor" stroke={T.accent} strokeWidth={2} dot={false} />
+                    <Line type="monotone" dataKey="Sales" stroke={C.ink} strokeWidth={2.2} dot={{ r: 2.5 }} connectNulls />
+                  </RLineChart>
+                </ResponsiveContainer>
+              )}
+            </section>
+
+            <section style={panel} aria-label="Top items this week">
+              <h2 style={{ ...panelTitle, marginBottom: 12 }}>Top items this week</h2>
+              {!items || items.loading ? (
+                <div style={{ fontSize: 12.5, color: C.sub }}>Loading item sales…</div>
+              ) : items.error ? (
+                <div style={{ fontSize: 12.5, color: "#A93226" }}>Couldn't load item sales. <button onClick={() => loadOverviewItems(payWeek)} style={{ background: "none", border: "none", color: T.accent, fontWeight: 700, cursor: "pointer", padding: 0 }}>Try again</button></div>
+              ) : !items.rows.length ? (
+                <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5 }}>{squareConnected ? "No item sales this week." : "Item sales appear after you connect Square and sync."}</div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
+                  {items.rows.map(r => (
+                    <div key={r.key}>
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12.5 }}>
+                        <span style={{ color: C.ink, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name}</span>
+                        <span style={{ color: C.sub, whiteSpace: "nowrap" }}>{fmtMoney(r.sales)} · {Math.round(r.units)}</span>
+                      </div>
+                      <div style={{ height: 4, background: C.line, borderRadius: 2, marginTop: 5 }}><div style={{ height: "100%", width: `${maxItem ? r.sales / maxItem * 100 : 0}%`, background: C.ink, borderRadius: 2 }} /></div>
+                    </div>
+                  ))}
+                  <button onClick={() => { setTab("insights"); setInsightsPanel("reports"); }} style={{ background: "none", border: "none", color: T.accent, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: "6px 0", alignSelf: "flex-start" }}>All items in Report Builder →</button>
+                </div>
+              )}
+            </section>
+          </div>
+
+          {/* Hours by employee + daily breakdown */}
+          <div className="ov-row-1-1">
+            <section style={panel} aria-label="Scheduled hours by employee">
+              <h2 style={{ ...panelTitle, marginBottom: 8 }}>Scheduled hours by employee</h2>
+              {hoursData.length === 0 ? <div style={{ fontSize: 12.5, color: C.sub, padding: "30px 0", textAlign: "center" }}>No shifts scheduled this week.</div> : (
+                <ResponsiveContainer width="100%" height={200}>
+                  <RBarChart data={hoursData} margin={{ top: 8, right: 4, left: -18, bottom: 0 }}>
+                    <CartesianGrid stroke={C.line} vertical={false} />
+                    <XAxis dataKey="name" tickLine={false} axisLine={false} fontSize={11} stroke={C.sub} interval={0} />
+                    <YAxis tickLine={false} axisLine={false} fontSize={11} stroke={C.sub} width={34} />
+                    <RTooltip formatter={v => `${v}h`} contentStyle={{ fontSize: 11, borderRadius: 10, border: `1px solid ${C.line}` }} />
+                    <Bar dataKey="hours" radius={[8, 8, 8, 8]} maxBarSize={28}>
+                      {hoursData.map((h, i) => <Cell key={i} fill={h.color} />)}
+                    </Bar>
+                  </RBarChart>
+                </ResponsiveContainer>
+              )}
+            </section>
+
+            <section style={panel} aria-label="Daily breakdown">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <h2 style={panelTitle}>Daily breakdown</h2>
+                <button onClick={toggleCashMode} aria-pressed={cashMode}
+                  style={{ ...btnGhost, padding: "6px 10px", fontSize: 11.5, color: cashMode ? "#1F6B48" : C.sub, borderColor: cashMode ? "#9CCFB5" : C.line }}>
+                  {cashMode ? "Cash entry on" : "Enter cash sales"}
+                </button>
+              </div>
+              {salesWk.days.map((d, i) => {
+                const labor = laborWk.days[i].labor;
+                const p = d.revenue > 0 ? labor / d.revenue * 100 : null;
+                return (
+                  <div key={d.date} style={{ display: "grid", gridTemplateColumns: "38px minmax(0,1fr) minmax(0,1fr) 44px", alignItems: "center", gap: 8, padding: "7px 0", borderTop: i ? `1px solid ${C.line}` : "none", fontSize: 12.5 }}>
+                    <span style={{ fontWeight: 700, color: C.ink }}>{DAYS[i]}</span>
+                    {cashMode ? (
+                      <input type="number" min="0" step="0.01" aria-label={`Cash sales ${DAYS[i]}`} placeholder="Cash $"
+                        defaultValue={cashEntries[d.date] > 0 ? cashEntries[d.date] : ""} key={`cash-${d.date}-${cashEntries[d.date]}`}
+                        onBlur={e => saveCashEntry(d.date, e.target.value)} onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
+                        style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${C.line}`, borderRadius: 8, padding: "6px 8px", fontSize: 12.5, background: "white", color: C.ink }} />
+                    ) : (
+                      <span style={{ color: C.sub }}>{d.revenue > 0 ? `${fmtMoney(d.revenue)} sales` : "—"}</span>
+                    )}
+                    <span style={{ color: C.sub }}>{labor > 0 ? `${fmtMoney(labor)} labor` : "—"}</span>
+                    <span style={{ textAlign: "right", fontWeight: 700, color: p == null ? C.sub : p > tgt + 5 ? "#A93226" : p > tgt - 5 ? "#8A5A00" : "#1F6B48" }}>{p != null ? `${p.toFixed(0)}%` : "—"}</span>
+                  </div>
+                );
+              })}
+            </section>
+          </div>
+
+          {/* Break-even (existing card) */}
+          {renderBreakEvenCard()}
+
+          {/* Widgets */}
+          <section style={panel} aria-label="Your widgets">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h2 style={panelTitle}>Your widgets</h2>
+              <button onClick={() => { setShowAddWidget(true); setAwOpenSection({ data:true, range:false, viz:false, size:false, style:false }); setNewWidget({ data_source:"sales", time_range:"last7", display:"stat", color:null, size:"sm", show_axis:true, show_legend:true }); }}
+                style={{ ...btnGhost, background: T.accent, color: "white", border: "none" }}>+ Add widget</button>
+            </div>
+            {widgets.length === 0 ? (
+              <div style={{ fontSize: 12.5, color: C.sub, textAlign: "center", padding: "18px 0", lineHeight: 1.6 }}>
+                No widgets yet. Add a sales, labor, or forecast widget, or pin any report from Report Builder.
+              </div>
+            ) : (
+              <div className="ov-widgets">{widgets.map(w => renderWidgetCard(w))}</div>
+            )}
+          </section>
+        </div>
+        {rail}
+      </div>
+    );
+  }
+
   // Resolves a widget config into the underlying Sales/Labor/Forecast data
   function computeWidgetResult(config) {
     const anchor = isDemoBiz ? DEMO_TODAY_ANCHOR : undefined;
@@ -5108,19 +5549,19 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
     const axes = (
       <>
-        {showAxis && <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false} />}
+        {showAxis && <CartesianGrid stroke={UI.line} vertical={false} />}
         {showAxis && (
-          <XAxis dataKey="date" tickFormatter={dl} stroke={T.sub} fontSize={9}
-            tickLine={false} axisLine={{ stroke: T.border }} minTickGap={28} />
+          <XAxis dataKey="date" tickFormatter={dl} stroke={UI.sub} fontSize={10}
+            tickLine={false} axisLine={false} minTickGap={28} />
         )}
         {showAxis && (
-          <YAxis stroke={T.sub} fontSize={9} tickLine={false} axisLine={false}
-            width={34} tickFormatter={v => `$${v}`} />
+          <YAxis stroke={UI.sub} fontSize={10} tickLine={false} axisLine={false}
+            width={38} tickFormatter={v => `$${v >= 1000 ? (v/1000).toFixed(1) + "k" : v}`} />
         )}
         <RTooltip
           formatter={(v) => `$${Number(v).toFixed(0)}`}
           labelFormatter={(d) => dl(d)}
-          contentStyle={{ fontSize: 11, borderRadius: 8, border: `1px solid ${T.border}`, background: T.surface }}
+          contentStyle={{ fontSize: 11, borderRadius: 10, border: `1px solid ${UI.line}`, background: "#FFFFFF" }}
         />
         {showLegend && <RLegend wrapperStyle={{ fontSize: 10 }} iconSize={8} />}
       </>
@@ -5129,19 +5570,19 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
     let ChartComp, seriesEls;
     if (display === "line") {
       ChartComp = RLineChart;
-      seriesEls = series.map((s, i) => <Line key={i} type="monotone" dataKey={s.label} stroke={s.color} strokeWidth={2} dot={false} activeDot={{ r: 3 }} />);
+      seriesEls = series.map((s, i) => <Line key={i} type="monotone" dataKey={s.label} stroke={s.color} strokeWidth={2.4} dot={false} activeDot={{ r: 4 }} />);
     } else if (display === "area") {
       ChartComp = RAreaChart;
-      seriesEls = series.map((s, i) => <RArea key={i} type="monotone" dataKey={s.label} stroke={s.color} fill={s.color} fillOpacity={0.25} />);
+      seriesEls = series.map((s, i) => <RArea key={i} type="monotone" dataKey={s.label} stroke={s.color} strokeWidth={2.4} fill={s.color} fillOpacity={0.12} />);
     } else if (display === "combo") {
       ChartComp = RComposedChart;
       seriesEls = series.map((s, i) => i === 0
-        ? <RArea key={i} type="monotone" dataKey={s.label} stroke={s.color} fill={s.color} fillOpacity={0.25} />
-        : <Bar key={i} dataKey={s.label} fill={s.color} radius={[3, 3, 0, 0]} />
+        ? <RArea key={i} type="monotone" dataKey={s.label} stroke={s.color} strokeWidth={2} fill={s.color} fillOpacity={0.12} />
+        : <Bar key={i} dataKey={s.label} fill={s.color} radius={[8, 8, 8, 8]} maxBarSize={26} />
       );
     } else { // "bar"
       ChartComp = RBarChart;
-      seriesEls = series.map((s, i) => <Bar key={i} dataKey={s.label} fill={s.color} radius={[3, 3, 0, 0]} />);
+      seriesEls = series.map((s, i) => <Bar key={i} dataKey={s.label} fill={s.color} radius={[8, 8, 8, 8]} maxBarSize={26} />);
     }
 
     return (
@@ -5259,7 +5700,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         onDragLeave={()=>setDragOverWidgetId(null)}
         onDrop={()=>handleWidgetDrop(config.id)}
         onDragEnd={()=>{ setDragWidgetId(null); setDragOverWidgetId(null); }}
-        style={{background:T.muted,borderRadius:10,padding:"10px 12px",position:"relative",gridColumn:`span ${config.grid_w||1}`,gridRow:`span ${config.grid_h||1}`,opacity:isDragging?0.4:1,outline:isDragOver?`2px dashed ${T.accent}`:"none",transition:"opacity 0.15s, outline 0.1s",cursor:"default"}}>
+        style={{background:"#FFFFFF",border:`1px solid ${UI.line}`,borderRadius:14,padding:"12px 14px",position:"relative",gridColumn:`span ${config.grid_w||1}`,gridRow:`span ${config.grid_h||1}`,opacity:isDragging?0.4:1,outline:isDragOver?`2px dashed ${T.accent}`:"none",transition:"opacity 0.15s, outline 0.1s",cursor:"default"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:8,marginBottom:8}}>
           <div style={{display:"flex",alignItems:"flex-start",gap:6,flex:1,minWidth:0}}>
             <span title="Drag to reorder" style={{color:T.sub,fontSize:14,cursor:"grab",lineHeight:1.2,flexShrink:0,marginTop:1}}>⠿</span>
@@ -8067,276 +8508,8 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
             );
           })()}
 
-          {/* DASHBOARD */}
-          {tab==="dashboard" && (
-            <div style={{display:"flex",flexDirection:"column",gap:12}}>
-              {(()=>{
-                const paySun=getSunday(demoToday);
-                const pwDates=weekDatesFromSunday(payWeek);
-                const pwLabel=dl(pwDates[0])+" – "+dl(pwDates[6]);
-                const pwHrs=employees.reduce((s,e)=>s+DAYS.reduce((d,_,i)=>d+eDayH(payWeek,e.id,i),0),0);
-                const pwStaff=employees.filter(e=>DAYS.some((_,i)=>eDayH(payWeek,e.id,i)>0)).length;
-                const bgt=parseFloat(weeklyBudget)||0;
-
-                const salesThisWeek = getSales("thisWeek", salesData, payWeek);
-                const laborThisWeek = getLabor("thisWeek", salesData, employees, eDayH, payWeek);
-                const wkSales = salesThisWeek.days.filter(d=>d.hasData);
-                const totalRevenue = salesThisWeek.total;
-                const payWeekLabor = laborThisWeek.total;
-                const laborCostPct = totalRevenue > 0 ? (payWeekLabor / totalRevenue) * 100 : 0;
-
-                // Suggested daily labor: average of historical day-of-week revenue × 30%
-                // Then multiply by 7 days to get a full-week budget suggestion.
-                // Uses forecast engine so it's based on history, not just this week's partial data.
-                const forecastThisWeek = getForecast("thisWeek", salesData, payWeek);
-                const suggestedDailyRevenue = forecastThisWeek.hasEnoughData
-                  ? forecastThisWeek.total / 7
-                  : totalRevenue > 0 ? totalRevenue / Math.max(1, wkSales.length) : 0;
-                const suggestedDailyLabor = Math.round(suggestedDailyRevenue * (laborTargetPct||30) / 100);
-                const suggestedWeeklyBudget = suggestedDailyLabor * 7;
-
-                const forecastNext7 = getForecast("next7", salesData, isDemoBiz ? DEMO_TODAY_ANCHOR : undefined);
-                const dayData = salesThisWeek.days.map((d, i) => {
-                  const labor = laborThisWeek.days[i].labor;
-                  return { day:DAYS[i], date:d.date, revenue:d.revenue, labor, pct:d.revenue>0?(labor/d.revenue)*100:null };
-                });
-                const hasSalesData = wkSales.length > 0 || salesData.length > 0;
-
-                const over=bgt>0&&payWeekLabor>bgt;
-                const warn=!over&&bgt>0&&payWeekLabor/bgt>0.85;
-                const bc=over?"#C0392B":warn?"#E8A93A":"#4CAF7D";
-                const pct=bgt>0?Math.min((payWeekLabor/bgt)*100,100):0;
-
-                return (
-                  <div style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,overflow:"hidden"}}>
-                    <div style={{padding:"10px 15px",background:T.dark,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                        <button onClick={()=>setPayWeek(getSunday(addDays(payWeek,-7)))} style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,width:32,height:32,fontSize:16,cursor:"pointer",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>‹</button>
-                        <div style={{background:T.accent,color:"white",padding:"6px 14px",fontWeight:700,fontSize:12,borderRadius:8,whiteSpace:"nowrap"}}>{pwLabel}</div>
-                        <button onClick={()=>setPayWeek(getSunday(addDays(payWeek,7)))} style={{background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,width:32,height:32,fontSize:16,cursor:"pointer",color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700}}>›</button>
-                        {payWeek===paySun
-                          ? <span style={{fontSize:11,color:T.accent,fontWeight:700}}>Current week</span>
-                          : <button onClick={()=>setPayWeek(paySun)} style={{background:"rgba(255,255,255,0.1)",color:"white",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Today</button>}
-                      </div>
-                      <div style={{display:"flex",alignItems:"center",gap:10}}>
-                        <span style={{color:"#666",fontSize:11}}>Powered by Square</span>
-                        {squareConnected ? (
-                          <button onClick={handleSyncSquare} disabled={squareSyncing}
-                            style={{background:"rgba(255,255,255,0.1)",color:"white",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:squareSyncing?"default":"pointer",whiteSpace:"nowrap",opacity:squareSyncing?0.6:1}}>
-                            {squareSyncing ? "Syncing…" : "Sync Now"}
-                          </button>
-                        ) : (
-                          <button onClick={handleConnectSquare} disabled={squareLoading}
-                            style={{background:T.accent,color:"white",border:"none",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:squareLoading?"default":"pointer",whiteSpace:"nowrap",opacity:squareLoading?0.6:1}}>
-                            Connect to Square
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    {squareConnected && (
-                      <div style={{padding:"7px 18px",background:T.muted,display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,borderBottom:`1px solid ${T.border}`}}>
-                        <span style={{fontSize:11,color:T.sub}}>
-                          {squareMerchantName ? squareMerchantName+" · " : ""}Last synced {squareLastSync ? new Date(squareLastSync).toLocaleString("en-US",{month:"short",day:"numeric",hour:"numeric",minute:"2-digit"}) : "never"}
-                        </span>
-                        <button onClick={handleDisconnectSquare}
-                          style={{background:"transparent",color:T.sub,border:"none",fontSize:11,fontWeight:600,cursor:"pointer",padding:0,textDecoration:"underline"}}>
-                          Disconnect
-                        </button>
-                      </div>
-                    )}
-
-                    <div style={{padding:"13px 16px",display:"flex",flexDirection:"column",gap:16}}>
-                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(130px,1fr))",gap:10}}>
-                        {[
-                          { l:"Total Revenue", v:totalRevenue>0?`$${totalRevenue.toFixed(0)}`:"-", c:"#3A9BE8", sub:"this week" },
-                          { l:"Labor Cost", v:`$${payWeekLabor.toFixed(2)}`, c:T.accent, sub:"this week" },
-                          { l:"Total Hours", v:pwHrs+"h", c:"#3A9BE8", sub:"scheduled" },
-                          { l:"Staff Scheduled", v:pwStaff+"/"+employees.length, c:"#4CAF7D", sub:"have shifts" },
-                          { l:"Forecast (Next 7 Days)",
-                            v: forecastNext7.hasEnoughData ? `$${forecastNext7.total.toFixed(0)}` : "Need more data",
-                            c: forecastNext7.hasEnoughData ? "#3A9BE8" : T.sub,
-                            sub: forecastNext7.hasEnoughData ? `suggested labor: $${Math.round(forecastNext7.total*(laborTargetPct||30)/100)}` : `min ${MIN_DOW_SAMPLES} weeks of history needed` },
-                        ].map(s=>(
-                          <div key={s.l} style={{background:T.muted,borderRadius:10,padding:"10px 12px"}}>
-                            <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em",marginBottom:4}}>{s.l}</div>
-                            <div style={{fontSize:20,fontWeight:800,color:s.c,lineHeight:1}}>{s.v}</div>
-                            <div style={{fontSize:9,color:T.sub,marginTop:4}}>{s.sub}</div>
-                          </div>
-                        ))}
-                        {/* Labor Cost % — standalone tile with Projected/Actual toggle */}
-                        {(()=>{
-                          const projPct = forecastThisWeek.hasEnoughData && forecastThisWeek.total > 0
-                            ? (payWeekLabor / forecastThisWeek.total) * 100 : null;
-                          const actPct  = totalRevenue > 0 ? laborCostPct : null;
-                          const dispPct = laborPctMode === "projected" ? projPct : actPct;
-                          const tgtP = laborTargetPct || 30;
-                          const pctColor = dispPct == null ? T.sub : dispPct > tgtP + 5 ? "#C0392B" : dispPct > tgtP - 5 ? "#E8A93A" : "#4CAF7D";
-                          const pctSub = laborPctMode === "projected"
-                            ? (forecastThisWeek.hasEnoughData ? `vs $${forecastThisWeek.total.toFixed(0)} forecasted` : "need more history")
-                            : (totalRevenue > 0 ? `vs $${totalRevenue.toFixed(0)} actual` : "no revenue yet");
-                          return (
-                            <div key="labor-pct" style={{background:T.muted,borderRadius:10,padding:"10px 12px"}}>
-                              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-                                <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>Labor Cost %</div>
-                                <div style={{display:"flex",background:T.border,borderRadius:20,padding:2,gap:2}}>
-                                  {["projected","actual"].map(m=>(
-                                    <button key={m} onClick={e=>{e.stopPropagation();setLaborPctMode(m);}}
-                                      style={{background:laborPctMode===m?T.accent:"transparent",color:laborPctMode===m?"white":T.sub,border:"none",borderRadius:18,padding:"3px 8px",fontSize:9,fontWeight:700,cursor:"pointer",transition:"all 0.15s",textTransform:"capitalize",whiteSpace:"nowrap"}}>
-                                      {m}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                              <div style={{fontSize:20,fontWeight:800,color:pctColor,lineHeight:1}}>{dispPct!=null?`${dispPct.toFixed(1)}%`:"-"}</div>
-                              <div style={{fontSize:9,color:T.sub,marginTop:4}}>{pctSub}</div>
-                              <div style={{fontSize:9,color:T.sub,marginTop:6,padding:"4px 6px",background:laborPctMode==="projected"?"#EAF4EF":"#FEF3E2",borderRadius:5}}>
-                                {dispPct!=null?(dispPct<tgtP-5?"✓ Under target":dispPct<=tgtP+5?"✓ On target":"⚠ Over target"):""} target: {tgtP}%
-                              </div>
-                            </div>
-                          );
-                        })()}
-                      </div>
-
-                      <div>
-                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 0"}}>
-                          <button onClick={()=>setShowDailyBreakdown(v=>!v)}
-                            style={{background:"transparent",border:"none",padding:0,cursor:"pointer",display:"flex",alignItems:"center",gap:6}}>
-                            <span style={{fontSize:11,fontWeight:700,color:T.sub,textTransform:"uppercase",letterSpacing:"0.04em"}}>Daily breakdown</span>
-                          </button>
-                          <div style={{display:"flex",alignItems:"center",gap:8}}>
-                            <button onClick={toggleCashMode}
-                              style={{display:"flex",alignItems:"center",gap:5,background:cashMode?"#f0faf5":T.muted,border:`1.5px solid ${cashMode?"#4CAF7D":T.border}`,borderRadius:20,padding:"4px 10px",cursor:"pointer",fontSize:11,fontWeight:700,color:cashMode?"#2D6A4F":T.sub,transition:"all 0.15s"}}>
-                              <div style={{width:8,height:8,borderRadius:"50%",background:cashMode?"#4CAF7D":"#ccc",transition:"background 0.15s"}}></div>
-                              💵 Cash entry
-                            </button>
-                            <button onClick={()=>setShowDailyBreakdown(v=>!v)}
-                              style={{background:"transparent",border:"none",padding:0,cursor:"pointer",fontSize:11,color:T.accent,fontWeight:700}}>
-                              {showDailyBreakdown ? "Hide ▲" : "Show ▼"}
-                            </button>
-                          </div>
-                        </div>
-                        {showDailyBreakdown && dayData.map((d,i)=>(
-                          <div key={d.date} style={{display:"flex",alignItems:"center",gap:8,padding:"8px 0",borderBottom:i<dayData.length-1?`1px solid ${T.border}`:"none",fontSize:12}}>
-                            <span style={{color:T.text,fontWeight:700,width:36,flexShrink:0}}>{d.day}</span>
-                            {cashMode ? (
-                              <div style={{display:"flex",alignItems:"center",gap:4,background:T.surface,border:`1.5px solid ${cashEntries[d.date]>0?"#4CAF7D":T.border}`,borderRadius:8,padding:"3px 8px",width:96,flexShrink:0}}>
-                                <span style={{fontSize:12,fontWeight:700,color:cashEntries[d.date]>0?"#4CAF7D":T.sub}}>$</span>
-                                <input
-                                  type="number"
-                                  placeholder="0.00"
-                                  defaultValue={cashEntries[d.date]>0?cashEntries[d.date]:""}
-                                  key={`cash-${d.date}-${cashEntries[d.date]}`}
-                                  onBlur={e=>saveCashEntry(d.date, e.target.value)}
-                                  onKeyDown={e=>{if(e.key==="Enter")e.target.blur();}}
-                                  style={{width:60,border:"none",outline:"none",fontSize:12,fontWeight:700,color:T.text,background:"transparent"}}
-                                />
-                              </div>
-                            ) : (
-                              <span style={{color:T.sub,flex:1}}>{d.revenue>0?`$${d.revenue.toFixed(0)} sales`:"no sales data"}</span>
-                            )}
-                            <span style={{color:T.sub,flex:1,textAlign:"right"}}>{d.labor>0?`$${d.labor.toFixed(0)} labor`:"-"}</span>
-                            <span style={{width:44,textAlign:"right",fontWeight:700,color:d.pct==null?T.sub:d.pct>(laborTargetPct||30)+5?"#C0392B":d.pct>(laborTargetPct||30)-5?"#E8A93A":"#4CAF7D"}}>{d.pct!=null?`${d.pct.toFixed(0)}%`:"-"}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div style={{background:T.muted,borderRadius:10,padding:"11px 14px"}}>
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
-                          <div>
-                            <div style={{fontSize:10,color:T.sub,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.04em"}}>Weekly Budget</div>
-                            <div style={{fontSize:20,fontWeight:800,color:T.text,marginTop:2}}>{bgt>0?`$${bgt.toFixed(0)}`:"Not set"}</div>
-                          </div>
-                          {bgt>0 && <span style={{fontSize:12,fontWeight:700,color:bc}}>{over?"$"+(payWeekLabor-bgt).toFixed(0)+" over":"$"+(bgt-payWeekLabor).toFixed(0)+(warn?" left":" remaining")}</span>}
-                        </div>
-                        {bgt>0 && (
-                          <>
-                            <div style={{height:10,background:T.surface,borderRadius:5,overflow:"hidden",marginTop:8}}><div style={{height:"100%",width:`${pct}%`,background:bc,borderRadius:5,transition:"width 0.3s"}}/></div>
-                            <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:11,color:T.sub}}><span>$0</span><span>${bgt.toFixed(0)}</span></div>
-                          </>
-                        )}
-                        {suggestedDailyLabor > 0 && (
-                          <div style={{display:"flex",alignItems:"center",gap:10,marginTop:bgt>0?12:8,paddingTop:bgt>0?12:0,borderTop:bgt>0?`1px solid ${T.border}`:"none",flexWrap:"wrap"}}>
-                            <div style={{flex:1,minWidth:200}}>
-                              <div style={{fontSize:12,fontWeight:700,color:T.text,marginBottom:2}}>Suggested labor budget</div>
-                              <div style={{fontSize:11,color:T.sub,lineHeight:1.5}}>
-                                Based on your historical daily revenue, you should target <strong style={{color:T.text}}>${suggestedDailyLabor}/day</strong> in labor ({laborTargetPct||30}% of avg daily revenue). Across 7 days that's <strong style={{color:T.accent}}>${suggestedWeeklyBudget}/week</strong>.
-                              </div>
-                            </div>
-                            <button onClick={()=>{
-                              setWeeklyBudget(String(suggestedWeeklyBudget));
-                              saveBizSettings({weekly_budget: suggestedWeeklyBudget}).catch(()=>{});
-                              showToast(`Weekly budget set to $${suggestedWeeklyBudget} ($${suggestedDailyLabor}/day × 7) ✓`);
-                            }}
-                              style={{background:T.accent,color:"white",border:"none",borderRadius:8,padding:"8px 16px",fontWeight:700,fontSize:12,cursor:"pointer",flexShrink:0}}>
-                              Apply ${suggestedWeeklyBudget}
-                            </button>
-                          </div>
-                        )}
-                      </div>
-
-                      {!hasSalesData && (
-                        <div style={{background:T.muted,borderRadius:10,padding:"11px 14px",textAlign:"center"}}>
-                          {squareConnected ? (
-                            <div style={{fontSize:12,color:T.sub}}>Connected — tap Sync Now above to pull your sales history.</div>
-                          ) : (
-                            <>
-                              <div style={{fontSize:12,color:T.sub,marginBottom:10}}>Connect to Square above for automatic sync, or import a Sales Summary CSV.</div>
-                              <label style={{background:T.surface,color:T.text,border:`1px solid ${T.border}`,borderRadius:8,padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",display:"inline-block"}}>
-                                Import Square CSV
-                                <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
-                              </label>
-                            </>
-                          )}
-                        </div>
-                      )}
-
-                      {salesData.length > 0 && (
-                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-                          <span style={{fontSize:11,color:T.sub}}>{salesData.length} days of data · {salesData[0]?.date} to {salesData[salesData.length-1]?.date}</span>
-                          <div style={{display:"flex",gap:8}}>
-                            <label style={{background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                              Import CSV
-                              <input type="file" accept=".csv" onChange={e=>{importSquareCSV(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
-                            </label>
-                            <button onClick={()=>{ if(window.confirm("Clear all imported sales data?")) { setRawSales(p => p.filter(r => r.source === "cash")); if(bizId) dbDelete(`sales_data?business_id=eq.${bizId}`).catch(e=>{ console.warn("Clear sales data failed:", e); showError(friendlyError(e, "Couldn't clear that data — try again.")); }); }; }}
-                              style={{background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:7,padding:"5px 10px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
-                              Clear Data
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {/* Break-even */}
-              {renderBreakEvenCard()}
-
-              {/* Your Widgets */}
-              <div style={{background:T.surface,borderRadius:T.radius,boxShadow:T.shadow,overflow:"hidden"}}>
-                <div style={{padding:"10px 15px",background:T.dark,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span style={{color:"white",fontWeight:800,fontSize:14}}>Your Widgets</span>
-                  <button onClick={()=>{ setShowAddWidget(true); setAwOpenSection({ data:true, range:false, viz:false, size:false, style:false }); setNewWidget({ data_source:"sales", time_range:"last7", display:"stat", color:null, size:"sm", show_axis:true, show_legend:true }); }}
-                    style={{background:T.accent,color:"white",border:"none",borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
-                    + Add
-                  </button>
-                </div>
-                <div style={{padding:"13px 16px"}}>
-                  {widgets.length===0 ? (
-                    <div style={{textAlign:"center",padding:"20px 0",color:T.sub,fontSize:12}}>
-                      No widgets yet — tap "+ Add" to build a sales, labor, or forecast view of your own.
-                    </div>
-                  ) : (
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(2, 1fr)",gridAutoRows:"auto",gap:10}}>
-                      {widgets.map(w=>renderWidgetCard(w))}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-            </div>
-          )}
+          {/* DASHBOARD — Overview */}
+          {tab==="dashboard" && renderOverview()}
 
           {/* Add Widget modal */}
           {showAddWidget && (
@@ -8346,6 +8519,10 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   <div>
                     <div style={{fontWeight:800,fontSize:15,color:T.text}}>🧩 Add Widget</div>
                     <div style={{fontSize:11,color:T.sub,marginTop:2}}>Pick a data source, time range, and how to show it.</div>
+                    <button onClick={()=>{ setShowAddWidget(false); setTab("insights"); setInsightsPanel("reports"); }}
+                      style={{background:"none",border:"none",padding:"6px 0 0",color:T.accent,fontWeight:700,fontSize:11.5,cursor:"pointer",textAlign:"left"}}>
+                      Need Shift Types, Item Sales, Weather, or Timesheet? Build it in Report Builder and tap "+ Add to Dashboard" →
+                    </button>
                   </div>
                   <button onClick={()=>setShowAddWidget(false)} style={{background:T.muted,border:"none",borderRadius:"50%",width:28,height:28,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
                 </div>
@@ -8850,7 +9027,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
 
                     <SectionLabel T={T}>Visualization</SectionLabel>
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
-                      {[{id:"number",label:"Number"},{id:"line",label:"Line"},{id:"bar",label:"Bar"},{id:"area",label:"Area"},{id:"combo",label:"Combo"},{id:"table",label:"Table"}]
+                      {[{id:"number",label:"Number"},{id:"line",label:"Line"},{id:"bar",label:"Bar"},{id:"area",label:"Area"},{id:"combo",label:"Combo"},{id:"list",label:"List"},{id:"table",label:"Table"}]
                         .filter(v => !((rbGrouping==="Employee" || rbGrouping==="Shift Type" || rbGrouping==="Item") && v.id==="number")) // "Number" shows a first-vs-last trend delta, which is meaningless across employee rows rather than a time series
                         .map(v=>(
                         <button key={v.id} onClick={()=>setRbVizType(v.id)}
