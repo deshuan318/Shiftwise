@@ -1424,6 +1424,7 @@ export default function App() {
   const [costsOpen,      setCostsOpen]      = useState(false);
   const [costDraft,      setCostDraft]      = useState(null); // {id?, name, amount, kind, frequency} while adding/editing
   const [beView,         setBeView]         = useState("breakeven"); // "breakeven" | "target"
+  const [beOpen,         setBeOpen]         = useState(false);       // Break-even card hidden until opened
   const [showAddWidget,  setShowAddWidget]  = useState(false);
   const [newWidget,      setNewWidget]      = useState({ data_source:"sales", time_range:"last7", display:"stat", color:null, size:"sm", show_axis:true, show_legend:true });
   const [sizeMenuFor,    setSizeMenuFor]    = useState(null); // widget id whose size picker is open, or null
@@ -5360,8 +5361,18 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             </section>
           </div>
 
-          {/* Break-even (existing card) */}
-          {renderBreakEvenCard()}
+          {/* Break-even — UI Batch 9: hidden until opened */}
+          <section aria-label="Break-even">
+            <button onClick={() => setBeOpen(o => !o)} aria-expanded={beOpen}
+              style={{ ...panel, width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", fontFamily: "inherit", textAlign: "left", marginBottom: beOpen ? 10 : 0 }}>
+              <span style={panelTitle}>Break-even</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, color: T.accent }}>
+                {beOpen ? "Hide" : "View"}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ transform: beOpen ? "rotate(180deg)" : "none", transition: "transform 0.15s" }}><path d="m6 9 6 6 6-6"/></svg>
+              </span>
+            </button>
+            {beOpen && renderBreakEvenCard()}
+          </section>
 
           {/* Widgets */}
           <section style={panel} aria-label="Your widgets">
