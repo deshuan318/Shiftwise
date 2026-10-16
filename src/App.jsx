@@ -5281,7 +5281,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
               <button aria-label="Previous week" onClick={() => setPayWeek(getSunday(addDays(payWeek, -7)))} style={{ ...btnGhost, width: 40, padding: 0 }}>‹</button>
-              <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, padding: "0 4px", whiteSpace: "nowrap" }}>{payWeek === paySun ? "This week" : pwLabel}</span>
+              <span style={{ fontSize: 12.5, fontWeight: 700, color: C.ink, padding: "0 4px", whiteSpace: "nowrap", minWidth: 132, textAlign: "center", fontVariantNumeric: "tabular-nums" }}>{payWeek === paySun ? "This week" : pwLabel}</span>
               <button aria-label="Next week" onClick={() => setPayWeek(getSunday(addDays(payWeek, 7)))} style={{ ...btnGhost, width: 40, padding: 0 }}>›</button>
               {payWeek !== paySun && <button onClick={() => setPayWeek(paySun)} style={{ ...btnGhost, color: T.accent }}>Today</button>}
               {squareConnected && <button onClick={handleSyncSquare} disabled={squareSyncing} style={{ ...btnGhost, opacity: squareSyncing ? 0.6 : 1 }}>{squareSyncing ? "Syncing…" : "Sync Square"}</button>}
@@ -7546,7 +7546,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,-7)))}
           style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
         <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
-          <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
+          <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",justifyContent:"center",gap:6,minWidth:170,boxSizing:"border-box",fontVariantNumeric:"tabular-nums"}}>
             <span style={{fontSize:10}}>●</span>
             {tsWkLabel}
           </div>
@@ -7753,7 +7753,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                       <button onClick={()=>{ const prev=getSunday(addDays(activeWeek||wk1Start,-7)); setWk1Start(prev); setActiveWeek(prev); setPrintWeek(prev); }}
                         style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
                       <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
-                        <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
+                        <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",justifyContent:"center",gap:6,minWidth:170,boxSizing:"border-box",fontVariantNumeric:"tabular-nums"}}>
                           <span style={{fontSize:10}}>●</span>
                           {activeWeek ? `${dl(weekDatesFromSunday(activeWeek)[0])} – ${dl(weekDatesFromSunday(activeWeek)[6])}` : "Select a week"}
                         </div>
@@ -8422,7 +8422,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                   <button onClick={()=>{ const w=getSunday(addDays(coverageWeek,-7)); setCoverageWeek(w); setCoverageDay(covWkDates[0]); }}
                     style={{background:T.muted, border:`1px solid ${T.border}`, borderRadius:8, width:34, height:36, fontSize:16, cursor:"pointer", color:T.sub, display:"flex", alignItems:"center", justifyContent:"center", fontWeight:700, flexShrink:0}}>‹</button>
                   <div style={{display:"flex", alignItems:"center", borderRadius:9, overflow:"hidden", border:`2px solid ${T.accent}`, boxShadow:`0 0 0 2px ${T.accent}28`}}>
-                    <div style={{background:T.accent, color:"white", padding:"8px 16px", fontWeight:700, fontSize:12, whiteSpace:"nowrap", display:"flex", alignItems:"center", gap:6}}>
+                    <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",justifyContent:"center",gap:6,minWidth:170,boxSizing:"border-box",fontVariantNumeric:"tabular-nums"}}>
                       {isCurrentWeek && <span style={{fontSize:10}}>●</span>}
                       {covWkLabel}
                     </div>
@@ -10057,7 +10057,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                               <button onClick={()=>setPrintWeek(getSunday(addDays(printWeek,-7)))}
                                 style={{background:T.muted,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
                               <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
-                                <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
+                                <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",justifyContent:"center",gap:6,minWidth:170,boxSizing:"border-box",fontVariantNumeric:"tabular-nums"}}>
                                   <span style={{fontSize:10}}>●</span>
                                   {printWeek ? `${dl(weekDatesFromSunday(printWeek)[0])} – ${dl(weekDatesFromSunday(printWeek)[6])}` : "Select a week"}
                                 </div>
