@@ -1432,6 +1432,7 @@ const [timesheetHistory, setTimesheetHistory] = useState([]);
 const [punchReviews,   setPunchReviews]   = useState({}); // { punchId: "pending"|"reviewed"|"approved"|"rejected" }
 const [alertsOpen,     setAlertsOpen]     = useState(false);
 const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" | "timesheet"
+const [dashSub,        setDashSub]        = useState("overview"); // Dashboard tab: "overview" | "reports"
 
   // ── Coverage / Open Shifts ───────────────────────────────────────────────
   // openShifts: { id, weekKey, empId, dayIdx, originalShift, reason, status, createdAt, claimedBy }
@@ -1603,13 +1604,14 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
   // Report Builder selections never carry over — leaving the panel any way
   // (X button, toggling it off, or switching straight to History/Flag
   // Patterns/notifications) resets it, so reopening always starts blank.
-  useEffect(() => { if (insightsPanel !== "reports") rbResetAll(); }, [insightsPanel]);
+  const rbOpen = tab === "dashboard" && dashSub === "reports";
+  useEffect(() => { if (!rbOpen) rbResetAll(); }, [rbOpen]);
   useEffect(() => {
-    if (insightsPanel !== "reports" || itemNames || !bizId) return;
+    if (!rbOpen || itemNames || !bizId) return;
     dbGet(`sales_item_names?select=item_key,item_name,units&business_id=eq.${bizId}&order=units.desc&limit=1000`)
       .then(rows => setItemNames((rows||[]).map(r => ({ key: r.item_key, name: r.item_name || "Item", units: Number(r.units)||0 }))))
       .catch(e => { console.warn("Item list unavailable:", e); setItemNames([]); });
-  }, [insightsPanel, bizId]);
+  }, [rbOpen, bizId]);
 
   async function runCustomReportUI() {
     const activeIds = rbActiveSourceIds();
@@ -5442,7 +5444,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                       <div style={{ height: 4, background: C.line, borderRadius: 2, marginTop: 5 }}><div style={{ height: "100%", width: `${maxItem ? r.sales / maxItem * 100 : 0}%`, background: C.ink, borderRadius: 2 }} /></div>
                     </div>
                   ))}
-                  <button onClick={() => { setTab("insights"); setInsightsPanel("reports"); }} style={{ background: "none", border: "none", color: T.accent, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: "6px 0", alignSelf: "flex-start" }}>All items in Report Builder →</button>
+                  <button onClick={() => setDashSub("reports")} style={{ background: "none", border: "none", color: T.accent, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: "6px 0", alignSelf: "flex-start" }}>All items in Report Builder →</button>
                 </div>
               )}
             </section>
@@ -5518,6 +5520,191 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
         </div>
         {rail}
       </div>
+    );
+  }
+
+  // Report Builder — lives under Dashboard → Report Builder
+  function renderReportBuilderPanel() {
+    return (
+                  <Card T={T} style={{padding:"14px 16px"}}>
+                    <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:14,gap:12,flexWrap:"wrap"}}>
+                      <div>
+                        <div style={{fontWeight:800,fontSize:14,color:T.text}}>📊 Report Builder</div>
+                        <div style={{fontSize:11,color:T.sub,marginTop:2}}>Pick sources, fields, and how to view them — cross-reference up to 3 at once.</div>
+                      </div>
+                      <div style={{display:"flex",gap:8}}>
+                        <button onClick={rbResetAll} style={{background:"none",border:`1px solid ${T.border}`,borderRadius:8,padding:"5px 10px",fontSize:11,fontWeight:600,color:T.sub,cursor:"pointer"}}>Reset</button>
+                        <button onClick={()=>setDashSub("overview")} style={{background:T.muted,border:"none",borderRadius:"50%",width:28,height:28,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
+                      </div>
+                    </div>
+
+                    <SectionLabel T={T}>Data Sources ({rbActiveSourceIds().length}/3)</SectionLabel>
+                    <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6,marginBottom:16}}>
+                      {Object.entries(REPORT_SOURCES).map(([sid,def])=>{
+                        const state = rbSources[sid] || { active:false, fields:[], filters:{} };
+                        return (
+                          <div key={sid} style={{border:`1px solid ${state.active?def.color+"66":T.border}`,borderRadius:10,background:state.active?def.color+"0D":T.muted,overflow:"hidden"}}>
+                            <button onClick={()=>rbToggleSource(sid)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left"}}>
+                              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                                <span style={{width:16,height:16,borderRadius:5,border:`1.5px solid ${state.active?def.color:T.sub}`,background:state.active?def.color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:10,color:"white"}}>{state.active?"✓":""}</span>
+                                <span style={{fontSize:12.5,fontWeight:700,color:T.text}}>{def.label}</span>
+                              </div>
+                              {state.active && <span style={{fontSize:10,color:T.sub}}>{state.fields.length} field{state.fields.length!==1?"s":""}</span>}
+                            </button>
+                            {state.active && (
+                              <div style={{padding:"0 12px 12px",display:"flex",flexDirection:"column",gap:10}}>
+                                <div>
+                                  <div style={{fontSize:9.5,color:T.sub,fontWeight:700,letterSpacing:0.4,marginBottom:5}}>FIELDS TO PULL</div>
+                                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                                    {def.fields.map(f=>(
+                                      <button key={f.id} onClick={()=>rbToggleField(sid,f.id)}
+                                        style={{padding:"4px 9px",borderRadius:999,fontSize:10.5,fontWeight:600,cursor:"pointer",
+                                          border:`1px solid ${state.fields.includes(f.id)?def.color:T.border}`,
+                                          background:state.fields.includes(f.id)?def.color+"22":"transparent",
+                                          color:state.fields.includes(f.id)?T.text:T.sub}}>
+                                        {state.fields.includes(f.id)?"✓ ":""}{f.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                                {sid==="shifttypes" && (
+                                  <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); }}
+                                    style={{alignSelf:"flex-start",background:"none",border:"none",color:T.accent,fontWeight:700,fontSize:11,cursor:"pointer",padding:0}}>
+                                    Edit shift types
+                                  </button>
+                                )}
+                                {def.filters.map(fl=>{
+                                  const sKey = `${sid}|${fl.id}`;
+                                  const q = (rbFilterSearch[sKey] || "").trim().toLowerCase();
+                                  const chosen = state.filters[fl.id] || [];
+                                  const long = fl.options.length > 12;
+                                  const shown = !long ? fl.options
+                                    : q ? fl.options.filter(o => chosen.includes(o.value) || o.label.toLowerCase().includes(q)).slice(0, 40)
+                                        : fl.options.filter((o, i) => i < 12 || chosen.includes(o.value)); // top sellers first
+                                  return (
+                                  <div key={fl.id}>
+                                    <div style={{fontSize:9.5,color:T.sub,fontWeight:700,letterSpacing:0.4,marginBottom:5}}>FILTER · {fl.label.toUpperCase()}{long && chosen.length ? ` · ${chosen.length} picked` : ""}</div>
+                                    {sid==="itemsales" && fl.id==="item" && itemNames && itemNames.length===0 && (
+                                      <div style={{fontSize:11,color:T.sub,marginBottom:4}}>No item sales yet — items appear after a Square sync.</div>
+                                    )}
+                                    {long && (
+                                      <input value={rbFilterSearch[sKey] || ""} onChange={e=>setRbFilterSearch(p=>({...p,[sKey]:e.target.value}))}
+                                        placeholder={`Search ${fl.options.length} ${fl.label.toLowerCase()}s…`} aria-label={`Search ${fl.label}`}
+                                        style={{width:"100%",boxSizing:"border-box",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:12,outline:"none",background:T.surface,color:T.text,marginBottom:6}}/>
+                                    )}
+                                    <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                                      {shown.map(opt=>{
+                                        const active = (state.filters[fl.id]||[]).includes(opt.value);
+                                        return (
+                                          <button key={opt.value} onClick={()=>rbToggleFilter(sid,fl.id,opt.value)}
+                                            style={{padding:"4px 9px",borderRadius:999,fontSize:10.5,fontWeight:600,cursor:"pointer",
+                                              border:`1px solid ${active?def.color:T.border}`,
+                                              background:active?def.color+"22":"transparent",
+                                              color:active?T.text:T.sub}}>
+                                            {opt.label}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <SectionLabel T={T}>Group By</SectionLabel>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
+                      {["Day","Week","Day of Week","Employee","Shift Type","Item"].map(g=>(
+                        <button key={g} onClick={()=>{setRbGrouping(g);setRbResult(null);if((g==="Employee"||g==="Shift Type"||g==="Item")&&rbVizType==="number")setRbVizType(null);}}
+                          style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
+                            border:`1px solid ${rbGrouping===g?T.accent:T.border}`,background:rbGrouping===g?T.accent:"transparent",color:rbGrouping===g?"white":T.sub}}>{g}</button>
+                      ))}
+                    </div>
+
+                    <SectionLabel T={T}>Date Range</SectionLabel>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
+                      {FILTERS.filter(f=>f.kind==="history").map(f=>(
+                        <button key={f.key} onClick={()=>{setRbPreset(f.key);setRbResult(null);}}
+                          style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
+                            border:`1px solid ${rbPreset===f.key?T.accent:T.border}`,background:rbPreset===f.key?T.accent:"transparent",color:rbPreset===f.key?"white":T.sub}}>{f.label}</button>
+                      ))}
+                      <button onClick={()=>{setRbPreset("custom");setRbResult(null);}}
+                        style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
+                          border:`1px solid ${rbPreset==="custom"?"#C0392B":T.border}`,background:rbPreset==="custom"?"#C0392B":"transparent",color:rbPreset==="custom"?"white":T.sub}}>📅 Custom</button>
+                    </div>
+                    {rbPreset==="custom" && (
+                      <div style={{display:"flex",gap:8,marginTop:8}}>
+                        <input type="date" value={rbCustomStart} onChange={e=>{setRbCustomStart(e.target.value);setRbResult(null);}}
+                          style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"7px 8px",fontSize:12,background:T.surface,color:T.text}}/>
+                        <input type="date" value={rbCustomEnd} onChange={e=>{setRbCustomEnd(e.target.value);setRbResult(null);}}
+                          style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"7px 8px",fontSize:12,background:T.surface,color:T.text}}/>
+                      </div>
+                    )}
+
+                    <SectionLabel T={T}>Visualization</SectionLabel>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
+                      {[{id:"number",label:"Number"},{id:"line",label:"Line"},{id:"bar",label:"Bar"},{id:"area",label:"Area"},{id:"combo",label:"Combo"},{id:"list",label:"List"},{id:"table",label:"Table"}]
+                        .filter(v => !((rbGrouping==="Employee" || rbGrouping==="Shift Type" || rbGrouping==="Item") && v.id==="number")) // "Number" shows a first-vs-last trend delta, which is meaningless across employee rows rather than a time series
+                        .map(v=>(
+                        <button key={v.id} onClick={()=>setRbVizType(v.id)}
+                          style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
+                            border:`1px solid ${rbVizType===v.id?"#4CAF7D":T.border}`,background:rbVizType===v.id?"#4CAF7D":"transparent",color:rbVizType===v.id?"white":T.sub}}>{v.label}</button>
+                      ))}
+                    </div>
+
+                    <button onClick={runCustomReportUI} disabled={rbLoading}
+                      style={{width:"100%",background:rbLoading?T.muted:T.accent,border:"none",borderRadius:10,padding:"11px 0",fontSize:13,fontWeight:800,color:rbLoading?T.sub:"white",cursor:rbLoading?"not-allowed":"pointer",marginBottom:16}}>
+                      {rbLoading ? "Running…" : "Run Report"}
+                    </button>
+
+                    {rbResult && (()=>{
+                      const fieldKeys = rbActiveFieldKeys();
+                      return (
+                        <>
+                          {renderReportResult(rbResult.data, rbVizType, rbGrouping, fieldKeys, rbResult.truncated)}
+
+                          <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+                            <button onClick={rbExportCSV} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:9,border:`1px solid ${T.border}`,background:"transparent",color:T.text,fontSize:11,fontWeight:600,cursor:"pointer"}}>⬇ Export CSV</button>
+                            <button onClick={()=>{
+                              const t = window.prompt("Name this widget for your Dashboard:", "Custom Report");
+                              if (t !== null) addReportWidgetToDashboard(t);
+                            }} disabled={widgetSaving} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:9,border:"none",background:T.accent,color:"white",fontSize:11,fontWeight:700,cursor:widgetSaving?"default":"pointer",opacity:widgetSaving?0.6:1}}>+ Add to Dashboard</button>
+                          </div>
+
+                          {rbVizType!=="table" && (
+                            <div style={{border:`1px solid ${T.border}`,borderRadius:10,overflow:"hidden"}}>
+                              <button onClick={()=>setRbLineItemsOpen(o=>!o)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left"}}>
+                                <span style={{fontSize:11.5,fontWeight:700,color:T.text}}>View Line Items ({rbResult.data.length} rows)</span>
+                                <span style={{color:T.sub,fontSize:11}}>{rbLineItemsOpen?"▲":"▼"}</span>
+                              </button>
+                              {rbLineItemsOpen && (
+                                <div style={{padding:"0 12px 12px",maxHeight:280,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+                                  <table style={{width:"100%",minWidth:420,borderCollapse:"collapse",fontSize:11}}>
+                                    <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
+                                      <th style={{textAlign:"left",padding:"5px 6px",color:T.sub,fontWeight:700}}>{rbGrouping}</th>
+                                      {fieldKeys.map(f=><th key={f.key} style={{textAlign:"left",padding:"5px 6px",color:T.sub,fontWeight:700}}>{f.label}</th>)}
+                                    </tr></thead>
+                                    <tbody>
+                                      {rbResult.data.map((row,i)=>(
+                                        <tr key={i} style={{borderBottom:`1px solid ${T.border}`}}>
+                                          <td style={{padding:"5px 6px",color:T.text}}>{row.label}</td>
+                                          {fieldKeys.map(f=><td key={f.key} style={{padding:"5px 6px",color:T.text}}>{row[f.key] ?? "—"}</td>)}
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </Card>
     );
   }
 
@@ -8509,7 +8696,19 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
           })()}
 
           {/* DASHBOARD — Overview */}
-          {tab==="dashboard" && renderOverview()}
+          {tab==="dashboard" && (
+            <div>
+              <div role="tablist" aria-label="Dashboard sections" style={{display:"flex",gap:6,marginBottom:14}}>
+                {[["overview","Overview"],["reports","Report Builder"]].map(([v,lbl])=>(
+                  <button key={v} role="tab" aria-selected={dashSub===v} onClick={()=>setDashSub(v)} style={{
+                    background:dashSub===v?T.dark:T.muted, color:dashSub===v?"white":T.sub,
+                    border:"none",borderRadius:8,padding:"8px 18px",fontWeight:700,fontSize:13,cursor:"pointer",transition:"all 0.15s",minHeight:40
+                  }}>{lbl}</button>
+                ))}
+              </div>
+              {dashSub==="overview" ? renderOverview() : renderReportBuilderPanel()}
+            </div>
+          )}
 
           {/* Add Widget modal */}
           {showAddWidget && (
@@ -8519,7 +8718,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   <div>
                     <div style={{fontWeight:800,fontSize:15,color:T.text}}>🧩 Add Widget</div>
                     <div style={{fontSize:11,color:T.sub,marginTop:2}}>Pick a data source, time range, and how to show it.</div>
-                    <button onClick={()=>{ setShowAddWidget(false); setTab("insights"); setInsightsPanel("reports"); }}
+                    <button onClick={()=>{ setShowAddWidget(false); setDashSub("reports"); }}
                       style={{background:"none",border:"none",padding:"6px 0 0",color:T.accent,fontWeight:700,fontSize:11.5,cursor:"pointer",textAlign:"left"}}>
                       Need Shift Types, Item Sales, Weather, or Timesheet? Build it in Report Builder and tap "+ Add to Dashboard" →
                     </button>
@@ -8719,11 +8918,6 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                         📈 History
                       </button>
                     )}
-                    <button onClick={()=>setInsightsPanel(p=>p==="reports"?null:"reports")}
-                      title="Custom Report Builder"
-                      style={{background:insightsPanel==="reports"?T.accent:T.muted,border:`1px solid ${insightsPanel==="reports"?T.accent:T.border}`,borderRadius:9,height:38,padding:"0 14px",display:"flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:insightsPanel==="reports"?"white":T.sub,cursor:"pointer",transition:"all 0.15s"}}>
-                      📊 Report Builder
-                    </button>
                     <button onClick={()=>{ const next = insightsPanel!=="flags"; setInsightsPanel(next?"flags":null); if (next && !flagReportData) runFlagReport(); }}
                       title="Flag Patterns report"
                       style={{background:insightsPanel==="flags"?T.accent:T.muted,border:`1px solid ${insightsPanel==="flags"?T.accent:T.border}`,borderRadius:9,height:38,padding:"0 14px",display:"flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:insightsPanel==="flags"?"white":T.sub,cursor:"pointer",transition:"all 0.15s"}}>
@@ -8904,188 +9098,7 @@ const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" 
                   </Card>
                 )}
 
-                {/* Custom Report Builder panel */}
-                {insightsPanel==="reports" && (
-                  <Card T={T} style={{padding:"14px 16px"}}>
-                    <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:14,gap:12,flexWrap:"wrap"}}>
-                      <div>
-                        <div style={{fontWeight:800,fontSize:14,color:T.text}}>📊 Report Builder</div>
-                        <div style={{fontSize:11,color:T.sub,marginTop:2}}>Pick sources, fields, and how to view them — cross-reference up to 3 at once.</div>
-                      </div>
-                      <div style={{display:"flex",gap:8}}>
-                        <button onClick={rbResetAll} style={{background:"none",border:`1px solid ${T.border}`,borderRadius:8,padding:"5px 10px",fontSize:11,fontWeight:600,color:T.sub,cursor:"pointer"}}>Reset</button>
-                        <button onClick={()=>setInsightsPanel(null)} style={{background:T.muted,border:"none",borderRadius:"50%",width:28,height:28,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
-                      </div>
-                    </div>
-
-                    <SectionLabel T={T}>Data Sources ({rbActiveSourceIds().length}/3)</SectionLabel>
-                    <div style={{display:"flex",flexDirection:"column",gap:8,marginTop:6,marginBottom:16}}>
-                      {Object.entries(REPORT_SOURCES).map(([sid,def])=>{
-                        const state = rbSources[sid] || { active:false, fields:[], filters:{} };
-                        return (
-                          <div key={sid} style={{border:`1px solid ${state.active?def.color+"66":T.border}`,borderRadius:10,background:state.active?def.color+"0D":T.muted,overflow:"hidden"}}>
-                            <button onClick={()=>rbToggleSource(sid)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left"}}>
-                              <div style={{display:"flex",alignItems:"center",gap:8}}>
-                                <span style={{width:16,height:16,borderRadius:5,border:`1.5px solid ${state.active?def.color:T.sub}`,background:state.active?def.color:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:10,color:"white"}}>{state.active?"✓":""}</span>
-                                <span style={{fontSize:12.5,fontWeight:700,color:T.text}}>{def.label}</span>
-                              </div>
-                              {state.active && <span style={{fontSize:10,color:T.sub}}>{state.fields.length} field{state.fields.length!==1?"s":""}</span>}
-                            </button>
-                            {state.active && (
-                              <div style={{padding:"0 12px 12px",display:"flex",flexDirection:"column",gap:10}}>
-                                <div>
-                                  <div style={{fontSize:9.5,color:T.sub,fontWeight:700,letterSpacing:0.4,marginBottom:5}}>FIELDS TO PULL</div>
-                                  <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                                    {def.fields.map(f=>(
-                                      <button key={f.id} onClick={()=>rbToggleField(sid,f.id)}
-                                        style={{padding:"4px 9px",borderRadius:999,fontSize:10.5,fontWeight:600,cursor:"pointer",
-                                          border:`1px solid ${state.fields.includes(f.id)?def.color:T.border}`,
-                                          background:state.fields.includes(f.id)?def.color+"22":"transparent",
-                                          color:state.fields.includes(f.id)?T.text:T.sub}}>
-                                        {state.fields.includes(f.id)?"✓ ":""}{f.label}
-                                      </button>
-                                    ))}
-                                  </div>
-                                </div>
-                                {sid==="shifttypes" && (
-                                  <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); }}
-                                    style={{alignSelf:"flex-start",background:"none",border:"none",color:T.accent,fontWeight:700,fontSize:11,cursor:"pointer",padding:0}}>
-                                    Edit shift types
-                                  </button>
-                                )}
-                                {def.filters.map(fl=>{
-                                  const sKey = `${sid}|${fl.id}`;
-                                  const q = (rbFilterSearch[sKey] || "").trim().toLowerCase();
-                                  const chosen = state.filters[fl.id] || [];
-                                  const long = fl.options.length > 12;
-                                  const shown = !long ? fl.options
-                                    : q ? fl.options.filter(o => chosen.includes(o.value) || o.label.toLowerCase().includes(q)).slice(0, 40)
-                                        : fl.options.filter((o, i) => i < 12 || chosen.includes(o.value)); // top sellers first
-                                  return (
-                                  <div key={fl.id}>
-                                    <div style={{fontSize:9.5,color:T.sub,fontWeight:700,letterSpacing:0.4,marginBottom:5}}>FILTER · {fl.label.toUpperCase()}{long && chosen.length ? ` · ${chosen.length} picked` : ""}</div>
-                                    {sid==="itemsales" && fl.id==="item" && itemNames && itemNames.length===0 && (
-                                      <div style={{fontSize:11,color:T.sub,marginBottom:4}}>No item sales yet — items appear after a Square sync.</div>
-                                    )}
-                                    {long && (
-                                      <input value={rbFilterSearch[sKey] || ""} onChange={e=>setRbFilterSearch(p=>({...p,[sKey]:e.target.value}))}
-                                        placeholder={`Search ${fl.options.length} ${fl.label.toLowerCase()}s…`} aria-label={`Search ${fl.label}`}
-                                        style={{width:"100%",boxSizing:"border-box",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"8px 10px",fontSize:12,outline:"none",background:T.surface,color:T.text,marginBottom:6}}/>
-                                    )}
-                                    <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                                      {shown.map(opt=>{
-                                        const active = (state.filters[fl.id]||[]).includes(opt.value);
-                                        return (
-                                          <button key={opt.value} onClick={()=>rbToggleFilter(sid,fl.id,opt.value)}
-                                            style={{padding:"4px 9px",borderRadius:999,fontSize:10.5,fontWeight:600,cursor:"pointer",
-                                              border:`1px solid ${active?def.color:T.border}`,
-                                              background:active?def.color+"22":"transparent",
-                                              color:active?T.text:T.sub}}>
-                                            {opt.label}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  </div>
-                                  );
-                                })}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <SectionLabel T={T}>Group By</SectionLabel>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
-                      {["Day","Week","Day of Week","Employee","Shift Type","Item"].map(g=>(
-                        <button key={g} onClick={()=>{setRbGrouping(g);setRbResult(null);if((g==="Employee"||g==="Shift Type"||g==="Item")&&rbVizType==="number")setRbVizType(null);}}
-                          style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
-                            border:`1px solid ${rbGrouping===g?T.accent:T.border}`,background:rbGrouping===g?T.accent:"transparent",color:rbGrouping===g?"white":T.sub}}>{g}</button>
-                      ))}
-                    </div>
-
-                    <SectionLabel T={T}>Date Range</SectionLabel>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6}}>
-                      {FILTERS.filter(f=>f.kind==="history").map(f=>(
-                        <button key={f.key} onClick={()=>{setRbPreset(f.key);setRbResult(null);}}
-                          style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
-                            border:`1px solid ${rbPreset===f.key?T.accent:T.border}`,background:rbPreset===f.key?T.accent:"transparent",color:rbPreset===f.key?"white":T.sub}}>{f.label}</button>
-                      ))}
-                      <button onClick={()=>{setRbPreset("custom");setRbResult(null);}}
-                        style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
-                          border:`1px solid ${rbPreset==="custom"?"#C0392B":T.border}`,background:rbPreset==="custom"?"#C0392B":"transparent",color:rbPreset==="custom"?"white":T.sub}}>📅 Custom</button>
-                    </div>
-                    {rbPreset==="custom" && (
-                      <div style={{display:"flex",gap:8,marginTop:8}}>
-                        <input type="date" value={rbCustomStart} onChange={e=>{setRbCustomStart(e.target.value);setRbResult(null);}}
-                          style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"7px 8px",fontSize:12,background:T.surface,color:T.text}}/>
-                        <input type="date" value={rbCustomEnd} onChange={e=>{setRbCustomEnd(e.target.value);setRbResult(null);}}
-                          style={{flex:1,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"7px 8px",fontSize:12,background:T.surface,color:T.text}}/>
-                      </div>
-                    )}
-
-                    <SectionLabel T={T}>Visualization</SectionLabel>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:6,marginBottom:16}}>
-                      {[{id:"number",label:"Number"},{id:"line",label:"Line"},{id:"bar",label:"Bar"},{id:"area",label:"Area"},{id:"combo",label:"Combo"},{id:"list",label:"List"},{id:"table",label:"Table"}]
-                        .filter(v => !((rbGrouping==="Employee" || rbGrouping==="Shift Type" || rbGrouping==="Item") && v.id==="number")) // "Number" shows a first-vs-last trend delta, which is meaningless across employee rows rather than a time series
-                        .map(v=>(
-                        <button key={v.id} onClick={()=>setRbVizType(v.id)}
-                          style={{padding:"6px 12px",borderRadius:999,fontSize:11,fontWeight:700,cursor:"pointer",
-                            border:`1px solid ${rbVizType===v.id?"#4CAF7D":T.border}`,background:rbVizType===v.id?"#4CAF7D":"transparent",color:rbVizType===v.id?"white":T.sub}}>{v.label}</button>
-                      ))}
-                    </div>
-
-                    <button onClick={runCustomReportUI} disabled={rbLoading}
-                      style={{width:"100%",background:rbLoading?T.muted:T.accent,border:"none",borderRadius:10,padding:"11px 0",fontSize:13,fontWeight:800,color:rbLoading?T.sub:"white",cursor:rbLoading?"not-allowed":"pointer",marginBottom:16}}>
-                      {rbLoading ? "Running…" : "Run Report"}
-                    </button>
-
-                    {rbResult && (()=>{
-                      const fieldKeys = rbActiveFieldKeys();
-                      return (
-                        <>
-                          {renderReportResult(rbResult.data, rbVizType, rbGrouping, fieldKeys, rbResult.truncated)}
-
-                          <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
-                            <button onClick={rbExportCSV} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:9,border:`1px solid ${T.border}`,background:"transparent",color:T.text,fontSize:11,fontWeight:600,cursor:"pointer"}}>⬇ Export CSV</button>
-                            <button onClick={()=>{
-                              const t = window.prompt("Name this widget for your Dashboard:", "Custom Report");
-                              if (t !== null) addReportWidgetToDashboard(t);
-                            }} disabled={widgetSaving} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 12px",borderRadius:9,border:"none",background:T.accent,color:"white",fontSize:11,fontWeight:700,cursor:widgetSaving?"default":"pointer",opacity:widgetSaving?0.6:1}}>+ Add to Dashboard</button>
-                          </div>
-
-                          {rbVizType!=="table" && (
-                            <div style={{border:`1px solid ${T.border}`,borderRadius:10,overflow:"hidden"}}>
-                              <button onClick={()=>setRbLineItemsOpen(o=>!o)} style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:"transparent",border:"none",cursor:"pointer",textAlign:"left"}}>
-                                <span style={{fontSize:11.5,fontWeight:700,color:T.text}}>View Line Items ({rbResult.data.length} rows)</span>
-                                <span style={{color:T.sub,fontSize:11}}>{rbLineItemsOpen?"▲":"▼"}</span>
-                              </button>
-                              {rbLineItemsOpen && (
-                                <div style={{padding:"0 12px 12px",maxHeight:280,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-                                  <table style={{width:"100%",minWidth:420,borderCollapse:"collapse",fontSize:11}}>
-                                    <thead><tr style={{borderBottom:`1px solid ${T.border}`}}>
-                                      <th style={{textAlign:"left",padding:"5px 6px",color:T.sub,fontWeight:700}}>{rbGrouping}</th>
-                                      {fieldKeys.map(f=><th key={f.key} style={{textAlign:"left",padding:"5px 6px",color:T.sub,fontWeight:700}}>{f.label}</th>)}
-                                    </tr></thead>
-                                    <tbody>
-                                      {rbResult.data.map((row,i)=>(
-                                        <tr key={i} style={{borderBottom:`1px solid ${T.border}`}}>
-                                          <td style={{padding:"5px 6px",color:T.text}}>{row.label}</td>
-                                          {fieldKeys.map(f=><td key={f.key} style={{padding:"5px 6px",color:T.text}}>{row[f.key] ?? "—"}</td>)}
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                  </table>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </>
-                      );
-                    })()}
-                  </Card>
-                )}
+                {/* Report Builder moved to Dashboard → Report Builder */}
 
                 {/* Notification preferences panel */}
                 {insightsPanel==="notif" && (
