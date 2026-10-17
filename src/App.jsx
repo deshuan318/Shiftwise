@@ -413,16 +413,21 @@ input,select,button,textarea { font-family:inherit; }
 @media (max-width:767px) { .ov-frame { padding:14px; border-radius:16px; } }
 .ov-rail { display:flex; flex-direction:column; gap:22px; padding:16px 16px 20px; border-left:1px solid #E6E8E4; position:sticky; top:66px; }
 .ov-kpis { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
-.ov-row-2-1 { display:grid; grid-template-columns:minmax(0,2fr) minmax(0,1fr); gap:14px; }
-.ov-row-1-1 { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+/* UI Batch 17 — every row shares the KPI 4-column grid so card edges line up */
+.ov-row-2-1 { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
+.ov-row-2-1 > :first-child { grid-column:span 3; }
+.ov-row-1-1 { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; }
+.ov-row-1-1 > * { grid-column:span 2; }
 .ov-widgets { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 @media (max-width:1199px) {
   .ov-wrap { grid-template-columns:minmax(0,1fr); }
+  .ov-row-2-1 > * { grid-column:span 4; }
   .ov-rail { position:static; border-left:none; border-top:1px solid #E6E8E4; padding:18px 2px 0; display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); }
 }
 @media (max-width:899px) {
   .ov-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); }
   .ov-row-2-1, .ov-row-1-1 { grid-template-columns:minmax(0,1fr); }
+  .ov-row-2-1 > *, .ov-row-1-1 > * { grid-column:auto; }
 }
 @media (max-width:520px) {
   .ov-widgets { grid-template-columns:minmax(0,1fr); }
@@ -5392,6 +5397,11 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     const C = { blue:"#E4EFFB", lav:"#ECEAFB", mint:"#E4F3EC", sand:"#F7EFE2", panel:"#F7F8F6", ink:"#1C2B22", sub:"#5E6B63", line:"#E6E8E4" };
     const panel = { background: C.panel, borderRadius: 18, padding: "16px 18px", border: `1px solid ${C.line}` };
     const panelTitle = { fontSize: 13.5, fontWeight: 800, color: C.ink, margin: 0 };
+    // One header row height for every panel and KPI card, so titles, values
+    // and empty states start on the same line across a row.
+    const panelHead = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, minHeight: 32, marginBottom: 12, flexWrap: "wrap" };
+    const emptyState = { fontSize: 12.5, color: C.sub, minHeight: 160, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", lineHeight: 1.5, padding: "0 12px" };
+    const kpiHead = { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6, minHeight: 26 };
     const kpi = bg => ({ background: bg, borderRadius: 18, padding: "16px 18px", minWidth: 0, display: "flex", flexDirection: "column", gap: 6 });
     const kpiLabel = { fontSize: 12.5, fontWeight: 600, color: C.sub };
     const kpiValue = { fontSize: 26, fontWeight: 800, color: C.ink, lineHeight: 1.1 };
@@ -5411,8 +5421,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           {/* Header */}
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10 }}>
             <div>
-              <h1 style={{ fontSize: 20, fontWeight: 800, color: C.ink, margin: 0 }}>Overview</h1>
-              <div style={{ fontSize: 12.5, color: C.sub }}>{biz} · {pwLabel}</div>
+              <h1 style={{ fontSize: 20, fontWeight: 800, color: C.ink, margin: 0, lineHeight: 1.2 }}>Overview</h1>
+              <div style={{ fontSize: 12.5, color: C.sub, marginTop: 2 }}>{biz} · {pwLabel}</div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
               <div className="sw-datebar" style={{ display: "flex", alignItems: "center", gap: 6, background: C.panel, border: `1px solid ${C.line}`, borderRadius: 12, padding: 4 }}>
@@ -5429,22 +5439,22 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           {/* KPI cards */}
           <div className="ov-kpis">
             <div style={kpi(C.blue)}>
-              <span style={kpiLabel}>Sales this week</span>
+              <div style={kpiHead}><span style={kpiLabel}>Sales this week</span></div>
               <span style={kpiValue}>{totalRevenue > 0 ? fmtMoney(totalRevenue) : "—"}</span>
               <span style={{ fontSize: 11.5, color: C.sub }}>{salesDelta != null ? <>{deltaChip(salesDelta)} vs. same days last week</> : totalRevenue > 0 ? `${wkSalesDays.length} day${wkSalesDays.length !== 1 ? "s" : ""} of sales` : "No sales recorded yet"}</span>
             </div>
             <div style={kpi(C.lav)}>
-              <span style={kpiLabel}>Labor cost</span>
+              <div style={kpiHead}><span style={kpiLabel}>Labor cost</span></div>
               <span style={kpiValue}>{fmtMoney(payWeekLabor)}</span>
               <span style={{ fontSize: 11.5, color: C.sub }}>{pwHrs.toFixed(1)}h · {pwStaff} of {employees.length} staff{bgt > 0 ? ` · budget ${fmtMoney(bgt)}` : ""}</span>
             </div>
             <div style={kpi(C.mint)}>
-              <span style={{ ...kpiLabel, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+              <span style={{ ...kpiLabel, ...kpiHead }}>
                 Labor % of sales
                 <span role="group" aria-label="Actual or projected" style={{ display: "flex", background: "rgba(255,255,255,0.7)", borderRadius: 999, padding: 2 }}>
                   {["actual", "projected"].map(m => (
                     <button key={m} onClick={() => setLaborPctMode(m)} aria-pressed={laborPctMode === m}
-                      style={{ border: "none", borderRadius: 999, padding: "4px 8px", fontSize: 10.5, fontWeight: 700, cursor: "pointer", textTransform: "capitalize", background: laborPctMode === m ? C.ink : "transparent", color: laborPctMode === m ? "white" : C.sub }}>{m}</button>
+                      style={{ border: "none", borderRadius: 999, padding: "3px 8px", fontSize: 10.5, lineHeight: 1.4, fontWeight: 700, cursor: "pointer", textTransform: "capitalize", background: laborPctMode === m ? C.ink : "transparent", color: laborPctMode === m ? "white" : C.sub }}>{m}</button>
                   ))}
                 </span>
               </span>
@@ -5452,7 +5462,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
               <span style={{ fontSize: 11.5, color: C.sub }}>{shownPct != null ? `Target ${tgt}%` : laborPctMode === "projected" ? "Needs recent sales history" : "No sales recorded yet"}</span>
             </div>
             <div style={kpi(C.sand)}>
-              <span style={kpiLabel}>Forecast · next 7 days</span>
+              <div style={kpiHead}><span style={kpiLabel}>Forecast · next 7 days</span></div>
               <span style={kpiValue}>{forecastNext7.hasEnoughData ? fmtMoney(forecastNext7.total) : "—"}</span>
               <span style={{ fontSize: 11.5, color: C.sub }}>{forecastNext7.hasEnoughData ? `Suggested labor ${fmtMoney(forecastNext7.total * tgt / 100)}` : "No recent sales to forecast from"}</span>
             </div>
@@ -5461,7 +5471,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           {/* Sales vs labor + top items */}
           <div className="ov-row-2-1">
             <section style={panel} aria-label="Sales and labor by day">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 8 }}>
+              <div style={panelHead}>
                 <h2 style={panelTitle}>Sales vs. labor</h2>
                 <div style={{ display: "flex", gap: 12, fontSize: 11.5, color: C.sub }}>
                   <span><span style={{ display: "inline-block", width: 10, height: 2, background: C.ink, verticalAlign: "middle", marginRight: 5 }} />Sales</span>
@@ -5470,7 +5480,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 </div>
               </div>
               {totalRevenue === 0 && payWeekLabor === 0 ? (
-                <div style={{ fontSize: 12.5, color: C.sub, padding: "40px 0", textAlign: "center" }}>No sales or scheduled labor this week yet.</div>
+                <div style={emptyState}>No sales or scheduled labor this week yet.</div>
               ) : (
                 <ResponsiveContainer width="100%" height={220}>
                   <RLineChart data={chartData} margin={{ top: 8, right: 8, left: -10, bottom: 0 }}>
@@ -5487,13 +5497,13 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             </section>
 
             <section style={panel} aria-label="Top items this week">
-              <h2 style={{ ...panelTitle, marginBottom: 12 }}>Top items this week</h2>
+              <div style={panelHead}><h2 style={panelTitle}>Top items this week</h2></div>
               {!items || items.loading ? (
-                <div style={{ fontSize: 12.5, color: C.sub }}>Loading item sales…</div>
+                <div style={emptyState}>Loading item sales…</div>
               ) : items.error ? (
                 <div style={{ fontSize: 12.5, color: "#A93226" }}>Couldn't load item sales. <button onClick={() => loadOverviewItems(payWeek)} style={{ background: "none", border: "none", color: T.accent, fontWeight: 700, cursor: "pointer", padding: 0 }}>Try again</button></div>
               ) : !items.rows.length ? (
-                <div style={{ fontSize: 12.5, color: C.sub, lineHeight: 1.5 }}>{squareConnected ? "No item sales this week." : "Item sales appear after you connect Square and sync."}</div>
+                <div style={emptyState}>{squareConnected ? "No item sales this week." : "Item sales appear after you connect Square and sync."}</div>
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 11 }}>
                   {items.rows.map(r => (
@@ -5514,8 +5524,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           {/* Hours by employee + daily breakdown */}
           <div className="ov-row-1-1">
             <section style={panel} aria-label="Scheduled hours by employee">
-              <h2 style={{ ...panelTitle, marginBottom: 8 }}>Scheduled hours by employee</h2>
-              {hoursData.length === 0 ? <div style={{ fontSize: 12.5, color: C.sub, padding: "30px 0", textAlign: "center" }}>No shifts scheduled this week.</div> : (
+              <div style={panelHead}><h2 style={panelTitle}>Scheduled hours by employee</h2></div>
+              {hoursData.length === 0 ? <div style={emptyState}>No shifts scheduled this week.</div> : (
                 <ResponsiveContainer width="100%" height={200}>
                   <RBarChart data={hoursData} margin={{ top: 8, right: 4, left: -18, bottom: 0 }}>
                     <CartesianGrid stroke={C.line} vertical={false} />
@@ -5531,28 +5541,31 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             </section>
 
             <section style={panel} aria-label="Daily breakdown">
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <div style={panelHead}>
                 <h2 style={panelTitle}>Daily breakdown</h2>
                 <button onClick={toggleCashMode} aria-pressed={cashMode}
-                  style={{ ...btnGhost, padding: "6px 10px", fontSize: 11.5, color: cashMode ? "#1F6B48" : C.sub, borderColor: cashMode ? "#9CCFB5" : C.line }}>
+                  style={{ ...btnGhost, padding: "0 10px", height: 32, fontSize: 11.5, color: cashMode ? "#1F6B48" : C.sub, borderColor: cashMode ? "#9CCFB5" : C.line }}>
                   {cashMode ? "Cash entry on" : "Enter cash sales"}
                 </button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "44px minmax(0,1fr) minmax(0,1fr) 64px", gap: 8, padding: "0 0 6px", fontSize: 11, fontWeight: 700, color: C.sub, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                <span>Day</span><span style={{ textAlign: "right" }}>Sales</span><span style={{ textAlign: "right" }}>Labor</span><span style={{ textAlign: "right" }}>Labor %</span>
               </div>
               {salesWk.days.map((d, i) => {
                 const labor = laborWk.days[i].labor;
                 const p = d.revenue > 0 ? labor / d.revenue * 100 : null;
                 return (
-                  <div key={d.date} style={{ display: "grid", gridTemplateColumns: "38px minmax(0,1fr) minmax(0,1fr) 44px", alignItems: "center", gap: 8, padding: "7px 0", borderTop: i ? `1px solid ${C.line}` : "none", fontSize: 12.5 }}>
+                  <div key={d.date} style={{ display: "grid", gridTemplateColumns: "44px minmax(0,1fr) minmax(0,1fr) 64px", alignItems: "center", gap: 8, padding: "7px 0", borderTop: `1px solid ${C.line}`, fontVariantNumeric: "tabular-nums", fontSize: 12.5 }}>
                     <span style={{ fontWeight: 700, color: C.ink }}>{DAYS[i]}</span>
                     {cashMode ? (
                       <input type="number" min="0" step="0.01" aria-label={`Cash sales ${DAYS[i]}`} placeholder="Cash $"
                         defaultValue={cashEntries[d.date] > 0 ? cashEntries[d.date] : ""} key={`cash-${d.date}-${cashEntries[d.date]}`}
                         onBlur={e => saveCashEntry(d.date, e.target.value)} onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
-                        style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${C.line}`, borderRadius: 8, padding: "6px 8px", fontSize: 12.5, background: "white", color: C.ink }} />
+                        style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${C.line}`, borderRadius: 8, padding: "6px 8px", fontSize: 12.5, background: "white", color: C.ink, textAlign: "right" }} />
                     ) : (
-                      <span style={{ color: C.sub }}>{d.revenue > 0 ? `${fmtMoney(d.revenue)} sales` : "—"}</span>
+                      <span style={{ color: d.revenue > 0 ? C.ink : C.sub, textAlign: "right" }}>{d.revenue > 0 ? fmtMoney(d.revenue) : "—"}</span>
                     )}
-                    <span style={{ color: C.sub }}>{labor > 0 ? `${fmtMoney(labor)} labor` : "—"}</span>
+                    <span style={{ color: labor > 0 ? C.ink : C.sub, textAlign: "right" }}>{labor > 0 ? fmtMoney(labor) : "—"}</span>
                     <span style={{ textAlign: "right", fontWeight: 700, color: p == null ? C.sub : p > tgt + 5 ? "#A93226" : p > tgt - 5 ? "#8A5A00" : "#1F6B48" }}>{p != null ? `${p.toFixed(0)}%` : "—"}</span>
                   </div>
                 );
