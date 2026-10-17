@@ -450,6 +450,8 @@ input,select,button,textarea { font-family:inherit; }
   .controls-divider { display:none !important; }
   .sched-strip { grid-template-columns:1fr !important; gap:10px !important; }
   .rb-dd-row { grid-template-columns:1fr !important; }
+  .sw-emp-cols { grid-template-columns:minmax(0,1fr) !important; }
+  .sw-emp-dialog { padding:16px !important; }
   .sw-settings { grid-template-columns:minmax(0,1fr) !important; min-height:0 !important; }
   .sw-settings > * { border-right:none !important; }
   .sw-set-lvl0 .sw-set-col2, .sw-set-lvl0 .sw-set-col3,
@@ -1437,7 +1439,8 @@ export default function App() {
   const [openCell,    setOpenCell]     = useState(null);
   const [toast,       setToast]        = useState(null);
   const [settingsSection, setSettingsSection] = useState(null);
-  const [settingsFolder,  setSettingsFolder]  = useState(null); // UI Batch 18 — folder inside a Settings category
+  const [settingsFolder,  setSettingsFolder]  = useState(null);
+  const [rosterSearch,    setRosterSearch]    = useState(""); // UI Batch 18 — folder inside a Settings category
   const [recMsg,   setRecMsg]   = useState("");
   const [recTo,    setRecTo]    = useState("");
   const [recFrom,  setRecFrom]  = useState("Owner");
@@ -2119,6 +2122,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         availableDays:  e.available_days || [0,1,2,3,4,5,6],
         availableHours: String(e.available_hours || "40"),
         notes:          e.notes,
+        phone:          e.phone || "",
         status:         e.status || "active",
         exitedAt:       e.exited_at || null,
         exitReason:     e.exit_reason || "",
@@ -4691,6 +4695,20 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   // computed once from the 12 weeks before they left (90 days for reliability).
   const addYearsStr = (ds, n) => { const [y,m,d] = ds.split("-"); return `${Number(y)+n}-${m}-${d}`; };
 
+  // UI Batch 20 — live exit-review preview for the employee open in the roster
+  const [rosterExit, setRosterExit] = useState(null); // { empId, data, loading, error }
+  useEffect(() => {
+    if (!editEmpId || !bizId) { setRosterExit(null); return; }
+    const emp = employees.find(e => e.id === editEmpId);
+    if (!emp || !emp.name) { setRosterExit(null); return; }
+    let live = true;
+    setRosterExit({ empId: emp.id, loading: true });
+    computeExitSummary(emp, demoToday, "")
+      .then(data => { if (live) setRosterExit({ empId: emp.id, data }); })
+      .catch(() => { if (live) setRosterExit({ empId: emp.id, error: true }); });
+    return () => { live = false; };
+  }, [editEmpId, bizId]);
+
   async function computeExitSummary(emp, exitDate, reason) {
     const start12 = addDays(exitDate, -83), start90 = addDays(exitDate, -89);
     const [attr, p90res, firstRows, noShowRows] = await Promise.all([
@@ -6451,7 +6469,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       });
       const newEmp = rows?.[0];
       if (!newEmp) return;
-      const appEmp = { id:newEmp.id, name:"", role:"", hourlyRate:"", color, pin:"", availableDays:[0,1,2,3,4,5,6], availableHours:"40", notes:"" };
+      const appEmp = { id:newEmp.id, name:"", role:"", hourlyRate:"", color, pin:"", availableDays:[0,1,2,3,4,5,6], availableHours:"40", notes:"", phone:"" };
       setEmployees(p=>[...p, appEmp]);
       setEditEmpId(newEmp.id);
       addAudit("Employee Added", "New employee created — name pending");
@@ -6473,6 +6491,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     if (f.availableDays  !== undefined) dbFields.available_days  = f.availableDays;
     if (f.availableHours !== undefined) dbFields.available_hours = parseFloat(f.availableHours)||40;
     if (f.notes          !== undefined) dbFields.notes           = f.notes;
+    if (f.phone          !== undefined) dbFields.phone           = f.phone;
     if (Object.keys(dbFields).length > 0) {
       dbPatch(`employees?id=eq.${id}`, dbFields).catch(e => { console.warn("Employee update failed:", e); showError(friendlyError(e, "Couldn't save that employee change — try again.")); });
     }
@@ -9955,23 +9974,14 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
                         <div>
                           <h2 style={{margin:"0 0 2px",fontSize:18,fontWeight:800,color:T.text}}>Team Roster</h2>
-                          <p style={{margin:0,fontSize:11,color:T.sub}}>{employees.length} {employees.length===1?"employee":"employees"}{editEmpId?" · editing "+employees.find(e=>e.id===editEmpId)?.name:""}</p>
+                          <p style={{margin:0,fontSize:12,color:T.sub}}>{employees.length} active · pick someone to open their card</p>
                         </div>
                         <div style={{display:"flex",gap:8,alignItems:"center"}}>
-                          {editEmpId && (
-                            <button onClick={()=>setEditEmpId(null)}
-                              style={{background:T.muted,color:T.sub,border:`1px solid ${T.border}`,borderRadius:9,padding:"8px 16px",fontWeight:700,fontSize:12,cursor:"pointer"}}>
-                              ✓ Done Editing
-                            </button>
-                          )}
-                          <button onClick={()=>{
-                            addEmp();
-                            // Auto-scroll to bottom where new card appears after short delay
-                            setTimeout(()=>{
-                              const cards = document.querySelectorAll(".emp-card");
-                              if(cards.length) cards[cards.length-1].scrollIntoView({behavior:"smooth",block:"start"});
-                            }, 100);
-                          }} style={{background:T.accent,color:"white",border:"none",borderRadius:9,padding:"9px 18px",fontWeight:700,fontSize:13,cursor:"pointer",flexShrink:0}}>
+                          <div style={{position:"relative"}}>
+                            <input value={rosterSearch} onChange={e=>setRosterSearch(e.target.value)} placeholder="Search team" aria-label="Search team"
+                              style={{width:200,height:38,boxSizing:"border-box",border:`1.5px solid ${T.border}`,borderRadius:9,padding:"0 12px",fontSize:13,outline:"none",background:T.surface,color:T.text}}/>
+                          </div>
+                          <button onClick={()=>addEmp()} style={{background:T.accent,color:"white",border:"none",borderRadius:9,padding:"9px 18px",fontWeight:700,fontSize:13,cursor:"pointer",flexShrink:0}}>
                             + Add Employee
                           </button>
                         </div>
@@ -9985,51 +9995,64 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         <button onClick={addEmp} style={{background:T.accent,color:"white",border:"none",borderRadius:10,padding:"12px 28px",fontWeight:800,fontSize:14,cursor:"pointer"}}>+ Add First Employee</button>
                       </Card>
                     )}
-                    <div className="team-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:11}}>
-                      {employees.map(emp=>{
-                        const isEditing=editEmpId===emp.id;
-                        const totalH=eTotalH(emp.id), totalP=eTotalP(emp);
-                        const maxWkH=Math.max(...weeks.map(w=>eWkH(w.key,emp.id)));
-                        const avail=parseFloat(emp.availableHours)||0;
-                        const overAvail=avail>0&&maxWkH>avail;
-                        const almostAvail=avail>0&&!overAvail&&maxWkH>=avail*0.85;
-                        return (
-                          <div key={emp.id} className="emp-card" id={`emp-card-${emp.id}`} style={{background:T.surface,borderRadius:T.radius,overflow:"hidden",boxShadow:T.shadow,border:`2px solid ${isEditing?emp.color:"transparent"}`,transition:"all 0.15s"}}>
-                            <div style={{background:emp.color,padding:"11px 14px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                              <div style={{display:"flex",alignItems:"center",gap:12}}>
-                                <div style={{width:42,height:42,borderRadius:"50%",background:"rgba(255,255,255,0.2)",display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:18,flexShrink:0}}>{emp.name?emp.name[0].toUpperCase():"?"}</div>
-                                <div>
-                                  <div style={{color:"white",fontWeight:800,fontSize:15}}>{emp.name||"New Employee"}</div>
-                                  <div style={{color:"rgba(255,255,255,0.7)",fontSize:12}}>{emp.role||"No role"}</div>
-                                  {(()=>{ const unavail=DAYS.filter((_,i)=>!(emp.availableDays??[0,1,2,3,4,5,6]).includes(i)); return unavail.length>0?(<div style={{color:"rgba(255,255,255,0.6)",fontSize:10,marginTop:2}}>Off: {unavail.join(", ")}</div>):null; })()}
-                                </div>
+                    {/* UI Batch 20 — picker cards (name + role only); tapping one opens a focused card */}
+                    {(()=>{
+                      const q = rosterSearch.trim().toLowerCase();
+                      const shown = q ? employees.filter(e => `${e.name||""} ${e.role||""}`.toLowerCase().includes(q)) : employees;
+                      const initials = n => (n||"?").split(" ").filter(Boolean).slice(0,2).map(w=>w[0]).join("").toUpperCase() || "?";
+                      return (
+                        <div className="team-grid" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))",gap:10}}>
+                          {shown.map(emp => (
+                            <button key={emp.id} className="emp-card" onClick={()=>setEditEmpId(emp.id)} aria-haspopup="dialog"
+                              style={{display:"flex",alignItems:"center",gap:12,padding:14,borderRadius:14,border:`1.5px solid ${editEmpId===emp.id?emp.color:T.border}`,background:T.surface,boxShadow:T.shadow,fontFamily:"inherit",textAlign:"left",cursor:"pointer",minHeight:72}}>
+                              <span aria-hidden="true" style={{width:44,height:44,borderRadius:"50%",background:emp.color,color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:16,flexShrink:0}}>{initials(emp.name)}</span>
+                              <span style={{minWidth:0}}>
+                                <span style={{display:"block",fontSize:15,fontWeight:800,color:T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{emp.name||"New Employee"}</span>
+                                <span style={{display:"block",fontSize:12.5,color:T.sub,marginTop:2}}>{emp.role||"No role"}</span>
+                              </span>
+                            </button>
+                          ))}
+                          {!q && employees.length > 0 && (
+                            <button onClick={()=>addEmp()} style={{display:"flex",alignItems:"center",justifyContent:"center",padding:14,borderRadius:14,border:`1.5px dashed ${T.border}`,background:"transparent",fontFamily:"inherit",fontSize:14,fontWeight:700,color:T.accent,cursor:"pointer",minHeight:72}}>+ Add employee</button>
+                          )}
+                          {q && shown.length === 0 && <div style={{fontSize:13,color:T.sub,padding:"8px 2px"}}>No one matches "{rosterSearch}".</div>}
+                        </div>
+                      );
+                    })()}
+
+                    {(()=>{
+                      const emp = employees.find(e => e.id === editEmpId);
+                      if (!emp) return null;
+                      const totalH=eTotalH(emp.id), totalP=eTotalP(emp);
+                      const ex = rosterExit && rosterExit.empId === emp.id ? rosterExit : null;
+                      const s = ex?.data;
+                      const close = () => setEditEmpId(null);
+                      const stat = (label, value, sub, warn) => (
+                        <div style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:10,padding:"10px 12px",display:"flex",flexDirection:"column",gap:2,minWidth:0}}>
+                          <span style={{fontSize:11.5,fontWeight:600,color:T.sub}}>{label}</span>
+                          <span style={{fontSize:16,fontWeight:800,color:warn?"#A93226":T.text}}>{value}</span>
+                          {sub && <span style={{fontSize:11,color:T.sub}}>{sub}</span>}
+                        </div>
+                      );
+                      const tenure = d => d == null ? "—" : d < 60 ? `${d} days` : d < 730 ? `${Math.round(d/30.4)} months` : `${(d/365).toFixed(1)} years`;
+                      return (
+                        <div onKeyDown={e=>{ if (e.key === "Escape") close(); }}
+                          style={{position:"fixed",inset:0,zIndex:900,background:"rgba(20,28,22,0.45)",backdropFilter:"blur(3px)",WebkitBackdropFilter:"blur(3px)",overflowY:"auto",padding:"32px 16px",boxSizing:"border-box"}}
+                          onClick={e=>{ if (e.target === e.currentTarget) close(); }}>
+                          <div role="dialog" aria-modal="true" aria-label={emp.name || "New employee"} className="sw-emp-dialog"
+                            style={{maxWidth:1040,margin:"0 auto",background:T.bg,borderRadius:18,boxShadow:"0 24px 60px rgba(0,0,0,0.3)",padding:"22px 24px",display:"flex",flexDirection:"column",gap:18}}>
+                            <div style={{display:"flex",alignItems:"center",gap:14,paddingBottom:16,borderBottom:`1px solid ${T.border}`}}>
+                              <span aria-hidden="true" style={{width:56,height:56,borderRadius:"50%",background:emp.color,color:"white",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:20,flexShrink:0}}>{(emp.name||"?").split(" ").filter(Boolean).slice(0,2).map(w=>w[0]).join("").toUpperCase()||"?"}</span>
+                              <div style={{flex:1,minWidth:0}}>
+                                <h2 style={{margin:0,fontSize:22,fontWeight:800,color:T.text}}>{emp.name || "New Employee"}</h2>
+                                <div style={{fontSize:13,color:T.sub,marginTop:2}}>{[emp.role, emp.hourlyRate ? `$${emp.hourlyRate}/hr` : null, `${totalH}h scheduled`, `est. $${totalP.toFixed(0)}`].filter(Boolean).join(" · ")}</div>
                               </div>
-                              <button onClick={()=>{
-                                const newId = isEditing ? null : emp.id;
-                                setEditEmpId(newId);
-                                if(newId) setTimeout(()=>{
-                                  const el = document.getElementById(`emp-card-${newId}`);
-                                  if(el) el.scrollIntoView({behavior:"smooth",block:"start"});
-                                }, 80);
-                              }} style={{background:"rgba(255,255,255,0.18)",color:"white",border:"none",borderRadius:8,padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer"}}>
-                                {isEditing?"Close":"Edit"}
-                              </button>
+                              <button onClick={close} aria-label="Close" autoFocus
+                                style={{width:40,height:40,borderRadius:"50%",border:`1px solid ${T.border}`,background:T.surface,color:T.sub,fontSize:18,cursor:"pointer",flexShrink:0}}>✕</button>
                             </div>
-                            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",borderTop:`1px solid ${T.border}`,borderBottom:`1px solid ${T.border}`}}>
-                              {[
-                                ["$/hr",emp.hourlyRate?`$${emp.hourlyRate}`:"—","#1C1C1C"],
-                                ["Avail/Wk",avail>0?`${avail}h`:"—","#3A9BE8"],
-                                ["Sched Hrs",totalH+"h",overAvail?"#C0392B":almostAvail?"#E8A93A":T.text],
-                                ["Est. Pay",`$${totalP.toFixed(0)}`,T.accent],
-                              ].map(([lbl,val,color],idx)=>(
-                                <div key={lbl} style={{padding:"10px 12px",textAlign:"center",background:idx===0||idx===3?T.muted+"80":T.surface,borderRight:idx%2===0?`1px solid ${T.border}`:"none",borderBottom:idx<2?`1px solid ${T.border}`:"none"}}>
-                                  <div style={{fontSize:10,color:T.sub,marginBottom:4,fontWeight:600,textTransform:"uppercase",letterSpacing:"0.05em"}}>{lbl}</div>
-                                  <div style={{fontSize:16,fontWeight:800,color,lineHeight:1}}>{val}</div>
-                                </div>
-                              ))}
-                            </div>
-                            {isEditing&&(
-                              <div style={{padding:"16px",borderTop:`1px solid ${T.border}`,background:T.bg}}>
+
+                            <div className="sw-emp-cols" style={{display:"grid",gridTemplateColumns:"minmax(0,1.1fr) minmax(0,1fr)",gap:24,alignItems:"start"}}>
+                              <div>
                                 <div style={{marginBottom:10}}>
                                   <label style={{fontSize:10,color:T.sub,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Full Name</label>
                                   <input type="text" value={emp.name||""} onChange={e=>updEmp(emp.id,{name:e.target.value})}
@@ -10039,6 +10062,11 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                   <label style={{fontSize:10,color:T.sub,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Role / Title</label>
                                   <input type="text" value={emp.role||""} onChange={e=>updEmp(emp.id,{role:e.target.value})}
                                     style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"9px 11px",fontSize:14,outline:"none",background:T.surface}}/>
+                                </div>
+                                <div style={{marginBottom:10}}>
+                                  <label htmlFor={`emp-phone-${emp.id}`} style={{fontSize:10,color:T.sub,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Phone Number</label>
+                                  <input id={`emp-phone-${emp.id}`} type="tel" inputMode="tel" autoComplete="off" value={emp.phone||""} onChange={e=>updEmp(emp.id,{phone:e.target.value.replace(/[^0-9()+\-. ]/g,"")})} placeholder="(225) 555-0123"
+                                    style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"9px 11px",fontSize:14,outline:"none",background:T.surface,color:T.text}}/>
                                 </div>
                                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
                                   <div>
@@ -10092,23 +10120,65 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                     placeholder="e.g. Part-time, no Sundays..."
                                     style={{width:"100%",border:`1.5px solid ${T.border}`,borderRadius:8,padding:"9px 11px",fontSize:13,outline:"none",resize:"vertical",background:T.surface,fontFamily:"inherit"}}/>
                                 </div>
-                                <button onClick={()=>deactivateEmp(emp)} disabled={exitBusy}
-                                  style={{width:"100%",background:"#FDECEA",color:"#C0392B",border:"none",borderRadius:8,padding:"11px 0",fontSize:13,fontWeight:700,cursor:"pointer",opacity:exitBusy?0.6:1}}>
-                                  {exitBusy ? "Building exit summary…" : "Deactivate employee"}
-                                </button>
-                                <div style={{fontSize:10.5,color:T.sub,textAlign:"center",marginTop:6,lineHeight:1.5}}>
-                                  Keeps their history and saves an exit summary.{" "}
-                                  <button onClick={()=>{ if(window.confirm(`Delete ${emp.name||"this employee"} completely? Use this only for someone added by mistake — their shifts are deleted too and nothing is kept.`)) rmEmp(emp.id); }}
-                                    style={{background:"none",border:"none",padding:0,color:T.sub,textDecoration:"underline",fontSize:10.5,cursor:"pointer"}}>
-                                    Added by mistake? Delete instead
-                                  </button>
-                                </div>
                               </div>
-                            )}
+
+                              <section aria-label="Exit review" style={{display:"flex",flexDirection:"column",gap:10}}>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
+                                  <h3 style={{margin:0,fontSize:12,fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",color:T.sub}}>Exit review</h3>
+                                  <span style={{fontSize:11.5,color:T.sub}}>Preview · as of today</span>
+                                </div>
+                                {!emp.name ? (
+                                  <div style={{fontSize:13,color:T.sub}}>Add a name to see this employee's exit review.</div>
+                                ) : !ex || ex.loading ? (
+                                  <div style={{fontSize:13,color:T.sub}}>Building exit review…</div>
+                                ) : ex.error ? (
+                                  <div style={{fontSize:13,color:T.sub}}>Couldn't build the exit review right now.</div>
+                                ) : (
+                                  <>
+                                    <div style={{background:T.accent+"12",border:`1px solid ${T.accent}40`,borderRadius:10,padding:"12px 14px",fontSize:13.5,lineHeight:1.5,color:T.text}}>
+                                      <strong>If {(emp.name||"").split(" ")[0]} left:</strong> {s.headline.replace(/^Losing [^ ]+ costs/, "it would cost").replace(/^[^ ]+ worked no hours/, "they worked no hours")}
+                                    </div>
+                                    <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8}}>
+                                      {stat("Time on team", tenure(s.tenureDays), s.tenureStart ? `Since ${dl(s.tenureStart)}` : null)}
+                                      {stat("Avg hours / week", `${s.avgWeeklyHours.toFixed(1)}h`, `Last ${s.weeksIn} week${s.weeksIn!==1?"s":""}`)}
+                                      {stat("Usual days", s.usualDays.length ? s.usualDays.join(", ") : "—")}
+                                      {stat("Main shift type", s.mainType || "—", s.mainType && s.typeShare ? `${Math.round(s.typeShare*100)}% of those hours` : null)}
+                                      {stat("Shifts · last 90 days", String(s.shiftsWorked90))}
+                                      {stat("Late · early out · no-show", `${s.late90} · ${s.earlyOut90} · ${s.noShow90}`, null, (s.late90 + s.earlyOut90 + s.noShow90) > 0)}
+                                      {stat("Sales during shifts", `${fmtMoney(s.weeklySales)} / wk`, s.salesEstimated === "all" ? "Estimated" : s.salesEstimated === "some" ? "Partly estimated" : null)}
+                                      {stat("Cost to replace", `${fmtMoney(s.replaceWeekly)} / wk`, `Using ${s.rateBasis}`)}
+                                    </div>
+                                    {s.gaps?.length > 0 && (
+                                      <div style={{fontSize:12.5,color:T.text,lineHeight:1.5}}>
+                                        <strong>Thin days:</strong> {s.gaps.map(g => `${g.day} (${g.names.length ? g.names.join(", ") : "no one else"} available)`).join("; ")}
+                                      </div>
+                                    )}
+                                    <div style={{fontSize:11.5,color:T.sub}}>These numbers are saved to the exit record if you offboard.</div>
+                                  </>
+                                )}
+                              </section>
+                            </div>
+
+                            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,flexWrap:"wrap",paddingTop:16,borderTop:`1px solid ${T.border}`}}>
+                              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                                <button onClick={()=>deactivateEmp(emp)} disabled={exitBusy}
+                                  style={{height:44,padding:"0 16px",borderRadius:10,border:"1.5px solid #E7C4BF",background:T.surface,color:"#A93226",fontSize:14,fontWeight:700,cursor:"pointer",opacity:exitBusy?0.6:1}}>
+                                  {exitBusy ? "Building exit summary…" : `Offboard ${(emp.name||"employee").split(" ")[0]}…`}
+                                </button>
+                                <button onClick={()=>{ if(window.confirm(`Delete ${emp.name||"this employee"} completely? Use this only for someone added by mistake — their shifts are deleted too and nothing is kept.`)) rmEmp(emp.id); }}
+                                  style={{background:"none",border:"none",padding:0,color:T.sub,textDecoration:"underline",fontSize:11,cursor:"pointer",alignSelf:"flex-start"}}>
+                                  Added by mistake? Delete instead
+                                </button>
+                              </div>
+                              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                                <span style={{fontSize:12,color:T.sub}}>Changes save as you type</span>
+                                <button onClick={close} style={{height:44,padding:"0 22px",borderRadius:10,border:"none",background:T.accent,color:"white",fontSize:14,fontWeight:700,cursor:"pointer"}}>Done</button>
+                              </div>
+                            </div>
                           </div>
-                        );
-                      })}
-                    </div>
+                        </div>
+                      );
+                    })()}
                     {renderFormerEmployees()}
                   </div>
                 )}
