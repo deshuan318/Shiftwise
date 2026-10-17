@@ -1695,12 +1695,14 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     let noResultReason = null;
     if (rbGrouping === "Employee" && activeIds.some(sid => sid !== "timesheet" && sid !== "laborcost")) {
       noResultReason = "Only Timesheet and Labor Cost can be grouped by Employee.";
-    } else if (activeIds.includes("weather") && ["Employee","Shift Type","Item"].includes(rbGrouping)) {
+    } else if (activeIds.includes("weather") && ["Employee","Shift Type","Item","Flag Type"].includes(rbGrouping)) {
       noResultReason = "Weather can only be grouped by Day, Week, or Day of Week.";
     } else if (rbGrouping === "Item" && activeIds.some(sid => sid !== "itemsales")) {
       noResultReason = "Only Item Sales can be grouped by Item.";
     } else if (rbGrouping === "Shift Type" && activeIds.some(sid => sid !== "shifttypes")) {
       noResultReason = "Only Shift Types can be grouped by Shift Type.";
+    } else if (rbGrouping === "Flag Type" && activeIds.some(sid => sid !== "timesheet")) {
+      noResultReason = "Only Timesheet & Punches can be grouped by Flag Type.";
     }
 
     let startDate, endDate;
@@ -3406,12 +3408,14 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         { id:"overtime", label:"Overtime Hours" },
         { id:"flagged", label:"Flagged Punches" },
         { id:"edits", label:"Manual Edits" },
+        { id:"noshows", label:"No-Shows" },
       ],
       filters: [
         { id:"employee", label:"Employee", options: allEmployees.map(e=>({value:e.id,label:e.status==="inactive" ? `${e.name} (former)` : e.name})) },
         { id:"flagType", label:"Flag Type", options:[
           {value:"EARLY",label:"Clocked In Early"},{value:"EARLY_OUT",label:"Clocked Out Early"},
-          {value:"NO_SHIFT",label:"Unscheduled Punch"},{value:"ADJUSTMENT",label:"Manually Adjusted"}] },
+          {value:"LATE",label:"Late Clock-In"},{value:"NO_SHIFT",label:"Unscheduled Punch"},
+          {value:"ADJUSTMENT",label:"Manually Adjusted"},{value:"NO_SHOW",label:"No-Show"}] },
         { id:"reviewStatus", label:"Review Status", options:[
           {value:"reviewed",label:"Reviewed"},{value:"approved",label:"Approved"},{value:"rejected",label:"Rejected"}] },
         { id:"dow", label:"Day of Week", options: REPORT_DOW.map(d=>({value:d,label:d})) },
@@ -3629,6 +3633,17 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   async function computeTimesheetReport(startDate, endDate, grouping, filters={}) {
     const { rows: rawPunches, truncated } = await fetchPunchesForRange(bizId, startDate, endDate);
 
+    // Saved no-shows (written nightly from attendance_events). Every saved
+    // no-show counts — there is no excusing (UI Batch 15).
+    let noShows = [];
+    try {
+      noShows = (await dbGet(`attendance_events?select=id,employee_id,employee_name,event_date&business_id=eq.${bizId}&event_type=eq.NO_SHOW&event_date=gte.${startDate}&event_date=lte.${endDate}&limit=5000`)) || [];
+    } catch (e) { console.warn("No-shows unavailable:", e); }
+    if (filters.employee?.length) noShows = noShows.filter(n => filters.employee.includes(n.employee_id));
+    if (filters.flagType?.length && !filters.flagType.includes("NO_SHOW")) noShows = [];
+    if (filters.reviewStatus?.length) noShows = []; // no-shows have no punch to review
+    noShows = noShows.filter(n => (!filters.dow?.length || filters.dow.includes(reportDowOf(n.event_date))) && weatherOk(n.event_date, filters));
+
     let punches = rawPunches;
     if (filters.employee?.length) punches = punches.filter(p => filters.employee.includes(p.empId));
     if (filters.flagType?.length) punches = punches.filter(p => (p.flags||[]).some(f => filters.flagType.includes(f)));
@@ -3664,6 +3679,20 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       });
     });
 
+    if (grouping === "Flag Type") {
+      // One row per flag type: punch flags plus saved no-shows.
+      const TYPES = [["EARLY","Clocked In Early"],["EARLY_OUT","Clocked Out Early"],["LATE","Late Clock-In"],["NO_SHIFT","Unscheduled Punch"],["ADJUSTMENT","Manually Adjusted"],["NO_SHOW","No-Show"]];
+      const counts = {};
+      Object.values(byEmpDay).forEach(dayPunches => dayPunches.forEach(p => (p.flags||[]).forEach(f => { counts[f] = (counts[f]||0) + 1; })));
+      counts.NO_SHOW = noShows.length;
+      const rows = TYPES
+        .filter(([k]) => !filters.flagType?.length || filters.flagType.includes(k))
+        .map(([k, label]) => ({ label, timesheet__hours:0, timesheet__punches:0, timesheet__overtime:0, timesheet__edits:0,
+          timesheet__flagged: counts[k] || 0, timesheet__noshows: k === "NO_SHOW" ? (counts.NO_SHOW || 0) : 0 }))
+        .filter(r => r.timesheet__flagged > 0);
+      return { rows, truncated };
+    }
+
     if (grouping === "Employee") {
       // One row per employee, totals across the whole range — not bucketed
       // by day/week. Overtime still needs the per-week attribution pass
@@ -3697,6 +3726,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           timesheet__overtime: Math.round(b.overtime*100)/100,
           timesheet__flagged: b.flagged,
           timesheet__edits: b.edits,
+          timesheet__noshows: noShows.filter(n => n.employee_id === empId).length,
         };
       }).sort((a,b) => b.timesheet__hours - a.timesheet__hours);
       return { rows, truncated };
@@ -3717,6 +3747,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       });
     });
 
+    const noShowsByKey = {};
+    noShows.forEach(n => { const k = reportBucketKey(n.event_date, grouping); noShowsByKey[k] = (noShowsByKey[k]||0) + 1; });
     const rows = reportBucketKeysInRange(startDate, endDate, grouping).map(key => {
       const b = buckets[key] || { hours:0, punches:0, overtime:0, flagged:0, edits:0 };
       return {
@@ -3726,6 +3758,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         timesheet__overtime: Math.round(b.overtime*100)/100,
         timesheet__flagged: b.flagged,
         timesheet__edits: b.edits,
+        timesheet__noshows: noShowsByKey[key] || 0,
       };
     });
     return { rows, truncated };
@@ -4510,16 +4543,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     setWidgets(prev => prev.filter(w => w.id !== id));
     try { await dbDelete(`dashboard_widgets?id=eq.${id}`); }
     catch(e) { console.warn("Widget delete failed:", e); showError(friendlyError(e, "Couldn't remove that widget — try again.")); }
-  }
-
-  // ── SAVED NO-SHOWS ──────────────────────────────────────────────────────
-  async function excuseNoShow(n) {
-    const status = n.status === "excused" ? "open" : "excused";
-    try {
-      await dbPatch(`attendance_events?id=eq.${n.id}`, { status });
-      addAudit(status === "excused" ? "No-Show Excused" : "No-Show Restored", `${n.employee_name || "Employee"} — ${n.event_date}`, { empName: n.employee_name });
-      runFlagReport(flagReportData?.filterKey);
-    } catch (e) { showError(friendlyError(e, "Couldn't update that no-show — try again.")); }
   }
 
   // ── EMPLOYEE EXITS ──────────────────────────────────────────────────────
@@ -5480,16 +5503,16 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                       const lab = {fontSize:11,fontWeight:700,color:T.sub};
                       const chev = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.sub} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{position:"absolute",right:12,top:13,pointerEvents:"none"}}><path d="m6 9 6 6 6-6"/></svg>;
                       const vizOpts = [{id:"number",label:"Number"},{id:"line",label:"Line"},{id:"bar",label:"Bar"},{id:"area",label:"Area"},{id:"combo",label:"Combo"},{id:"list",label:"List"},{id:"table",label:"Table"}]
-                        .filter(v => !((rbGrouping==="Employee" || rbGrouping==="Shift Type" || rbGrouping==="Item") && v.id==="number")); // "Number" is a first-vs-last delta — meaningless across rows
+                        .filter(v => !((rbGrouping==="Employee" || rbGrouping==="Shift Type" || rbGrouping==="Item" || rbGrouping==="Flag Type") && v.id==="number")); // "Number" is a first-vs-last delta — meaningless across rows
                       return (
                         <div style={{marginBottom:16}}>
                           <div className="rb-dd-row" style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:10}}>
                             <div style={{display:"flex",flexDirection:"column",gap:5,minWidth:0}}>
                               <label htmlFor="rb-group" style={lab}>Group by</label>
                               <div style={{position:"relative"}}>
-                                <select id="rb-group" value={rbGrouping||""} onChange={e=>{ const g=e.target.value||null; setRbGrouping(g); setRbResult(null); if((g==="Employee"||g==="Shift Type"||g==="Item")&&rbVizType==="number") setRbVizType(null); }} style={sel(!!rbGrouping)}>
+                                <select id="rb-group" value={rbGrouping||""} onChange={e=>{ const g=e.target.value||null; setRbGrouping(g); setRbResult(null); if((g==="Employee"||g==="Shift Type"||g==="Item"||g==="Flag Type")&&rbVizType==="number") setRbVizType(null); }} style={sel(!!rbGrouping)}>
                                   <option value="">Choose…</option>
-                                  {["Day","Week","Day of Week","Employee","Shift Type","Item"].map(g=><option key={g} value={g}>{g}</option>)}
+                                  {["Day","Week","Day of Week","Employee","Shift Type","Item","Flag Type"].map(g=><option key={g} value={g}>{g}</option>)}
                                 </select>{chev}
                               </div>
                             </div>
@@ -8963,11 +8986,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         📈 History
                       </button>
                     )}
-                    <button onClick={()=>{ const next = insightsPanel!=="flags"; setInsightsPanel(next?"flags":null); if (next && !flagReportData) runFlagReport(); }}
-                      title="Flag Patterns report"
-                      style={{background:insightsPanel==="flags"?T.accent:T.muted,border:`1px solid ${insightsPanel==="flags"?T.accent:T.border}`,borderRadius:9,height:38,padding:"0 14px",display:"flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:insightsPanel==="flags"?"white":T.sub,cursor:"pointer",transition:"all 0.15s"}}>
-                      🚩 Flag Patterns
-                    </button>
                     <button onClick={()=>{ const next = insightsPanel!=="prices"; setInsightsPanel(next?"prices":null); if (next && !priceData) loadPriceChanges(); }}
                       title="Price Changes"
                       style={{background:insightsPanel==="prices"?T.accent:T.muted,border:`1px solid ${insightsPanel==="prices"?T.accent:T.border}`,borderRadius:9,height:38,padding:"0 14px",display:"flex",alignItems:"center",gap:6,fontSize:12,fontWeight:700,color:insightsPanel==="prices"?"white":T.sub,cursor:"pointer",transition:"all 0.15s"}}>
@@ -9023,125 +9041,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
 
                 {/* Price Changes panel */}
                 {insightsPanel==="prices" && renderPriceChangesPanel()}
-
-                {/* Flag Patterns report panel */}
-                {insightsPanel==="flags" && (
-                  <Card T={T} style={{padding:"14px 16px"}}>
-                    <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:14,gap:12,flexWrap:"wrap"}}>
-                      <div>
-                        <div style={{fontWeight:800,fontSize:14,color:T.text}}>🚩 Flag Patterns</div>
-                        <div style={{fontSize:11,color:T.sub,marginTop:2}}>Where and when punch exceptions cluster — good for coaching conversations.</div>
-                      </div>
-                      <button onClick={()=>setInsightsPanel(null)} style={{background:T.muted,border:"none",borderRadius:"50%",width:28,height:28,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>×</button>
-                    </div>
-
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
-                      {["thisQuarter","lastQuarter","last7","last14","lastMonth","last3mo"].filter(k=>FILTERS.some(f=>f.key===k)).map(key=>{
-                        const f = FILTERS.find(x=>x.key===key);
-                        if (!f) return null;
-                        return (
-                          <button key={key} onClick={()=>{ setFlagReportRange(key); runFlagReport(key); }}
-                            disabled={flagReportLoading}
-                            style={{background:flagReportRange===key?T.accent:T.muted,color:flagReportRange===key?"white":T.sub,border:`1.5px solid ${flagReportRange===key?T.accent:T.border}`,borderRadius:8,padding:"6px 12px",fontWeight:700,fontSize:11,cursor:flagReportLoading?"not-allowed":"pointer",transition:"all 0.15s"}}>
-                            {f.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {flagReportLoading && (
-                      <div style={{display:"flex",alignItems:"center",gap:8,color:T.sub,fontSize:12,padding:"20px 0",justifyContent:"center"}}>
-                        <span style={{display:"inline-block",animation:"spin 1s linear infinite"}}>⟳</span> Scanning punches…
-                      </div>
-                    )}
-
-                    {!flagReportLoading && flagReportData && (
-                      <>
-                        <div style={{background:T.muted,borderRadius:9,padding:"10px 12px",fontSize:13,color:T.text,lineHeight:1.5,marginBottom:16,display:"flex",gap:8,alignItems:"flex-start"}}>
-                          <span style={{fontSize:15,flexShrink:0}}>💬</span>
-                          <span>{flagReportData.narrative}</span>
-                        </div>
-
-                        {flagReportData.noShows?.length > 0 && (
-                          <div style={{marginBottom:16}}>
-                            <SectionLabel T={T}>No-shows ({flagReportData.noShows.filter(n=>n.status!=="excused").length})</SectionLabel>
-                            <div style={{display:"flex",flexDirection:"column",marginTop:6,border:`1px solid ${T.border}`,borderRadius:9,overflow:"hidden"}}>
-                              {flagReportData.noShows.map((n,i) => (
-                                <div key={n.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 11px",borderTop:i?`1px solid ${T.border}`:"none",opacity:n.status==="excused"?0.6:1}}>
-                                  <div style={{flex:1,minWidth:0}}>
-                                    <div style={{fontSize:12.5,fontWeight:700,color:T.text}}>{n.employee_name || "Employee"}</div>
-                                    <div style={{fontSize:11,color:T.sub}}>{dl(n.event_date)} · {fmt(parseFloat(n.shift_start))}–{fmt(parseFloat(n.shift_end))}{n.status==="excused" ? " · excused" : ""}</div>
-                                  </div>
-                                  <button onClick={()=>excuseNoShow(n)}
-                                    style={{background:n.status==="excused"?"transparent":T.muted,border:`1px solid ${T.border}`,borderRadius:8,padding:"8px 12px",fontSize:11,fontWeight:700,color:T.sub,cursor:"pointer",flexShrink:0}}>
-                                    {n.status==="excused" ? "Undo" : "Excuse"}
-                                  </button>
-                                </div>
-                              ))}
-                            </div>
-                            <div style={{fontSize:10.5,color:T.sub,marginTop:5}}>Saved each night when a shift ends with no clock-in. Excused no-shows aren't counted.</div>
-                          </div>
-                        )}
-
-                        {flagReportData.total > 0 && (
-                          <>
-                            <SectionLabel T={T}>By Day of Week</SectionLabel>
-                            <div style={{height:110,marginBottom:18,marginTop:6}}>
-                              <ResponsiveContainer width="100%" height="100%">
-                                <RBarChart data={DOW_SHORT.map(day=>({ day, count: flagReportData.byDay[day]||0 }))} margin={{top:4,right:4,left:-24,bottom:0}}>
-                                  <CartesianGrid stroke={T.border} strokeDasharray="3 3" vertical={false}/>
-                                  <XAxis dataKey="day" stroke={T.sub} fontSize={9} tickLine={false} axisLine={{stroke:T.border}}/>
-                                  <YAxis stroke={T.sub} fontSize={9} tickLine={false} axisLine={false} allowDecimals={false}/>
-                                  <RTooltip contentStyle={{fontSize:11,borderRadius:8,border:`1px solid ${T.border}`,background:T.surface}}/>
-                                  <Bar dataKey="count" name="Flags" radius={[3,3,0,0]}>
-                                    {DOW_SHORT.map((day,i)=>(
-                                      <Cell key={day} fill={(flagReportData.byDay[day]||0)>0 ? T.accent : T.border}/>
-                                    ))}
-                                  </Bar>
-                                </RBarChart>
-                              </ResponsiveContainer>
-                            </div>
-
-                            <SectionLabel T={T}>By Flag Type</SectionLabel>
-                            <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16,marginTop:6}}>
-                              {Object.entries(flagReportData.byType).sort((a,b)=>b[1]-a[1]).map(([type,count])=>(
-                                <div key={type} style={{display:"flex",alignItems:"center",gap:8}}>
-                                  <span style={{width:8,height:8,borderRadius:2,background:FLAG_REPORT_COLORS[type]||T.sub,flexShrink:0}}/>
-                                  <span style={{fontSize:12,color:T.text,flex:1}}>{FLAG_REPORT_LABELS[type]||type}</span>
-                                  <span style={{fontSize:12,fontWeight:700,color:T.text}}>{count}</span>
-                                </div>
-                              ))}
-                            </div>
-
-                            {Object.keys(flagReportData.byEmployee).length > 0 && (
-                              <>
-                                <SectionLabel T={T}>By Employee</SectionLabel>
-                                <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:6}}>
-                                  {Object.entries(flagReportData.byEmployee).sort((a,b)=>b[1]-a[1]).slice(0,6).map(([name,count])=>(
-                                    <div key={name} style={{display:"flex",alignItems:"center",gap:8}}>
-                                      <span style={{fontSize:12,color:T.text,flex:1}}>{name}</span>
-                                      <span style={{fontSize:12,fontWeight:700,color:T.text}}>{count}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              </>
-                            )}
-                          </>
-                        )}
-
-                        <div style={{fontSize:10,color:T.sub,marginTop:16,paddingTop:12,borderTop:`1px solid ${T.border}`}}>
-                          {flagReportData.punchesScanned} punches scanned · {dl(flagReportData.startDate)} – {dl(flagReportData.endDate)}
-                        </div>
-                        {flagReportData.truncated && (
-                          <div style={{fontSize:11,color:"#E8A93A",marginTop:8,display:"flex",alignItems:"flex-start",gap:6}}>
-                            <span style={{flexShrink:0}}>⚠️</span>
-                            <span>This range has more than {FLAG_REPORT_MAX_ROWS.toLocaleString()} punches — this report is based on the first {FLAG_REPORT_MAX_ROWS.toLocaleString()} only. Pick a shorter date range for a complete picture.</span>
-                          </div>
-                        )}
-                      </>
-                    )}
-                  </Card>
-                )}
 
                 {/* Report Builder moved to Dashboard → Report Builder */}
 
