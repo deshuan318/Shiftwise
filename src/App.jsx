@@ -450,6 +450,13 @@ input,select,button,textarea { font-family:inherit; }
   .controls-divider { display:none !important; }
   .sched-strip { grid-template-columns:1fr !important; gap:10px !important; }
   .rb-dd-row { grid-template-columns:1fr !important; }
+  .sw-settings { grid-template-columns:minmax(0,1fr) !important; min-height:0 !important; }
+  .sw-settings > * { border-right:none !important; }
+  .sw-set-lvl0 .sw-set-col2, .sw-set-lvl0 .sw-set-col3,
+  .sw-set-lvl1 .sw-set-col1, .sw-set-lvl1 .sw-set-col3,
+  .sw-set-lvl2 .sw-set-col1, .sw-set-lvl2 .sw-set-col2 { display:none !important; }
+  .sw-set-back { display:inline-flex !important; }
+  .sw-set-catsub { display:block !important; }
   .sched-stat  { border-left:none !important; padding-left:0 !important; }
   .mobile-compact { padding:12px 14px !important; }
 }
@@ -1430,6 +1437,7 @@ export default function App() {
   const [openCell,    setOpenCell]     = useState(null);
   const [toast,       setToast]        = useState(null);
   const [settingsSection, setSettingsSection] = useState(null);
+  const [settingsFolder,  setSettingsFolder]  = useState(null); // UI Batch 18 — folder inside a Settings category
   const [recMsg,   setRecMsg]   = useState("");
   const [recTo,    setRecTo]    = useState("");
   const [recFrom,  setRecFrom]  = useState("Owner");
@@ -4479,7 +4487,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         )}
         <div style={{padding:"9px 16px 12px", borderTop:`1px solid ${T.border}`, display:"flex", justifyContent:"space-between", alignItems:"center", gap:10, flexWrap:"wrap"}}>
           <span style={{fontSize:11, color:T.sub, lineHeight:1.5, flex:"1 1 200px"}}>{footnote}</span>
-          <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); }}
+          <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); setSettingsFolder("shifts"); }}
             style={{background:"none", border:"none", color:T.accent, fontWeight:700, fontSize:12, cursor:"pointer", padding:"8px 0"}}>
             Edit shift types
           </button>
@@ -5719,7 +5727,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:10}}>
                                   <div style={{fontSize:14,fontWeight:800,color:T.text}}>{def.label}</div>
                                   {sid==="shifttypes" && (
-                                    <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); }}
+                                    <button onClick={()=>{ setTab("settings"); setSettingsSection("general"); setSettingsFolder("shifts"); }}
                                       style={{background:"none",border:"none",color:T.accent,fontWeight:700,fontSize:12,cursor:"pointer",padding:0}}>Edit shift types</button>
                                   )}
                                 </div>
@@ -9511,8 +9519,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           {/* SETTINGS */}
           {tab==="settings" && (()=>{
             const SETTING_SECTIONS = [
-              { id:"general",  icon:"🏢", label:"General",          sub:"Business name, appearance & shift types" },
-              { id:"hours",    icon:"🕐", label:"Hours of Operation",sub:(()=>{ const set = Object.values(businessHours).filter(h=>!h.closed).length; return set>0?`${set} day${set!==1?"s":""}  configured`:"Not configured yet"; })() },
+              { id:"general",  icon:"🏢", label:"General",          sub:"Business, hours, labor target, shift types & appearance" },
               { id:"roster",   icon:"👥", label:"Team Roster",      sub:`${employees.length} employee${employees.length!==1?"s":""}` },
               { id:"kiosk",    icon:"🔐", label:"Kiosk & Clock-In", sub:"Manage owner PIN for kiosk app" },
               { id:"print",    icon:"🖨",  label:"Print Schedule",   sub:"Preview and print or save as PDF" },
@@ -9520,44 +9527,92 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
               { id:"audit",    icon:"📋", label:"Audit Log",        sub:auditLog.length>0?`${auditLog.length} change${auditLog.length!==1?"s":""} recorded`:"No changes recorded yet" },
             ];
 
+            const SETTING_FOLDERS = {
+              general: [
+                { id:"profile",    label:"Business profile",   sub: biz || "Name and address" },
+                { id:"hours",      label:"Hours of operation", sub: (()=>{ const set = Object.values(businessHours).filter(h=>!h.closed).length; return set>0?`${set} day${set!==1?"s":""}  configured`:"Not configured yet"; })() },
+                { id:"labor",      label:"Labor cost target",  sub: `${laborTargetPct || 30}% of sales` },
+                { id:"shifts",     label:"Shift types",        sub: `${shiftTypes.length} type${shiftTypes.length!==1?"s":""}` },
+                { id:"appearance", label:"Appearance",         sub: THEMES[themeId]?.name || "Theme" },
+              ],
+              roster: [{ id:"team",   label:"Team roster",      sub: `${employees.length} employee${employees.length!==1?"s":""}` }],
+              kiosk:  [
+                { id:"app",  label:"Kiosk app",     sub:"Standalone clock-in app" },
+                { id:"link", label:"Kiosk link",    sub:"Open or share the kiosk" },
+                { id:"pins", label:"Clock-in PINs", sub:"Employee PINs" },
+              ],
+              print:  [{ id:"print",  label:"Print schedule",   sub:"Preview, print or save as PDF" }],
+              data:   [
+                { id:"sales",   label:"Sales data",     sub: squareConnected ? "Square connected" : "Square or CSV" },
+                { id:"backups", label:"Backups",        sub:"Auto-save, export, import" },
+                { id:"clear",   label:"Clear all data", sub:"Start over" },
+              ],
+              audit:  [{ id:"log",    label:"Audit log",        sub: auditLog.length ? `${auditLog.length} change${auditLog.length!==1?"s":""}` : "No changes yet" }],
+            };
+            // Desktop always shows a selection (General → first folder); on phones
+            // the raw state decides which one column is visible.
+            const curSec = settingsSection === "hours" ? "general" : (settingsSection || "general");
+            const folders = SETTING_FOLDERS[curSec] || [];
+            const curFolder = settingsSection === "hours" ? "hours" : (folders.some(f=>f.id===settingsFolder) ? settingsFolder : folders[0]?.id);
+            const gf = k => curFolder === k;
+            const level = !settingsSection ? 0 : !settingsFolder ? 1 : 2;
+            const curSecDef = SETTING_SECTIONS.find(s=>s.id===curSec);
+            const curFolderDef = folders.find(f=>f.id===curFolder);
+            const backBtn = (onClick, label) => (
+              <button className="sw-set-back" onClick={onClick} aria-label={label}
+                style={{display:"none",alignItems:"center",gap:6,background:"none",border:"none",color:T.accent,fontWeight:700,fontSize:13,cursor:"pointer",padding:"4px 0",marginBottom:8}}>
+                ‹ {label}
+              </button>
+            );
             return (
               <div style={{paddingBottom:20}}>
-                <div style={{marginBottom:14, display:"flex", alignItems:"center", gap:12}}>
-                  {settingsSection && (
-                    <button onClick={()=>setSettingsSection(null)}
-                      style={{background:T.muted, border:"none", borderRadius:"50%", width:34, height:34, fontSize:18, cursor:"pointer", color:T.sub, display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0}}>
-                      ←
-                    </button>
-                  )}
-                  <div>
-                    <h2 style={{margin:"0 0 2px", fontSize:20, fontWeight:800, color:T.text}}>
-                      {settingsSection ? SETTING_SECTIONS.find(s=>s.id===settingsSection)?.label : "Settings"}
-                    </h2>
-                    {!settingsSection && <p style={{margin:0, fontSize:12, color:T.sub}}>Tap a section to configure</p>}
-                  </div>
+                <div style={{marginBottom:14}}>
+                  <h2 style={{margin:"0 0 2px", fontSize:22, fontWeight:800, color:T.text}}>Settings</h2>
+                  <p style={{margin:0, fontSize:13, color:T.sub}}>Pick a category, then a section to edit.</p>
                 </div>
-
-                {!settingsSection && (
-                  <Card T={T} style={{overflow:"hidden"}}>
-                    {SETTING_SECTIONS.map((s, i) => (
-                      <div key={s.id} onClick={()=>setSettingsSection(s.id)}
-                        style={{display:"flex", alignItems:"center", gap:11, padding:"15px 18px", cursor:"pointer", borderBottom:i<SETTING_SECTIONS.length-1?`1px solid ${T.border}`:"none", transition:"background 0.12s"}}
-                        onMouseEnter={e=>e.currentTarget.style.background=T.muted}
-                        onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                        <div style={{width:40, height:40, borderRadius:10, background:T.accent+"18", display:"flex", alignItems:"center", justifyContent:"center", fontSize:18, flexShrink:0}}>{s.icon}</div>
-                        <div style={{flex:1, minWidth:0}}>
-                          <div style={{fontWeight:700, fontSize:14, color:T.text}}>{s.label}</div>
-                          <div style={{fontSize:11, color:T.sub, marginTop:2, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>{s.sub}</div>
-                        </div>
-                        <div style={{color:T.sub, fontSize:18, flexShrink:0}}>›</div>
-                      </div>
-                    ))}
-                  </Card>
-                )}
-
+                <div className={`sw-settings sw-set-lvl${level}`} style={{display:"grid",gridTemplateColumns:"230px 270px minmax(0,1fr)",background:T.surface,border:`1px solid ${T.border}`,borderRadius:16,overflow:"hidden",minHeight:620}}>
+                  {/* Column 1 — categories */}
+                  <nav aria-label="Settings categories" className="sw-set-col1" style={{padding:12,borderRight:`1px solid ${T.border}`,display:"flex",flexDirection:"column",gap:4}}>
+                    {SETTING_SECTIONS.map(s => {
+                      const on = s.id === curSec;
+                      return (
+                        <button key={s.id} onClick={()=>{ setSettingsSection(s.id); setSettingsFolder(null); }} aria-current={on ? "true" : undefined}
+                          style={{width:"100%",display:"flex",alignItems:"center",gap:11,padding:"10px 12px",borderRadius:10,border:"none",background:on?T.accent:"transparent",color:on?"white":T.text,fontFamily:"inherit",textAlign:"left",cursor:"pointer"}}>
+                          <span style={{width:32,height:32,borderRadius:8,background:on?"rgba(255,255,255,0.18)":T.muted,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{s.icon}</span>
+                          <span style={{minWidth:0}}>
+                            <span style={{display:"block",fontSize:14,fontWeight:700}}>{s.label}</span>
+                            <span className="sw-set-catsub" style={{display:"none",fontSize:11.5,color:on?"rgba(255,255,255,0.8)":T.sub,marginTop:1}}>{s.sub}</span>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </nav>
+                  {/* Column 2 — folders */}
+                  <div className="sw-set-col2" style={{padding:12,borderRight:`1px solid ${T.border}`,background:T.muted+"66",display:"flex",flexDirection:"column",gap:4}}>
+                    {backBtn(()=>{ setSettingsSection(null); setSettingsFolder(null); }, "Settings")}
+                    <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",color:T.sub,padding:"6px 12px 8px"}}>{curSecDef?.label}</div>
+                    {folders.map(f => {
+                      const on = f.id === curFolder;
+                      return (
+                        <button key={f.id} onClick={()=>{ if (!settingsSection || settingsSection==="hours") setSettingsSection(curSec); setSettingsFolder(f.id); }} aria-current={on ? "true" : undefined}
+                          style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"11px 12px",borderRadius:10,border:`1px solid ${on?T.accent:"transparent"}`,background:on?T.accent+"14":"transparent",fontFamily:"inherit",textAlign:"left",cursor:"pointer"}}>
+                          <span style={{minWidth:0}}>
+                            <span style={{display:"block",fontSize:14,fontWeight:700,color:T.text}}>{f.label}</span>
+                            <span style={{display:"block",fontSize:12,color:T.sub,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{f.sub}</span>
+                          </span>
+                          <span aria-hidden="true" style={{color:T.sub,fontSize:16,flexShrink:0}}>›</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {/* Column 3 — details */}
+                  <section className="sw-set-col3" aria-label={curFolderDef?.label} style={{padding:"20px 24px",minWidth:0}}>
+                    {backBtn(()=>setSettingsFolder(null), curSecDef?.label || "Back")}
+                    {curSec !== "roster" && <h3 style={{margin:"0 0 14px",fontSize:18,fontWeight:800,color:T.text}}>{curFolderDef?.label}</h3>}
                 {/* GENERAL */}
-                {settingsSection==="general" && (
+                {curSec==="general" && (
                   <div style={{display:"flex", flexDirection:"column", gap:11}}>
+                    {gf("profile") && (
                     <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Business Name</SectionLabel>
                       <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Appears in the top bar and on all printed schedules.</p>
@@ -9566,8 +9621,10 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         style={{width:"100%", border:`1.5px solid ${T.border}`, borderRadius:9, padding:"11px 13px", fontSize:16, fontWeight:700, outline:"none", color:T.text, background:T.surface}}
                         placeholder="Your business name"/>
                     </Card>
+                    )}
 
                     <div>
+                      {gf("profile") && (
                       <Card T={T} style={{padding:"14px 16px", marginBottom:16}}>
                         <SectionLabel T={T}>Business Address</SectionLabel>
                         <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Used to record each day's weather automatically, so you can see how weather affects sales and staffing.</p>
@@ -9609,6 +9666,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                           );
                         })()}
                       </Card>
+                      )}
+                      {gf("labor") && (
                       <Card T={T} style={{padding:"14px 16px", marginBottom:16}}>
                         <SectionLabel T={T}>Labor Cost Target</SectionLabel>
                         <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Labor as a % of sales you're aiming for. 30% is a common average; set what fits your business. Break-even, the week check, suggested budgets, and Insights all use it.</p>
@@ -9620,6 +9679,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                           <span style={{fontSize:15, fontWeight:700, color:T.sub}}>% of sales</span>
                         </div>
                       </Card>
+                      )}
+                      {gf("shifts") && (<>
                       <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:4, paddingLeft:2}}>Shift Types</div>
                       <div style={{fontSize:12, color:T.sub, marginBottom:12, paddingLeft:2}}>Customize shift types available when scheduling.</div>
                       <Card T={T} style={{overflow:"hidden", marginBottom:10}}>
@@ -9661,8 +9722,10 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         style={{background:"transparent",color:T.sub,border:`1px solid ${T.border}`,borderRadius:8,padding:"7px 12px",fontSize:11,fontWeight:600,cursor:"pointer"}}>
                         Reset to defaults
                       </button>
+                      </>)}
                     </div>
 
+                    {gf("appearance") && (
                     <div>
                       <div style={{fontSize:13, fontWeight:800, color:T.text, marginBottom:4, paddingLeft:2}}>Appearance</div>
                       <div style={{fontSize:12, color:T.sub, marginBottom:12, paddingLeft:2}}>Choose a color scheme.</div>
@@ -9701,11 +9764,12 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         })}
                       </div>
                     </div>
+                    )}
                   </div>
                 )}
 
                 {/* HOURS OF OPERATION */}
-                {settingsSection==="hours" && (
+                {curSec==="general" && gf("hours") && (
                   <div style={{display:"flex",flexDirection:"column",gap:11}}>
                     <p style={{margin:0,fontSize:12,color:T.sub,lineHeight:1.6}}>
                       Set your regular opening and closing times. This allows the AI to detect schedule gaps and flag uncovered periods automatically.
@@ -9828,7 +9892,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 )}
 
                 {/* ROSTER */}
-                {settingsSection==="roster" && (
+                {curSec==="roster" && (
                   <div style={{paddingBottom:20}}>
                     {/* Sticky action bar — stays visible while scrolling through employee cards */}
                     <div style={{position:"sticky",top:70,zIndex:200,background:T.bg,paddingTop:8,paddingBottom:8,marginBottom:8,borderBottom:`1px solid ${T.border}`}}>
@@ -9994,8 +10058,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 )}
 
                 {/* KIOSK */}
-                {settingsSection==="kiosk" && (
+                {curSec==="kiosk" && (
                   <div style={{display:"flex", flexDirection:"column", gap:11}}>
+                    {gf("app") && (
                     <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Standalone Kiosk App</SectionLabel>
                       <p style={{margin:"0 0 14px", fontSize:12, color:T.sub, lineHeight:1.6}}>
@@ -10016,6 +10081,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         ))}
                       </div>
                     </Card>
+                    )}
+                    {gf("link") && (
                     <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Your Kiosk Link</SectionLabel>
                       <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.6}}>
@@ -10037,19 +10104,22 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         </button>
                       </div>
                     </Card>
+                    )}
+                    {gf("pins") && (
                     <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Employee Clock-In PINs</SectionLabel>
                       <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Set each employee's PIN in the Team Roster. They use it to clock in and out on the kiosk.</p>
-                      <button onClick={()=>setSettingsSection("roster")}
+                      <button onClick={()=>{ setSettingsSection("roster"); setSettingsFolder(null); }}
                         style={{background:T.accent,color:"white",border:"none",borderRadius:9,padding:"11px 0",fontWeight:700,fontSize:13,cursor:"pointer",width:"100%"}}>
                         Go to Team Roster →
                       </button>
                     </Card>
+                    )}
                   </div>
                 )}
 
                 {/* AUDIT LOG */}
-                {settingsSection==="audit" && (
+                {curSec==="audit" && (
                   <div style={{display:"flex",flexDirection:"column",gap:11}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
                       <p style={{margin:0,fontSize:12,color:T.sub,lineHeight:1.5}}>Every schedule change is automatically timestamped and recorded here.</p>
@@ -10108,7 +10178,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 )}
 
                 {/* PRINT SCHEDULE */}
-                {settingsSection==="print" && (()=>{
+                {curSec==="print" && (()=>{
                   const wk = weeks.find(w=>w.key===printWeek) || weeks[0];
                   const wkDates = wk.dates.map(d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt; });
                   const wkTH = employees.reduce((s,e)=>s+eWkH(wk.key,e.id),0);
@@ -10375,8 +10445,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 })()}
 
                 {/* DATA & BACKUP */}
-                {settingsSection==="data" && (
+                {curSec==="data" && (
                   <div style={{display:"flex", flexDirection:"column", gap:11}}>
+                    {gf("sales") && (
                     <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Sales Data</SectionLabel>
                       {squareConnected ? (
@@ -10406,6 +10477,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         )}
                       </div>
                     </Card>
+                    )}
+                    {gf("backups") && (
                     <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Auto-Save</SectionLabel>
                       <p style={{margin:"0 0 10px", fontSize:12, color:T.sub, lineHeight:1.5}}>ShiftWise automatically saves everything to this device every time you make a change.</p>
@@ -10414,11 +10487,15 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         {bizId ? "All data synced to Supabase ✓" : "Not connected to database"}
                       </div>
                     </Card>
+                    )}
+                    {gf("backups") && (
                     <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Export Backup</SectionLabel>
                       <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Download all your data as a single file. Use it to move ShiftWise to another device.</p>
                       <button onClick={exportData} style={{width:"100%",background:T.dark,color:"white",border:"none",borderRadius:9,padding:"12px 0",fontWeight:700,fontSize:13,cursor:"pointer"}}>Export Backup (.json)</button>
                     </Card>
+                    )}
+                    {gf("backups") && (
                     <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Import Backup</SectionLabel>
                       <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Restore from a previously exported file. Your current data will be replaced.</p>
@@ -10427,6 +10504,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         <input type="file" accept=".json" onChange={e=>{importData(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
                       </label>
                     </Card>
+                    )}
+                    {gf("clear") && (
                     <Card T={T} style={{padding:"14px 16px"}}>
                       <SectionLabel T={T}>Clear All Data</SectionLabel>
                       <p style={{margin:"0 0 12px", fontSize:12, color:T.sub, lineHeight:1.5}}>Permanently removes all schedules, employees, settings, and history from this device.</p>
@@ -10435,8 +10514,11 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                         Clear All Data
                       </button>
                     </Card>
+                    )}
                   </div>
                 )}
+                  </section>
+                </div>
               </div>
             );
           })()}
