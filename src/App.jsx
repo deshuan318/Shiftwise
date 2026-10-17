@@ -1483,6 +1483,9 @@ export default function App() {
   const [cashMode,    setCashMode]    = useState(false);
   const [cashEntries, setCashEntries] = useState({}); // { "YYYY-MM-DD": amount }
   const [laborPctMode, setLaborPctMode] = useState("projected"); // "projected" | "actual"
+  // UI Batch 19 — payroll card: projected (schedule) vs actual (punches) for the Overview week
+  const [payrollMode,  setPayrollMode]  = useState("projected"); // "projected" | "actual"
+  const [ovPayPunches, setOvPayPunches] = useState(null);        // { week, rows, loading, error }
   const [widgets,        setWidgets]        = useState([]);
   // Break-even + week check
   const [laborTargetPct, setLaborTargetPct] = useState(30);   // businesses.labor_target_pct
@@ -4020,6 +4023,20 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   }
   useEffect(() => { if (tab === "dashboard" && bizId) loadOverviewItems(payWeek); }, [tab, payWeek, bizId]);
 
+  // Actual payroll needs the whole week's punches (the app only keeps the latest 200 in memory).
+  async function loadOverviewPayPunches(week) {
+    setOvPayPunches({ week, rows: [], loading: true });
+    try {
+      const { rows } = await fetchPunchesForRange(bizId, week, addDays(week, 6));
+      setOvPayPunches({ week, rows, loading: false });
+    } catch (e) {
+      setOvPayPunches({ week, rows: [], loading: false, error: true });
+    }
+  }
+  useEffect(() => {
+    if (tab === "dashboard" && bizId && payrollMode === "actual") loadOverviewPayPunches(payWeek); // fresh each time, so today's punches show
+  }, [tab, payWeek, bizId, payrollMode]);
+
   useEffect(() => {
     const reportWidgets = widgets.filter(w => w.config?.report);
     if (reportWidgets.length === 0) return;
@@ -5451,11 +5468,50 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
               <span style={kpiValue}>{totalRevenue > 0 ? fmtMoney(totalRevenue) : "—"}</span>
               <span style={{ fontSize: 11.5, color: C.sub }}>{salesDelta != null ? <>{deltaChip(salesDelta)} vs. same days last week</> : totalRevenue > 0 ? `${wkSalesDays.length} day${wkSalesDays.length !== 1 ? "s" : ""} of sales` : "No sales recorded yet"}</span>
             </div>
-            <div style={kpi(C.lav)}>
-              <div style={kpiHead}><span style={kpiLabel}>Labor cost</span></div>
-              <span style={kpiValue}>{fmtMoney(payWeekLabor)}</span>
-              <span style={{ fontSize: 11.5, color: C.sub }}>{pwHrs.toFixed(1)}h · {pwStaff} of {employees.length} staff{bgt > 0 ? ` · budget ${fmtMoney(bgt)}` : ""}</span>
-            </div>
+            {(() => {
+              // Payroll this week. Projected = scheduled hours × hourly pay (same math as the
+              // schedule grid). Actual = punched hours × hourly pay. Straight time — no OT premium.
+              const pp = ovPayPunches && ovPayPunches.week === payWeek ? ovPayPunches : null;
+              let actualTotal = null, actualHrs = 0;
+              if (pp && !pp.loading && !pp.error) {
+                const byEmpDay = {};
+                pp.rows.forEach(p => { if (!p.time) return; const ds = toLocalDateStr(new Date(p.time)); (byEmpDay[`${p.empId}__${ds}`] ||= []).push(p); });
+                actualTotal = 0;
+                Object.entries(byEmpDay).forEach(([k, dayPunches]) => {
+                  const empId = k.split("__")[0];
+                  const emp = allEmployees.find(e => e.id === empId);
+                  const hrs = calcActualHours([...dayPunches].sort((a,b) => new Date(a.time) - new Date(b.time)));
+                  actualHrs += hrs;
+                  actualTotal += hrs * (parseFloat(emp?.hourlyRate) || 0);
+                });
+              }
+              const isActual = payrollMode === "actual";
+              const value = isActual ? actualTotal : payWeekLabor;
+              const overBudget = bgt > 0 && value != null && value > bgt;
+              return (
+                <div style={kpi(C.lav)}>
+                  <span style={{ ...kpiLabel, ...kpiHead }}>
+                    Payroll this week
+                    <span role="group" aria-label="Projected or actual payroll" style={{ display: "flex", background: "rgba(255,255,255,0.7)", borderRadius: 999, padding: 2 }}>
+                      {["projected", "actual"].map(m => (
+                        <button key={m} onClick={() => setPayrollMode(m)} aria-pressed={payrollMode === m}
+                          style={{ border: "none", borderRadius: 999, padding: "3px 8px", fontSize: 10.5, lineHeight: 1.4, fontWeight: 700, cursor: "pointer", textTransform: "capitalize", background: payrollMode === m ? C.ink : "transparent", color: payrollMode === m ? "white" : C.sub }}>{m}</button>
+                      ))}
+                    </span>
+                  </span>
+                  <span style={{ ...kpiValue, color: overBudget ? "#A93226" : C.ink }}>
+                    {isActual && pp?.loading ? "…" : value != null ? fmtMoney(value) : "—"}
+                  </span>
+                  <span style={{ fontSize: 11.5, color: C.sub }}>
+                    {isActual
+                      ? (pp?.error ? <>Couldn't load punches. <button onClick={() => loadOverviewPayPunches(payWeek)} style={{ background: "none", border: "none", color: T.accent, fontWeight: 700, cursor: "pointer", padding: 0, fontSize: 11.5 }}>Try again</button></>
+                        : pp?.loading || !pp ? "Loading punches…"
+                        : `${actualHrs.toFixed(1)}h worked · projected ${fmtMoney(payWeekLabor)}`)
+                      : `${pwHrs.toFixed(1)}h · ${pwStaff} of ${employees.length} staff scheduled${bgt > 0 ? ` · budget ${fmtMoney(bgt)}` : ""}`}
+                  </span>
+                </div>
+              );
+            })()}
             <div style={kpi(C.mint)}>
               <span style={{ ...kpiLabel, ...kpiHead }}>
                 Labor % of sales
