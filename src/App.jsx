@@ -388,7 +388,7 @@ input,select,button,textarea { font-family:inherit; }
   .add-shift-btn:hover { border-color:#aaa !important; background:#EEF0EB !important; color:#6B7B6E !important; }
   .emp-card:hover { box-shadow:0 6px 20px rgba(0,0,0,0.1) !important; transform:translateY(-1px); }
   .nav-tab-btn:hover { color:#2D6A4F !important; }
-  @media (min-width:768px) and (max-width:1199px) { .nav-tab-btn { padding:8px 11px !important; font-size:13px !important; } .biz-input { width:160px !important; } }
+  @media (min-width:768px) and (max-width:1199px) { .nav-tab-btn { padding:8px 11px !important; font-size:13px !important; } .top-bar-tabs { gap:4px !important; padding-left:0 !important; } .biz-input { width:160px !important; } }
   .action-btn:hover { opacity:0.88; }
 }
 .bottom-nav {
@@ -6910,7 +6910,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 style={{background:"transparent",border:"none",color:"white",fontSize:19,fontWeight:700,outline:"none",width:210}}
                 onBlur={saveBizNameIfChanged}/>
             </div>
-            <div className="top-bar-tabs" style={{display:"flex",gap:4,flex:1,overflow:"hidden",minWidth:0}}>
+            <div className="top-bar-tabs" style={{display:"flex",gap:12,flex:1,overflow:"hidden",minWidth:0,paddingLeft:8}}>
               {TABS.map(t=>(
                 <button key={t.key} onClick={()=>setTab(t.key)} className="nav-tab-btn" style={{
                   background:tab===t.key?T.accent:"transparent",
