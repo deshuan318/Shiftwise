@@ -1561,6 +1561,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   const [rbLoading,     setRbLoading]     = useState(false);
   const [rbResult,      setRbResult]      = useState(null); // { data, truncated }
   const [rbLineItemsOpen, setRbLineItemsOpen] = useState(false);
+  const [rbFlagListOpen,  setRbFlagListOpen]  = useState(false);
 
   const printRef = useRef();
   // These pop-ups are written inside App so they can use its data directly.
@@ -1693,16 +1694,16 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
 
     // Combos that can't produce rows still "run" — they return 0 results with the reason.
     let noResultReason = null;
-    if (rbGrouping === "Employee" && activeIds.some(sid => sid !== "timesheet" && sid !== "laborcost")) {
-      noResultReason = "Only Timesheet and Labor Cost can be grouped by Employee.";
+    if (rbGrouping === "Employee" && activeIds.some(sid => sid !== "timesheet" && sid !== "laborcost" && sid !== "flags")) {
+      noResultReason = "Only Timesheet, Flags & No-Shows, and Labor Cost can be grouped by Employee.";
     } else if (activeIds.includes("weather") && ["Employee","Shift Type","Item","Flag Type"].includes(rbGrouping)) {
       noResultReason = "Weather can only be grouped by Day, Week, or Day of Week.";
     } else if (rbGrouping === "Item" && activeIds.some(sid => sid !== "itemsales")) {
       noResultReason = "Only Item Sales can be grouped by Item.";
     } else if (rbGrouping === "Shift Type" && activeIds.some(sid => sid !== "shifttypes")) {
       noResultReason = "Only Shift Types can be grouped by Shift Type.";
-    } else if (rbGrouping === "Flag Type" && activeIds.some(sid => sid !== "timesheet")) {
-      noResultReason = "Only Timesheet & Punches can be grouped by Flag Type.";
+    } else if (rbGrouping === "Flag Type" && activeIds.some(sid => sid !== "timesheet" && sid !== "flags")) {
+      noResultReason = "Only Timesheet & Punches and Flags & No-Shows can be grouped by Flag Type.";
     }
 
     let startDate, endDate;
@@ -1717,7 +1718,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     try {
       const sourceFilters = {};
       activeIds.forEach(sid => { sourceFilters[sid] = rbSources[sid]?.filters || {}; });
-      const result = await runCustomReport(activeIds, null, sourceFilters, rbGrouping, startDate, endDate);
+      const sourceFields = {};
+      activeIds.forEach(sid => { sourceFields[sid] = rbSources[sid]?.fields || []; });
+      const result = await runCustomReport(activeIds, sourceFields, sourceFilters, rbGrouping, startDate, endDate);
       setRbResult({ ...result, startDate, endDate });
     } catch (e) {
       showError(friendlyError(e, "Couldn't run that report — try again."));
@@ -1735,6 +1738,20 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       });
     });
     return keys;
+  }
+
+  function rbExportFlagDetailsCSV() {
+    const rows = rbResult?.details || [];
+    if (!rows.length) return;
+    const esc = v => `"${String(v ?? "").replace(/"/g,'""')}"`;
+    const csv = [["Date","Time","Employee","Flag","Punch","Review"].join(","),
+      ...rows.map(d => [d.date, d.time, d.empName, d.flagLabel, d.punchType, d.review].map(esc).join(","))].join("\n");
+    const blob = new Blob([csv], { type:"text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `shiftwise-flags-${rbResult.startDate}-to-${rbResult.endDate}.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
   function rbExportCSV() {
@@ -3422,6 +3439,25 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         WEATHER_FILTER,
       ],
     },
+    flags: {
+      label: "Flags & No-Shows", color: "#C0392B",
+      fields: [
+        { id:"total", label:"All Flags" },
+        { id:"EARLY", label:"Clocked In Early" },
+        { id:"EARLY_OUT", label:"Clocked Out Early" },
+        { id:"LATE", label:"Late Clock-In" },
+        { id:"NO_SHIFT", label:"Unscheduled Punch" },
+        { id:"ADJUSTMENT", label:"Manually Adjusted" },
+        { id:"NO_SHOW", label:"No-Shows" },
+      ],
+      filters: [
+        { id:"employee", label:"Employee", options: allEmployees.map(e=>({value:e.id,label:e.status==="inactive" ? `${e.name} (former)` : e.name})) },
+        { id:"reviewStatus", label:"Review Status", options:[
+          {value:"unreviewed",label:"Not reviewed"},{value:"reviewed",label:"Reviewed"},{value:"approved",label:"Approved"},{value:"rejected",label:"Rejected"}] },
+        { id:"dow", label:"Day of Week", options: REPORT_DOW.map(d=>({value:d,label:d})) },
+        WEATHER_FILTER,
+      ],
+    },
     revenue: {
       label: "Revenue", color: "#FBBF3D",
       fields: [
@@ -3630,6 +3666,77 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   // attributed per employee, per Sun–Sat week, to the specific day that pushed
   // that week's cumulative hours past 40 — not just summed independently per
   // bucket, which would misrepresent which day actually caused the overtime.
+  // UI Batch 16 — one row per flag (a punch with two flags = two rows) plus
+  // one row per saved no-show. Used by the detail list and its CSV.
+  const FLAG_KEYS = ["EARLY","EARLY_OUT","LATE","NO_SHIFT","ADJUSTMENT","NO_SHOW"];
+  function buildFlagDetails(punches, noShows, startDate, endDate) {
+    const out = [];
+    punches.forEach(p => {
+      if (!p.time || !(p.flags||[]).length) return;
+      const d = new Date(p.time);
+      const dateStr = toLocalDateStr(d);
+      if (dateStr < startDate || dateStr > endDate) return;
+      p.flags.forEach(f => out.push({
+        id: `${p.id}_${f}`, date: dateStr, time: d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}),
+        empName: p.empName || allEmployees.find(e=>e.id===p.empId)?.name || "Unknown",
+        flag: f, flagLabel: FLAG_REPORT_LABELS[f] || f, punchType: ({ in:"Clock in", out:"Clock out", break_in:"Break start", break_out:"Break end" })[p.type] || (p.type || ""),
+        review: punchReviews[p.id] || "not reviewed",
+      }));
+    });
+    noShows.forEach(n => out.push({
+      id: `ns_${n.id}`, date: n.event_date, time: n.shift_start != null ? `${fmt(parseFloat(n.shift_start))}–${fmt(parseFloat(n.shift_end))}` : "",
+      empName: n.employee_name || allEmployees.find(e=>e.id===n.employee_id)?.name || "Unknown",
+      flag: "NO_SHOW", flagLabel: "No-Show", punchType: "Scheduled shift", review: "—",
+    }));
+    return out.sort((a,b) => (b.date + b.time).localeCompare(a.date + a.time));
+  }
+
+  async function computeFlagsReport(startDate, endDate, grouping, filters={}) {
+    const { rows: rawPunches, truncated } = await fetchPunchesForRange(bizId, startDate, endDate);
+    let noShows = [];
+    try {
+      noShows = (await dbGet(`attendance_events?select=id,employee_id,employee_name,event_date,shift_start,shift_end&business_id=eq.${bizId}&event_type=eq.NO_SHOW&event_date=gte.${startDate}&event_date=lte.${endDate}&limit=5000`)) || [];
+    } catch (e) { console.warn("No-shows unavailable:", e); }
+    const dayOk = dateStr => (!filters.dow?.length || filters.dow.includes(reportDowOf(dateStr))) && weatherOk(dateStr, filters);
+    let punches = rawPunches.filter(p => (p.flags||[]).length && p.time);
+    if (filters.employee?.length) { punches = punches.filter(p => filters.employee.includes(p.empId)); noShows = noShows.filter(n => filters.employee.includes(n.employee_id)); }
+    if (filters.reviewStatus?.length) {
+      punches = punches.filter(p => filters.reviewStatus.includes(punchReviews[p.id] || "unreviewed"));
+      if (!filters.reviewStatus.includes("unreviewed")) noShows = []; // no-shows have no punch to review
+    }
+    punches = punches.filter(p => { const ds = toLocalDateStr(new Date(p.time)); return ds >= startDate && ds <= endDate && dayOk(ds); });
+    noShows = noShows.filter(n => dayOk(n.event_date));
+
+    const blank = () => ({ total:0, EARLY:0, EARLY_OUT:0, LATE:0, NO_SHIFT:0, ADJUSTMENT:0, NO_SHOW:0 });
+    const add = (b, f) => { if (b[f] === undefined) return; b[f]++; b.total++; };
+    const toRow = (label, b) => { const r = { label }; Object.keys(b).forEach(k => { r[`flags__${k}`] = b[k]; }); return r; };
+    const details = buildFlagDetails(punches, noShows, startDate, endDate);
+
+    if (grouping === "Flag Type") {
+      const rows = FLAG_KEYS.map(k => {
+        const b = blank();
+        details.filter(d => d.flag === k).forEach(() => add(b, k));
+        return toRow(FLAG_REPORT_LABELS[k] || k, b);
+      }).filter(r => r.flags__total > 0);
+      return { rows, truncated, details };
+    }
+    if (grouping === "Employee") {
+      const byEmp = {};
+      punches.forEach(p => p.flags.forEach(f => add((byEmp[p.empId] ||= blank()), f)));
+      noShows.forEach(n => add((byEmp[n.employee_id] ||= blank()), "NO_SHOW"));
+      const empIds = filters.employee?.length ? filters.employee
+        : allEmployees.filter(e => e.status !== "inactive" || byEmp[e.id]).map(e=>e.id);
+      const rows = empIds.map(id => toRow(allEmployees.find(e=>e.id===id)?.name || "Unknown", byEmp[id] || blank()))
+        .sort((a,b) => b.flags__total - a.flags__total);
+      return { rows, truncated, details };
+    }
+    const buckets = {};
+    punches.forEach(p => { const k = reportBucketKey(toLocalDateStr(new Date(p.time)), grouping); p.flags.forEach(f => add((buckets[k] ||= blank()), f)); });
+    noShows.forEach(n => add((buckets[reportBucketKey(n.event_date, grouping)] ||= blank()), "NO_SHOW"));
+    const rows = reportBucketKeysInRange(startDate, endDate, grouping).map(k => toRow(reportBucketLabel(k, grouping), buckets[k] || blank()));
+    return { rows, truncated, details };
+  }
+
   async function computeTimesheetReport(startDate, endDate, grouping, filters={}) {
     const { rows: rawPunches, truncated } = await fetchPunchesForRange(bizId, startDate, endDate);
 
@@ -3637,7 +3744,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     // no-show counts — there is no excusing (UI Batch 15).
     let noShows = [];
     try {
-      noShows = (await dbGet(`attendance_events?select=id,employee_id,employee_name,event_date&business_id=eq.${bizId}&event_type=eq.NO_SHOW&event_date=gte.${startDate}&event_date=lte.${endDate}&limit=5000`)) || [];
+      noShows = (await dbGet(`attendance_events?select=id,employee_id,employee_name,event_date,shift_start,shift_end&business_id=eq.${bizId}&event_type=eq.NO_SHOW&event_date=gte.${startDate}&event_date=lte.${endDate}&limit=5000`)) || [];
     } catch (e) { console.warn("No-shows unavailable:", e); }
     if (filters.employee?.length) noShows = noShows.filter(n => filters.employee.includes(n.employee_id));
     if (filters.flagType?.length && !filters.flagType.includes("NO_SHOW")) noShows = [];
@@ -3690,7 +3797,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         .map(([k, label]) => ({ label, timesheet__hours:0, timesheet__punches:0, timesheet__overtime:0, timesheet__edits:0,
           timesheet__flagged: counts[k] || 0, timesheet__noshows: k === "NO_SHOW" ? (counts.NO_SHOW || 0) : 0 }))
         .filter(r => r.timesheet__flagged > 0);
-      return { rows, truncated };
+      return { rows, truncated, details: buildFlagDetails(Object.values(byEmpDay).flat(), noShows, startDate, endDate) };
     }
 
     if (grouping === "Employee") {
@@ -3729,7 +3836,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           timesheet__noshows: noShows.filter(n => n.employee_id === empId).length,
         };
       }).sort((a,b) => b.timesheet__hours - a.timesheet__hours);
-      return { rows, truncated };
+      return { rows, truncated, details: buildFlagDetails(Object.values(byEmpDay).flat(), noShows, startDate, endDate) };
     }
 
     const buckets = {};
@@ -3761,7 +3868,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         timesheet__noshows: noShowsByKey[key] || 0,
       };
     });
-    return { rows, truncated };
+    return { rows, truncated, details: buildFlagDetails(Object.values(byEmpDay).flat(), noShows, startDate, endDate) };
   }
 
   // Shared chart renderer for the custom Report Builder — Number and Table
@@ -4378,6 +4485,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
 
   const REPORT_COMPUTE_FNS = {
     timesheet: computeTimesheetReport,
+    flags: computeFlagsReport,
     revenue: (s,e,g,f) => Promise.resolve(computeRevenueReport(s,e,g,f)),
     laborcost: computeLaborCostReport,
     pulse: computePulseReport,
@@ -4412,7 +4520,10 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       });
     });
     const anyTruncated = results.some(r => r.truncated);
-    return { data: order.map(l => merged[l]), truncated: anyTruncated };
+    const fi = activeSourceIds.indexOf("flags"), ti = activeSourceIds.indexOf("timesheet");
+    const tsFlagFields = (sourceFields?.timesheet || []).some(f => f === "flagged" || f === "noshows");
+    const details = fi >= 0 ? results[fi].details : (ti >= 0 && tsFlagFields ? results[ti].details : null);
+    return { data: order.map(l => merged[l]), truncated: anyTruncated, details: details || null };
   }
 
 
@@ -5721,6 +5832,47 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                     </tbody>
                                   </table>
                                 </div>
+                              )}
+                            </div>
+                          )}
+
+                          {rbResult.details && (
+                            <div style={{border:`1px solid ${T.border}`,borderRadius:10,overflow:"hidden",marginTop:10}}>
+                              <div style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",flexWrap:"wrap"}}>
+                                <button onClick={()=>setRbFlagListOpen(o=>!o)} aria-expanded={rbFlagListOpen}
+                                  style={{flex:1,display:"flex",alignItems:"center",justifyContent:"space-between",background:"transparent",border:"none",cursor:"pointer",padding:0,fontFamily:"inherit",minWidth:180}}>
+                                  <span style={{fontSize:12.5,fontWeight:700,color:T.text}}>Flagged punches &amp; no-shows ({rbResult.details.length})</span>
+                                  <span style={{color:T.sub,fontSize:11}}>{rbFlagListOpen?"▲":"▼"}</span>
+                                </button>
+                                {rbResult.details.length > 0 && (
+                                  <button onClick={rbExportFlagDetailsCSV} style={{padding:"6px 11px",borderRadius:8,border:`1px solid ${T.border}`,background:T.surface,color:T.text,fontSize:11,fontWeight:700,cursor:"pointer"}}>Export list (CSV)</button>
+                                )}
+                              </div>
+                              {rbFlagListOpen && (
+                                rbResult.details.length === 0 ? (
+                                  <div style={{padding:"0 12px 12px",fontSize:12,color:T.sub}}>No flags or no-shows match this report.</div>
+                                ) : (
+                                  <div style={{padding:"0 12px 12px",maxHeight:320,overflowY:"auto",overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+                                    <table style={{width:"100%",minWidth:560,borderCollapse:"collapse",fontSize:12}}>
+                                      <thead><tr style={{borderBottom:`1px solid ${T.border}`,position:"sticky",top:0,background:T.surface}}>
+                                        {["Date","Time","Employee","Flag","Punch","Review"].map(h=><th key={h} style={{textAlign:"left",padding:"6px",color:T.sub,fontWeight:700}}>{h}</th>)}
+                                      </tr></thead>
+                                      <tbody>
+                                        {rbResult.details.slice(0,300).map(d=>(
+                                          <tr key={d.id} style={{borderBottom:`1px solid ${T.border}`}}>
+                                            <td style={{padding:"6px",color:T.text,whiteSpace:"nowrap"}}>{dl(d.date)}</td>
+                                            <td style={{padding:"6px",color:T.text,whiteSpace:"nowrap"}}>{d.time}</td>
+                                            <td style={{padding:"6px",color:T.text}}>{d.empName}</td>
+                                            <td style={{padding:"6px",color:FLAG_REPORT_COLORS[d.flag]||T.text,fontWeight:700}}>{d.flagLabel}</td>
+                                            <td style={{padding:"6px",color:T.sub}}>{d.punchType}</td>
+                                            <td style={{padding:"6px",color:T.sub}}>{d.review}</td>
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                    {rbResult.details.length > 300 && <div style={{fontSize:11,color:T.sub,marginTop:6}}>Showing the newest 300 — export the CSV for all {rbResult.details.length}.</div>}
+                                  </div>
+                                )
                               )}
                             </div>
                           )}
