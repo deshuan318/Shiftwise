@@ -388,6 +388,7 @@ input,select,button,textarea { font-family:inherit; }
   .add-shift-btn:hover { border-color:#aaa !important; background:#EEF0EB !important; color:#6B7B6E !important; }
   .emp-card:hover { box-shadow:0 6px 20px rgba(0,0,0,0.1) !important; transform:translateY(-1px); }
   .nav-tab-btn:hover { color:#2D6A4F !important; }
+  @media (min-width:768px) and (max-width:1199px) { .nav-tab-btn { padding:8px 11px !important; font-size:13px !important; } .biz-input { width:160px !important; } }
   .action-btn:hover { opacity:0.88; }
 }
 .bottom-nav {
@@ -6901,20 +6902,21 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
 
         {/* TOP BAR */}
         <div style={{background:T.dark,position:"sticky",top:0,zIndex:400,borderBottom:"1px solid #2A2A2A"}}>
-          <div className="top-bar-inner" style={{width:"100%",display:"flex",alignItems:"center",gap:11,height:54,padding:"0 24px"}}>
-            <div style={{display:"flex",alignItems:"center",gap:9,flexShrink:0}}>
-              <div style={{width:30,height:30,background:T.accent,borderRadius:8,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,flexShrink:0}}>📅</div>
-              <input className="biz-input" value={biz} onChange={e=>setBiz(e.target.value)}
-                style={{background:"transparent",border:"none",color:"white",fontSize:15,fontWeight:700,outline:"none",width:180}}
+          <div className="top-bar-inner" style={{width:"100%",display:"flex",alignItems:"center",gap:14,height:70,padding:"0 24px"}}>
+            {/* UI Batch 14 — larger logo, name, and tabs (70px bar, 14.5px tabs) */}
+            <div style={{display:"flex",alignItems:"center",gap:11,flexShrink:0}}>
+              <div style={{width:40,height:40,background:T.accent,borderRadius:11,display:"flex",alignItems:"center",justifyContent:"center",fontSize:21,flexShrink:0}}>📅</div>
+              <input className="biz-input" value={biz} onChange={e=>setBiz(e.target.value)} aria-label="Business name"
+                style={{background:"transparent",border:"none",color:"white",fontSize:19,fontWeight:700,outline:"none",width:210}}
                 onBlur={saveBizNameIfChanged}/>
             </div>
-            <div className="top-bar-tabs" style={{display:"flex",gap:2,flex:1,overflow:"hidden",minWidth:0}}>
+            <div className="top-bar-tabs" style={{display:"flex",gap:4,flex:1,overflow:"hidden",minWidth:0}}>
               {TABS.map(t=>(
                 <button key={t.key} onClick={()=>setTab(t.key)} className="nav-tab-btn" style={{
                   background:tab===t.key?T.accent:"transparent",
                   color:tab===t.key?"white":"#888",
-                  border:"none",borderRadius:7,padding:"7px 16px",
-                  cursor:"pointer",fontWeight:600,fontSize:12,whiteSpace:"nowrap",transition:"all 0.15s"
+                  border:"none",borderRadius:10,padding:"10px 16px",
+                  cursor:"pointer",fontWeight:600,fontSize:14.5,whiteSpace:"nowrap",transition:"all 0.15s"
                 }}>{t.icon} {t.label}</button>
               ))}
             </div>
@@ -9765,7 +9767,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 {settingsSection==="roster" && (
                   <div style={{paddingBottom:20}}>
                     {/* Sticky action bar — stays visible while scrolling through employee cards */}
-                    <div style={{position:"sticky",top:54,zIndex:200,background:T.bg,paddingTop:8,paddingBottom:8,marginBottom:8,borderBottom:`1px solid ${T.border}`}}>
+                    <div style={{position:"sticky",top:70,zIndex:200,background:T.bg,paddingTop:8,paddingBottom:8,marginBottom:8,borderBottom:`1px solid ${T.border}`}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
                         <div>
                           <h2 style={{margin:"0 0 2px",fontSize:18,fontWeight:800,color:T.text}}>Team Roster</h2>
