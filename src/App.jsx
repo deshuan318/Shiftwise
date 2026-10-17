@@ -9969,8 +9969,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 {/* ROSTER */}
                 {curSec==="roster" && (
                   <div style={{paddingBottom:20}}>
-                    {/* Sticky action bar — stays visible while scrolling through employee cards */}
-                    <div style={{position:"sticky",top:70,zIndex:200,background:T.bg,paddingTop:8,paddingBottom:8,marginBottom:8,borderBottom:`1px solid ${T.border}`}}>
+                    {/* Roster header — not sticky, so it never covers the picker cards (UI Batch 20) */}
+                    <div style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${T.border}`}}>
                       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
                         <div>
                           <h2 style={{margin:"0 0 2px",fontSize:18,fontWeight:800,color:T.text}}>Team Roster</h2>
