@@ -12,20 +12,67 @@ const HEADERS = {
   'Content-Type': 'application/json',
 };
 
-async function sbGet(path) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, { headers: HEADERS });
-  if (!res.ok) throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
-  return res.json();
+const PAGE = 1000;   // Supabase returns at most 1,000 rows per request
+const CHUNK = 500;   // rows per insert request
+
+// Reads EVERY row (pages past Supabase's 1,000-row cap — the old version
+// silently stopped at 1,000, which could cut off punches and sales).
+async function sbGetAll(path) {
+  const out = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const sep = path.includes('?') ? '&' : '?';
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}${sep}limit=${PAGE}&offset=${offset}`, { headers: HEADERS });
+    if (!res.ok) throw new Error(`GET ${path} failed: ${res.status} ${await res.text()}`);
+    const page = await res.json();
+    out.push(...page);
+    if (page.length < PAGE) break;
+  }
+  return out;
 }
 
 async function sbInsert(table, rows) {
-  if (!rows || (Array.isArray(rows) && rows.length === 0)) return;
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
-    method: 'POST',
-    headers: { ...HEADERS, Prefer: 'return=minimal' },
-    body: JSON.stringify(rows),
+  const list = Array.isArray(rows) ? rows : rows ? [rows] : [];
+  for (let i = 0; i < list.length; i += CHUNK) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
+      method: 'POST',
+      headers: { ...HEADERS, Prefer: 'return=minimal' },
+      body: JSON.stringify(list.slice(i, i + CHUNK)),
+    });
+    if (!res.ok) throw new Error(`INSERT ${table} failed: ${res.status} ${await res.text()}`);
+  }
+}
+
+// Swaps any old employee / week / shift / punch id for its new id, anywhere in
+// the row — plain columns and inside JSON (templates, exit summaries, etc.).
+function remapDeep(value, idMap) {
+  if (typeof value === 'string') return idMap[value] || value;
+  if (Array.isArray(value)) return value.map((v) => remapDeep(v, idMap));
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = remapDeep(v, idMap);
+    return out;
+  }
+  return value;
+}
+
+// Copies every row of a table from the template to the new business.
+// Each row gets a new id; references to cloned rows are remapped.
+async function cloneTable(table, newBusinessId, idMap, { keepIdMap, order } = {}) {
+  const rows = await sbGetAll(`${table}?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*${order ? `&order=${order}` : ''}`);
+  const out = rows.map((r) => {
+    const { id, created_at: _ca, updated_at: _ua, ...rest } = r;
+    const remapped = remapDeep(rest, idMap);
+    // Rows other tables point at get a known new id; everything else lets the
+    // database assign one (works whether the table uses uuid or serial ids).
+    if (keepIdMap && id !== undefined) {
+      const newId = randomUUID();
+      keepIdMap[id] = newId;
+      return { ...remapped, id: newId, business_id: newBusinessId };
+    }
+    return { ...remapped, business_id: newBusinessId };
   });
-  if (!res.ok) throw new Error(`INSERT ${table} failed: ${res.status} ${await res.text()}`);
+  await sbInsert(table, out);
+  return rows.length;
 }
 
 export default async function handler(req, res) {
@@ -39,11 +86,11 @@ export default async function handler(req, res) {
   let newBusinessId;
   try {
     newBusinessId = randomUUID();
+    const idMap = {}; // old id -> new id, for employees, weeks, shifts, punches
 
-    // 1. Clone the business row
-    const [templateBiz] = await sbGet(`businesses?id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
+    // 1. Business row (select=* so new columns — phone, season, etc. — come along)
+    const [templateBiz] = await sbGetAll(`businesses?id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
     if (!templateBiz) throw new Error('Template business not found — check TEMPLATE_BUSINESS_ID');
-
     const { id: _oldId, created_at, updated_at, is_template, ...bizRest } = templateBiz;
     await sbInsert('businesses', {
       ...bizRest,
@@ -53,119 +100,24 @@ export default async function handler(req, res) {
       is_template: false,
     });
 
-    // 2. Clone employees — build old_id -> new_id map
-    const employees = await sbGet(`employees?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
-    const employeeIdMap = {};
-    const newEmployees = employees.map((e) => {
-      const newId = randomUUID();
-      employeeIdMap[e.id] = newId;
-      const { id, created_at: _ca, updated_at: _ua, ...rest } = e;
-      return { ...rest, id: newId, business_id: newBusinessId };
-    });
-    await sbInsert('employees', newEmployees);
+    // 2–5. Tables other rows point at — cloned in order so every id is mapped first
+    await cloneTable('employees', newBusinessId, idMap, { keepIdMap: idMap });
+    await cloneTable('schedule_weeks', newBusinessId, idMap, { keepIdMap: idMap });
+    await cloneTable('shifts', newBusinessId, idMap, { keepIdMap: idMap });
+    await cloneTable('punches', newBusinessId, idMap, { keepIdMap: idMap, order: 'punched_at.asc' });
 
-    // 3. Clone schedule_weeks — build old_id -> new_id map
-    const weeks = await sbGet(`schedule_weeks?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
-    const weekIdMap = {};
-    const newWeeks = weeks.map((w) => {
-      const newId = randomUUID();
-      weekIdMap[w.id] = newId;
-      const { id, created_at: _ca, ...rest } = w;
-      return { ...rest, id: newId, business_id: newBusinessId };
-    });
-    await sbInsert('schedule_weeks', newWeeks);
-
-    // 4. Clone shifts — remap employee_id + week_id
-    const shifts = await sbGet(`shifts?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
-    const newShifts = shifts.map((s) => {
-      const { id, created_at: _ca, updated_at: _ua, ...rest } = s;
-      return {
-        ...rest,
-        id: randomUUID(),
-        business_id: newBusinessId,
-        week_id: weekIdMap[s.week_id],
-        employee_id: employeeIdMap[s.employee_id],
-      };
-    });
-    await sbInsert('shifts', newShifts);
-
-    // 5. Clone published_schedules — remap employee ids inside the jsonb payloads
-    const schedules = await sbGet(`published_schedules?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
-    const newSchedules = schedules.map((ps) => {
-      const { id, published_at: _pa, ...rest } = ps;
-      const remappedScheduleData = (ps.schedule_data || []).map((entry) => ({
-        ...entry,
-        employee_id: employeeIdMap[entry.employee_id] || entry.employee_id,
-      }));
-      const remappedSnapshot = (ps.employee_snapshot || []).map((emp) => ({
-        ...emp,
-        id: employeeIdMap[emp.id] || emp.id,
-      }));
-      return {
-        ...rest,
-        id: randomUUID(),
-        business_id: newBusinessId,
-        schedule_data: remappedScheduleData,
-        employee_snapshot: remappedSnapshot,
-      };
-    });
-    await sbInsert('published_schedules', newSchedules);
-
-    // 6. Clone punches — remap employee_id, build old_id -> new_id map for reviews
-    const punches = await sbGet(`punches?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
-    const punchIdMap = {};
-    const newPunches = punches.map((p) => {
-      const newId = randomUUID();
-      punchIdMap[p.id] = newId;
-      const { id, created_at: _ca, ...rest } = p;
-      return {
-        ...rest,
-        id: newId,
-        business_id: newBusinessId,
-        employee_id: employeeIdMap[p.employee_id] || p.employee_id,
-      };
-    });
-    await sbInsert('punches', newPunches);
-
-    // 7. Clone sales_data (no employee refs)
-    const sales = await sbGet(`sales_data?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
-    const newSales = sales.map((s) => {
-      const { id, created_at: _ca, updated_at: _ua, ...rest } = s;
-      return { ...rest, id: randomUUID(), business_id: newBusinessId };
-    });
-    await sbInsert('sales_data', newSales);
-
-    // 8. Clone pulse_history
-    const pulse = await sbGet(`pulse_history?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
-    const newPulse = pulse.map((p) => {
-      const { id, ...rest } = p;
-      return { ...rest, id: randomUUID(), business_id: newBusinessId };
-    });
-    await sbInsert('pulse_history', newPulse);
-
-    // 9. Clone punch_reviews — remap punch_id and reviewed_by
-    const reviews = await sbGet(`punch_reviews?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
-    const newReviews = reviews
-      .filter((r) => punchIdMap[r.punch_id])
-      .map((r) => {
-        const { id, ...rest } = r;
-        return {
-          ...rest,
-          id: randomUUID(),
-          business_id: newBusinessId,
-          punch_id: punchIdMap[r.punch_id],
-          reviewed_by: employeeIdMap[r.reviewed_by] || r.reviewed_by,
-        };
-      });
-    await sbInsert('punch_reviews', newReviews);
-
-    // 10. Clone dashboard_widgets (no employee refs, straightforward copy)
-    const widgets = await sbGet(`dashboard_widgets?business_id=eq.${TEMPLATE_BUSINESS_ID}&select=*`);
-    const newWidgets = widgets.map((w) => {
-      const { id, created_at: _ca, ...rest } = w;
-      return { ...rest, id: randomUUID(), business_id: newBusinessId };
-    });
-    await sbInsert('dashboard_widgets', newWidgets);
+    // 6. Everything else, in parallel. Previously cloned: published_schedules,
+    //    sales_data, pulse_history, punch_reviews, dashboard_widgets.
+    //    Added (were missing from the demo): hours, shift types, fixed costs,
+    //    hourly + item sales, item names, price history, weather, no-shows,
+    //    exit records, open shifts, templates, timesheet locks, recognition.
+    const rest = [
+      'published_schedules', 'sales_data', 'pulse_history', 'punch_reviews', 'dashboard_widgets',
+      'business_hours', 'shift_types', 'business_costs',
+      'sales_hourly', 'sales_items_daily', 'sales_item_names', 'catalog_price_history', 'daily_weather',
+      'attendance_events', 'employee_exits', 'open_shifts', 'templates', 'timesheet_locks', 'recognition',
+    ];
+    await Promise.all(rest.map((t) => cloneTable(t, newBusinessId, idMap)));
 
     return res.status(200).json({ business_id: newBusinessId });
   } catch (err) {
