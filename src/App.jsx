@@ -207,6 +207,35 @@ function calcActualHours(dayPunches) {
   }
   return parseFloat(hrs.toFixed(2));
 }
+// ── SEASON (UI Batch 21) ──────────────────────────────────────────────────
+// A seasonal business opens and closes on the same month/day every year.
+// season = { on, open:"MM-DD", close:"MM-DD" }. A season can wrap the new
+// year (e.g. open 11-01, close 02-28). When `on` is false every date is open.
+const SEASON_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+function isSeasonOpen(dateStr, season) {
+  if (!season?.on || !season.open || !season.close || !dateStr) return true;
+  const md = String(dateStr).slice(5, 10);
+  return season.open <= season.close
+    ? (md >= season.open && md <= season.close)
+    : (md >= season.open || md <= season.close);
+}
+function seasonInfo(todayStr, season) {
+  if (!season?.on || !season.open || !season.close) return { seasonal:false, open:true };
+  const y = Number(todayStr.slice(0,4));
+  const open = isSeasonOpen(todayStr, season);
+  const next = (md) => { let d = `${y}-${md}`; if (d < todayStr) d = `${y+1}-${md}`; return d; };   // on/after today
+  const prev = (md) => { let d = `${y}-${md}`; if (d > todayStr) d = `${y-1}-${md}`; return d; };   // on/before today
+  if (open) {
+    const start = prev(season.open);
+    return { seasonal:true, open:true, closes: next(season.close), current:{ start, end: next(season.close) } };
+  }
+  const end = prev(season.close);
+  let start = `${end.slice(0,4)}-${season.open}`; if (start > end) start = `${Number(end.slice(0,4))-1}-${season.open}`;
+  const weeks = Math.round((new Date(end+"T12:00:00") - new Date(start+"T12:00:00")) / (7*86400000)) + 1;
+  return { seasonal:true, open:false, reopens: next(season.open), last:{ start, end, weeks } };
+}
+const fmtLongDate = s => s ? new Date(s+"T12:00:00").toLocaleDateString("en-US",{month:"long",day:"numeric",year:"numeric"}) : "";
+
 const weekDatesFromSunday = s => { const sun=new Date(s+"T12:00:00"); return DAYS.map((_,i)=>{ const d=new Date(sun.getTime()+i*24*60*60*1000); return d; }); };
 const dl = d => { if(!d) return ""; const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
 const toInputDate = d => { const dt=typeof d==="string"?new Date(d+"T00:00:00"):d; return toLocalDateStr(dt); };
@@ -850,6 +879,10 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
   const [addrZip,   setAddrZip]   = useState("");
   const [weekStart, setWeekStart] = useState("Sunday");
   const [daysOpen,  setDaysOpen]  = useState([0,1,2,3,4,5,6]);
+  // UI Batch 21 — seasonal business, same dates every year ("MM-DD")
+  const [seasonOn,    setSeasonOn]    = useState(false);
+  const [seasonOpen,  setSeasonOpen]  = useState("03-01");
+  const [seasonClose, setSeasonClose] = useState("09-30");
   const [budget,    setBudget]    = useState("");
   const [employees, setEmployees] = useState([]);
   const [addingEmp, setAddingEmp] = useState(false);
@@ -875,7 +908,7 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
 
   const canNext = [
     bizName.trim().length > 0,
-    daysOpen.length >= 1,
+    daysOpen.length >= 1 && !(seasonOn && seasonOpen === seasonClose),
     true,
     employees.length >= 1 && !addingEmp,
     true,
@@ -894,6 +927,9 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
         zip:            addrZip.trim() || null,
         days_open:      daysOpen,
         weekly_budget:  budgetNum > 0 ? budgetNum : null,
+        seasonal:       seasonOn,
+        season_open:    seasonOn ? seasonOpen : null,
+        season_close:   seasonOn ? seasonClose : null,
         setup_complete: true,
       });
       let insertedEmps = [];
@@ -1026,6 +1062,47 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
                   : `Open ${daysOpen.length} day${daysOpen.length!==1?"s":""} · ${7-daysOpen.length} closed`}
               </div>
             </div>
+            {(()=>{
+              const daysIn = m => new Date(2024, m, 0).getDate();
+              const mk = (m, d) => `${String(m).padStart(2,"0")}-${String(Math.min(d, daysIn(m))).padStart(2,"0")}`;
+              const sel = { appearance:"none", WebkitAppearance:"none", height:42, border:"1.5px solid #DAD7D0", borderRadius:9, background:"#FFFFFF", padding:"0 12px", fontSize:14, fontWeight:600, color:"#1A1A1A", fontFamily:"inherit", cursor:"pointer" };
+              const pick = (val, setVal, label) => {
+                const m = Number(val.slice(0,2)), d = Number(val.slice(3));
+                return (
+                  <fieldset style={{border:"none",padding:0,margin:0,display:"flex",gap:8,alignItems:"flex-end"}}>
+                    <legend style={{fontSize:12,fontWeight:700,color:"#6B6B67",marginBottom:5,padding:0}}>{label}</legend>
+                    <select aria-label={`${label} month`} value={m} onChange={e=>setVal(mk(Number(e.target.value), d))} style={{...sel,width:150}}>
+                      {SEASON_MONTHS.map((name,i)=><option key={name} value={i+1}>{name}</option>)}
+                    </select>
+                    <select aria-label={`${label} day`} value={d} onChange={e=>setVal(mk(m, Number(e.target.value)))} style={{...sel,width:80}}>
+                      {Array.from({length:daysIn(m)},(_,i)=><option key={i+1} value={i+1}>{i+1}</option>)}
+                    </select>
+                  </fieldset>
+                );
+              };
+              return (
+                <div className="sw-fgroup" style={{marginTop:18}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,padding:"14px 16px",border:"1.5px solid #E6E3DC",borderRadius:12,background:"#FFFFFF"}}>
+                    <div>
+                      <div style={{fontSize:14.5,fontWeight:800,color:"#1A1A1A"}}>Seasonal business?</div>
+                      <div style={{fontSize:12.5,color:"#6B6B67",marginTop:2}}>Turn on if you close part of the year. Closed weeks won't drag down your numbers.</div>
+                    </div>
+                    <button type="button" role="switch" aria-checked={seasonOn} aria-label="Seasonal business" onClick={()=>setSeasonOn(v=>!v)}
+                      style={{width:48,height:28,borderRadius:999,border:"none",background:seasonOn?"#2D6A4F":"#D5D2CB",position:"relative",cursor:"pointer",flexShrink:0,transition:"background 0.15s"}}>
+                      <span style={{position:"absolute",top:3,left:seasonOn?23:3,width:22,height:22,borderRadius:999,background:"white",transition:"left 0.15s"}}/>
+                    </button>
+                  </div>
+                  {seasonOn && (
+                    <div style={{display:"flex",gap:20,flexWrap:"wrap",marginTop:12}}>
+                      {pick(seasonOpen, setSeasonOpen, "Opens")}
+                      {pick(seasonClose, setSeasonClose, "Closes")}
+                    </div>
+                  )}
+                  {seasonOn && seasonOpen === seasonClose && <div style={{fontSize:12.5,color:"#A93226",marginTop:8}}>Opens and closes on the same day — pick different dates.</div>}
+                  {seasonOn && <div className="sw-days-hint">Same dates every year. Change them any time in Settings → General → Season.</div>}
+                </div>
+              );
+            })()}
             <div className="sw-footer">
               <button className="sw-btn-back" onClick={()=>setStep(0)}>← Back</button>
               <button className="sw-btn-next" disabled={!canNext[1]} onClick={()=>setStep(2)}>Continue →</button>
@@ -1190,6 +1267,7 @@ function SetupFlow({ bizId, onComplete, initialStep, squareConnected, onConnectS
               <div className="sw-review-row"><span className="sw-review-label">Address</span><span className="sw-review-val">{[addrLine,addrCity,[addrState.toUpperCase(),addrZip].filter(Boolean).join(" ")].filter(x=>x&&x.trim()).join(", ")||"Not set"}</span></div>
               <div className="sw-review-row"><span className="sw-review-label">Week starts</span><span className="sw-review-val">{weekStart}</span></div>
               <div className="sw-review-row"><span className="sw-review-label">Weekly budget</span><span className="sw-review-val">{budgetNum>0?fmt$(budgetNum):"Not set"}</span></div>
+              <div className="sw-review-row"><span className="sw-review-label">Season</span><span className="sw-review-val">{seasonOn ? (()=>{ const md = s => `${SEASON_MONTHS[Number(s.slice(0,2))-1]} ${Number(s.slice(3))}`; return `${md(seasonOpen)} – ${md(seasonClose)} each year`; })() : "Open year-round"}</span></div>
             </div>
             <div className="sw-review-section">
               <div className="sw-review-title">Days of operation</div>
@@ -1492,6 +1570,7 @@ export default function App() {
   const [widgets,        setWidgets]        = useState([]);
   // Break-even + week check
   const [laborTargetPct, setLaborTargetPct] = useState(30);   // businesses.labor_target_pct
+  const [season, setSeason] = useState({ on:false, open:"03-01", close:"09-30" }); // businesses.seasonal / season_open / season_close
   const [bizAddress,     setBizAddress]     = useState({ line:"", city:"", state:"", zip:"" });
   const [addrDraft,      setAddrDraft]      = useState(null);   // editing copy in Settings
   const [weatherInfo,    setWeatherInfo]    = useState({ status:null, latestDate:null });
@@ -2024,6 +2103,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       setWeeklyBudget(business.weekly_budget ?? null);
       if (business.cash_mode) setCashMode(true);
       setLaborTargetPct(Number(business.labor_target_pct) > 0 ? Number(business.labor_target_pct) : 30);
+      setSeason({ on: !!business.seasonal, open: business.season_open || "03-01", close: business.season_close || "09-30" });
       setBizAddress({ line: business.address_line || "", city: business.city || "", state: business.state || "", zip: business.zip || "" });
       setAddrDraft(null);
       {
@@ -9606,6 +9686,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
               general: [
                 { id:"profile",    label:"Business profile",   sub: biz || "Name and address" },
                 { id:"hours",      label:"Hours of operation", sub: (()=>{ const set = Object.values(businessHours).filter(h=>!h.closed).length; return set>0?`${set} day${set!==1?"s":""}  configured`:"Not configured yet"; })() },
+                { id:"season",     label:"Season",             sub: (()=>{ if (!season.on) return "Open year-round"; const si = seasonInfo(demoToday, season); const md = s => `${SEASON_MONTHS[Number(s.slice(0,2))-1].slice(0,3)} ${Number(s.slice(3))}`; return `${md(season.open)} – ${md(season.close)} · ${si.open ? "open now" : "closed now"}`; })() },
                 { id:"labor",      label:"Labor cost target",  sub: `${laborTargetPct || 30}% of sales` },
                 { id:"shifts",     label:"Shift types",        sub: `${shiftTypes.length} type${shiftTypes.length!==1?"s":""}` },
                 { id:"appearance", label:"Appearance",         sub: THEMES[themeId]?.name || "Theme" },
@@ -9844,6 +9925,74 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 )}
 
                 {/* HOURS OF OPERATION */}
+                {curSec==="general" && gf("season") && (()=>{
+                  const save = next => { setSeason(next); saveBizSettings({ seasonal: next.on, season_open: next.open, season_close: next.close }); };
+                  const si = seasonInfo(demoToday, season);
+                  const daysIn = m => new Date(2024, m, 0).getDate(); // leap year, so Feb 29 is pickable
+                  const part = (md) => ({ m: Number(md.slice(0,2)), d: Number(md.slice(3)) });
+                  const mk = (m, d) => `${String(m).padStart(2,"0")}-${String(Math.min(d, daysIn(m))).padStart(2,"0")}`;
+                  const sel = {appearance:"none",WebkitAppearance:"none",height:42,border:`1.5px solid ${T.border}`,borderRadius:9,background:T.surface,padding:"0 30px 0 12px",fontSize:14,fontWeight:600,color:T.text,fontFamily:"inherit",cursor:"pointer"};
+                  const chev = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={T.sub} strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{position:"absolute",right:10,top:14,pointerEvents:"none"}}><path d="m6 9 6 6 6-6"/></svg>;
+                  const datePick = (key, label) => {
+                    const { m, d } = part(season[key]);
+                    return (
+                      <fieldset style={{border:"none",padding:0,margin:0,display:"flex",gap:8,alignItems:"flex-end"}}>
+                        <legend style={{fontSize:12,fontWeight:700,color:T.sub,marginBottom:5,padding:0}}>{label}</legend>
+                        <div style={{position:"relative"}}>
+                          <select aria-label={`${label} month`} value={m} disabled={!season.on} onChange={e=>save({ ...season, [key]: mk(Number(e.target.value), d) })} style={{...sel,width:150,opacity:season.on?1:0.5}}>
+                            {SEASON_MONTHS.map((name,i)=><option key={name} value={i+1}>{name}</option>)}
+                          </select>{chev}
+                        </div>
+                        <div style={{position:"relative"}}>
+                          <select aria-label={`${label} day`} value={d} disabled={!season.on} onChange={e=>save({ ...season, [key]: mk(m, Number(e.target.value)) })} style={{...sel,width:84,opacity:season.on?1:0.5}}>
+                            {Array.from({length:daysIn(m)},(_,i)=><option key={i+1} value={i+1}>{i+1}</option>)}
+                          </select>{chev}
+                        </div>
+                      </fieldset>
+                    );
+                  };
+                  return (
+                    <div style={{display:"flex",flexDirection:"column",gap:14,maxWidth:640}}>
+                      <p style={{margin:0,fontSize:13,color:T.sub,lineHeight:1.5}}>For businesses that close part of the year. The same dates repeat every year.</p>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,padding:"14px 16px",background:T.surface,border:`1px solid ${T.border}`,borderRadius:12}}>
+                        <div>
+                          <div style={{fontSize:14.5,fontWeight:800,color:T.text}}>Seasonal business</div>
+                          <div style={{fontSize:12.5,color:T.sub,marginTop:2}}>Turn off if you're open year-round.</div>
+                        </div>
+                        <button role="switch" aria-checked={season.on} aria-label="Seasonal business" onClick={()=>save({ ...season, on: !season.on })}
+                          style={{width:48,height:28,borderRadius:999,border:"none",background:season.on?T.accent:T.border,position:"relative",cursor:"pointer",flexShrink:0,transition:"background 0.15s"}}>
+                          <span style={{position:"absolute",top:3,left:season.on?23:3,width:22,height:22,borderRadius:999,background:"white",transition:"left 0.15s"}}/>
+                        </button>
+                      </div>
+                      <div style={{display:"flex",gap:22,flexWrap:"wrap"}}>
+                        {datePick("open","Opens")}
+                        {datePick("close","Closes")}
+                      </div>
+                      {season.on && (
+                        <div role="status" style={{background:si.open?T.accent+"12":"#F6EEE3",border:`1px solid ${si.open?T.accent+"40":"#E8D6BD"}`,borderRadius:12,padding:"12px 14px",fontSize:13.5,lineHeight:1.5,color:T.text}}>
+                          {si.open
+                            ? <><strong>Open now.</strong> This season closes {fmtLongDate(si.closes)}.</>
+                            : <><strong>Closed now.</strong> Reopens {fmtLongDate(si.reopens)}. Last season ran {fmtLongDate(si.last.start)} – {fmtLongDate(si.last.end)} ({si.last.weeks} weeks).</>}
+                        </div>
+                      )}
+                      {season.on && season.open === season.close && (
+                        <div style={{fontSize:12.5,color:"#A93226"}}>Opens and closes on the same day — pick different dates.</div>
+                      )}
+                      <div>
+                        <div style={{fontSize:12,fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",color:T.sub,marginBottom:8}}>What this changes</div>
+                        <ul style={{margin:0,paddingLeft:18,fontSize:13.5,lineHeight:1.55,color:T.text}}>
+                          <li>Closed weeks are left out of averages — Pulse, trends, Labor %, widgets, Report Builder.</li>
+                          <li>The Weekly Pulse email pauses until you reopen.</li>
+                          <li>Week-over-week comparisons skip the closed stretch and compare to the same week last season.</li>
+                          <li>Break-even stops flagging days you weren't open; fixed costs still show.</li>
+                          <li>Employee value uses the open weeks they actually worked.</li>
+                        </ul>
+                      </div>
+                      <div style={{fontSize:12,color:T.sub}}>Changes save automatically.</div>
+                    </div>
+                  );
+                })()}
+
                 {curSec==="general" && gf("hours") && (
                   <div style={{display:"flex",flexDirection:"column",gap:11}}>
                     <p style={{margin:0,fontSize:12,color:T.sub,lineHeight:1.6}}>
