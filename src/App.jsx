@@ -7952,6 +7952,31 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             {pendingFlags>0&&<span style={{background:"#C0392B",color:"white",borderRadius:10,padding:"1px 8px",fontSize:10,fontWeight:700}}>{pendingFlags} flag{pendingFlags!==1?"s":""} pending</span>}
           </div>
         </div>
+      </div>
+
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:14}}>
+      {/* Week picker — matches Schedule tab's Prev / range / calendar / Next pattern */}
+      <div className="sw-datebar" style={{display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap",background:T.muted,border:`1px solid ${T.border}`,borderRadius:12,padding:4,boxShadow:"inset 0 1px 0 rgba(255,255,255,0.6)"}}>
+        <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,-7)))}
+          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
+        <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
+          <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",justifyContent:"center",gap:6,minWidth:170,boxSizing:"border-box",fontVariantNumeric:"tabular-nums"}}>
+            <span style={{fontSize:10}}>●</span>
+            {tsWkLabel}
+          </div>
+          <div style={{position:"relative",flexShrink:0,borderLeft:`1px solid ${T.accent}40`}}>
+            <input type="date" value={tsWeekStart} onChange={e=>setTsWeekStart(getSunday(e.target.value))}
+              style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
+            <div style={{background:T.accent+"18",padding:"8px 10px",fontSize:13,cursor:"pointer",userSelect:"none",color:T.accent}}>📅</div>
+          </div>
+        </div>
+        <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,7)))}
+          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
+        {(()=>{ const atToday = tsWeekStart === getSunday(demoToday); return (
+          <button onClick={()=>setTsWeekStart(getSunday(demoToday))} disabled={atToday} aria-disabled={atToday} title={atToday ? "Already on this week" : "Jump to this week"}
+                          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,padding:"0 14px",height:36,fontSize:12,fontWeight:700,color:T.accent,cursor:atToday?"default":"pointer",opacity:atToday?0.45:1,flexShrink:0}}>Today</button>
+        ); })()}
+      </div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
           {/* Approved summary pill */}
           {totalApprovedHrs>0&&(
@@ -8004,29 +8029,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             🔒 Lock & Save
           </button>
         </div>
-      </div>
-
-      {/* Week picker — matches Schedule tab's Prev / range / calendar / Next pattern */}
-      <div className="sw-datebar" style={{display:"inline-flex",alignItems:"center",gap:6,marginBottom:14,flexWrap:"wrap",background:T.muted,border:`1px solid ${T.border}`,borderRadius:12,padding:4,boxShadow:"inset 0 1px 0 rgba(255,255,255,0.6)"}}>
-        <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,-7)))}
-          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>‹</button>
-        <div style={{display:"flex",alignItems:"center",borderRadius:9,overflow:"hidden",border:`2px solid ${T.accent}`,boxShadow:`0 0 0 2px ${T.accent}28`}}>
-          <div style={{background:T.accent,color:"white",padding:"8px 16px",fontWeight:700,fontSize:12,whiteSpace:"nowrap",display:"flex",alignItems:"center",justifyContent:"center",gap:6,minWidth:170,boxSizing:"border-box",fontVariantNumeric:"tabular-nums"}}>
-            <span style={{fontSize:10}}>●</span>
-            {tsWkLabel}
-          </div>
-          <div style={{position:"relative",flexShrink:0,borderLeft:`1px solid ${T.accent}40`}}>
-            <input type="date" value={tsWeekStart} onChange={e=>setTsWeekStart(getSunday(e.target.value))}
-              style={{opacity:0,position:"absolute",inset:0,cursor:"pointer",width:"100%",height:"100%"}}/>
-            <div style={{background:T.accent+"18",padding:"8px 10px",fontSize:13,cursor:"pointer",userSelect:"none",color:T.accent}}>📅</div>
-          </div>
-        </div>
-        <button onClick={()=>setTsWeekStart(getSunday(addDays(tsWeekStart,7)))}
-          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,width:34,height:36,fontSize:16,cursor:"pointer",color:T.sub,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,flexShrink:0}}>›</button>
-        {(()=>{ const atToday = tsWeekStart === getSunday(demoToday); return (
-          <button onClick={()=>setTsWeekStart(getSunday(demoToday))} disabled={atToday} aria-disabled={atToday} title={atToday ? "Already on this week" : "Jump to this week"}
-                          style={{background:T.surface,border:`1px solid ${T.border}`,borderRadius:8,padding:"0 14px",height:36,fontSize:12,fontWeight:700,color:T.accent,cursor:atToday?"default":"pointer",opacity:atToday?0.45:1,flexShrink:0}}>Today</button>
-        ); })()}
       </div>
 
       {/* Grid — styled to match the Schedule tab's weekly grid */}
