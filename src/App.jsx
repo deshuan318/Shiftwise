@@ -532,6 +532,23 @@ const THEMES = {
   },
 };
 
+// UI Batch 27 — weather icons for the header widget (sun, partly, cloud, rain, storm, snow, moon)
+const WeatherIcon = ({ c, text, day=true, size=20, color="#6B7B6E", sun="#E0A526", wet="#2B5B8A", sw=2 }) => {
+  const t = (text||"").toLowerCase();
+  const partly = c==="sunny" && /partly|mostly cloudy|mostly sunny/.test(t);
+  const p = { width:size, height:size, viewBox:"0 0 24 24", fill:"none", strokeWidth:sw, strokeLinecap:"round", strokeLinejoin:"round", "aria-hidden":true, style:{flexShrink:0} };
+  const cloud = "M7 18h10a4 4 0 0 0 0-8 5.5 5.5 0 0 0-10.6 1.5A3.3 3.3 0 0 0 7 18z";
+  const raincloud = "M7 15h10a4 4 0 0 0 0-8 5.5 5.5 0 0 0-10.6 1.5A3.3 3.3 0 0 0 7 15z";
+  if (c==="sunny" && !partly) return day
+    ? <svg {...p} stroke={sun}><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    : <svg {...p} stroke={color}><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>;
+  if (partly && day) return <svg {...p}><circle cx="9" cy="9" r="3.5" stroke={sun}/><path d="M9 2v1.5M3.5 4.5l1 1M2 9h1.5M14.5 4.5l-1 1" stroke={sun}/><path d="M8 20h9a4 4 0 0 0 0-8 5 5 0 0 0-9.6 1.5A3.3 3.3 0 0 0 8 20z" stroke={color}/></svg>;
+  if (c==="rainy") return <svg {...p} stroke={wet}><path d={raincloud}/><path d="M8 18l-1 3M12 18l-1 3M16 18l-1 3"/></svg>;
+  if (c==="storm") return <svg {...p} stroke={color}><path d="M7 14h10a4 4 0 0 0 0-8 5.5 5.5 0 0 0-10.6 1.5A3.3 3.3 0 0 0 7 14z"/><path d="M12 15l-2 4h3l-2 4" stroke={sun}/></svg>;
+  if (c==="snowy") return <svg {...p} stroke={wet}><path d={raincloud}/><path d="M8 19h.01M12 21h.01M16 19h.01"/></svg>;
+  return <svg {...p} stroke={color}><path d={cloud}/></svg>;
+};
+
 const Card = ({ children, style={}, T }) => (
   <div style={{ background:T.surface, borderRadius:T.radius, boxShadow:T.shadow, overflow:"visible", ...style }}>
     {children}
@@ -1579,6 +1596,7 @@ export default function App() {
   const [addrDraft,      setAddrDraft]      = useState(null);   // editing copy in Settings
   const [weatherInfo,    setWeatherInfo]    = useState({ status:null, latestDate:null });
   const [weatherNow,     setWeatherNow]     = useState(null); // current + forecast from /api/weather
+  const [weatherOpen,    setWeatherOpen]    = useState(false);
   const [costs,          setCosts]          = useState([]);   // business_costs rows
   const [costsOpen,      setCostsOpen]      = useState(false);
   const [costDraft,      setCostDraft]      = useState(null); // {id?, name, amount, kind, frequency} while adding/editing
@@ -7593,17 +7611,98 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     p.flags?.includes("NO_SHIFT") // only NO_SHIFT needs bell alert — ADJUSTMENT is auto-approved now
   ).length;
   return (
-    <button onClick={()=>setAlertsOpen(p=>!p)}
-      style={{position:"relative",background:"transparent",border:"none",cursor:"pointer",padding:"4px 6px",display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <span style={{fontSize:20,lineHeight:1}}>🔔</span>
+    <button onClick={()=>setAlertsOpen(p=>!p)} aria-label="Alerts" aria-expanded={alertsOpen}
+      style={{position:"relative",width:40,height:40,borderRadius:10,border:"1px solid rgba(255,255,255,0.28)",background:alertsOpen?"rgba(255,255,255,0.2)":"rgba(255,255,255,0.14)",cursor:"pointer",padding:0,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+      {/* UI Batch 29 — bordered bell, left of weather */}
+      <span style={{fontSize:18,lineHeight:1}}>🔔</span>
       {unreviewed > 0 && (
-        <span style={{position:"absolute",top:0,right:0,background:"#C0392B",color:"white",borderRadius:"50%",width:16,height:16,fontSize:9,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",border:"2px solid #1C2B22"}}>
+        <span style={{position:"absolute",top:-5,right:-5,background:"#C0392B",color:"white",borderRadius:"50%",width:16,height:16,fontSize:9,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center",border:"2px solid #1C2B22"}}>
           {unreviewed > 9 ? "9+" : unreviewed}
         </span>
       )}
     </button>
   );
 })()}
+              {/* UI Batch 27 — header weather widget (works like a computer's taskbar weather) */}
+              {weatherNow?.current?.tempF != null && (()=>{
+                const w = weatherNow;
+                const hr12 = iso => { const h = new Date(iso).getHours(); return `${h%12===0?12:h%12} ${h<12?"AM":"PM"}`; };
+                const condText = { sunny:"Sunny", cloudy:"Cloudy", rainy:"Rain", storm:"Storms", snowy:"Snow" };
+                const nowMs = Date.now();
+                const hours = (w.hourly||[]).filter(h => new Date(h.time).getTime() > nowMs - 3600000).slice(0,8);
+                const days = (w.daily||[]).slice(0,5);
+                const todayRow = days[0];
+                const updated = w.fetchedAt ? new Date(w.fetchedAt).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}) : null;
+                const y = w.yesterday;
+                const toggle = () => {
+                  // Refresh if the reading is more than 30 minutes old
+                  if (!weatherOpen && w.fetchedAt && nowMs - new Date(w.fetchedAt).getTime() > 30*60000) refreshWeather(bizId);
+                  setWeatherOpen(o => !o);
+                };
+                const lbl = {fontSize:12,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",color:T.sub};
+                const wet = themeId === "commander" ? "#7DB3E8" : "#2B5B8A";
+                return (
+                  <div style={{position:"relative"}}>
+                    <button onClick={toggle} aria-expanded={weatherOpen} aria-label={`Weather: ${w.current.tempF} degrees${w.current.text?`, ${w.current.text}`:""}`}
+                      style={{display:"flex",alignItems:"center",gap:8,height:40,padding:"0 14px",borderRadius:10,border:"1px solid rgba(255,255,255,0.28)",background:weatherOpen?"rgba(255,255,255,0.2)":"rgba(255,255,255,0.14)",color:"white",fontSize:15,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      {/* UI Batch 28 — widget styled to match the approved mockup */}
+                      <WeatherIcon c={w.current.condition} text={w.current.text} day={w.current.isDay!==false} size={22} color="#FFFFFF" sun="#F2C14E" wet="#9CC8F0"/>
+                      {w.current.tempF}°
+                    </button>
+                    {weatherOpen && (<>
+                      <div onClick={()=>setWeatherOpen(false)} style={{position:"fixed",inset:0,zIndex:450}}/>
+                      <div role="dialog" aria-label="Weather" style={{position:"absolute",top:50,right:0,zIndex:460,width:440,maxWidth:"calc(100vw - 24px)",background:T.surface,color:T.text,borderRadius:18,border:`1px solid ${T.border}`,boxShadow:"0 18px 50px rgba(28,43,34,0.28)",padding:"20px 22px",display:"flex",flexDirection:"column",gap:14,textAlign:"left",boxSizing:"border-box"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:14}}>
+                          <WeatherIcon c={w.current.condition} text={w.current.text} day={w.current.isDay!==false} size={54} color={T.sub} wet={wet} sw={1.6}/>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
+                              <span style={{fontSize:42,fontWeight:800,lineHeight:1}}>{w.current.tempF}°</span>
+                              {todayRow && (todayRow.highF!=null || todayRow.lowF!=null) && <span style={{fontSize:14,fontWeight:600,color:T.sub}}>{todayRow.highF!=null?`H ${todayRow.highF}°`:""}{todayRow.highF!=null&&todayRow.lowF!=null?" · ":""}{todayRow.lowF!=null?`L ${todayRow.lowF}°`:""}</span>}
+                            </div>
+                            <div style={{fontSize:15,fontWeight:700,marginTop:4}}>{w.current.text || condText[w.current.condition] || ""}</div>
+                            <div style={{fontSize:12.5,color:T.sub}}>{[w.place, updated && `updated ${updated}`].filter(Boolean).join(" · ")}</div>
+                          </div>
+                        </div>
+                        {hours.length > 0 && (
+                          <div>
+                            <div style={{...lbl,marginBottom:8}}>Next hours</div>
+                            <div style={{display:"grid",gridTemplateColumns:`repeat(${hours.length},minmax(0,1fr))`,gap:4}}>
+                              {hours.map(h=>(
+                                <div key={h.time} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6,fontSize:13}}>
+                                  <span style={{color:T.sub,whiteSpace:"nowrap"}}>{hr12(h.time)}</span>
+                                  <WeatherIcon c={h.condition} text={h.text} day={h.isDay} size={20} color={T.sub} wet={wet}/>
+                                  <b>{h.tempF}°</b>
+                                  <span style={{fontSize:11,fontWeight:700,color:wet,minHeight:14}}>{h.pop>=10?`${h.pop}%`:""}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        {days.length > 0 && (
+                          <div>
+                            <div style={lbl}>Next {days.length} days</div>
+                            {days.map((d,i)=>(
+                              <div key={d.date} style={{display:"grid",gridTemplateColumns:"62px 28px minmax(0,1fr) 74px",alignItems:"center",gap:10,padding:"10px 0",borderTop:i?`1px solid ${T.muted}`:"none",fontSize:14}}>
+                                <b>{i===0?"Today":new Date(d.date+"T12:00:00").toLocaleDateString("en-US",{weekday:"short"})}</b>
+                                <WeatherIcon c={d.condition} text={d.text} day={true} size={20} color={T.sub} wet={wet}/>
+                                <span style={{minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{d.text || condText[d.condition] || ""}{d.pop>=10 && <span style={{fontSize:11,fontWeight:700,color:wet,marginLeft:6}}>{d.pop}%</span>}</span>
+                                <span style={{whiteSpace:"nowrap",textAlign:"right"}}><b>{d.highF!=null?`${d.highF}°`:"—"}</b> <span style={{color:T.sub}}>{d.lowF!=null?`${d.lowF}°`:""}</span></span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {y && (
+                          <div style={{background:T.muted,borderRadius:12,padding:"11px 13px",fontSize:12.5,lineHeight:1.5}}>
+                            <b>Recorded {dl(y.weather_date)}:</b> {condText[y.condition] || y.condition}{y.high_f!=null?` · ${y.high_f}° / ${y.low_f}°`:""}
+                            <div style={{color:T.sub}}>Saved every day so reports can compare sales by weather.</div>
+                          </div>
+                        )}
+                      </div>
+                    </>)}
+                  </div>
+                );
+              })()}
+
               <button onClick={handleSignOut} style={{background:"rgba(255,255,255,0.05)",color:"#666",border:"1px solid rgba(255,255,255,0.08)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}} title="Sign Out">⎋</button>
             </div>
           </div>
