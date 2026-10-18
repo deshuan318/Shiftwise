@@ -7943,17 +7943,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   return (
     <div>
 
-      {/* Header */}
-      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:12}}>
-        <div>
-          <div style={{fontWeight:800,fontSize:16,color:T.text}}>Timesheet</div>
-          <div style={{fontSize:11,color:T.sub,marginTop:2,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-            Actual hours from kiosk · Review flags · Lock when ready for payroll
-            {pendingFlags>0&&<span style={{background:"#C0392B",color:"white",borderRadius:10,padding:"1px 8px",fontSize:10,fontWeight:700}}>{pendingFlags} flag{pendingFlags!==1?"s":""} pending</span>}
-          </div>
-        </div>
-      </div>
-
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap",marginBottom:14}}>
       {/* Week picker — matches Schedule tab's Prev / range / calendar / Next pattern */}
       <div className="sw-datebar" style={{display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap",background:T.muted,border:`1px solid ${T.border}`,borderRadius:12,padding:4,boxShadow:"inset 0 1px 0 rgba(255,255,255,0.6)"}}>
@@ -7978,6 +7967,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         ); })()}
       </div>
         <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          {pendingFlags>0&&<span style={{background:"#C0392B",color:"white",borderRadius:10,padding:"3px 10px",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{pendingFlags} flag{pendingFlags!==1?"s":""} pending</span>}
           {/* Approved summary pill */}
           {totalApprovedHrs>0&&(
             <div style={{background:T.surface,borderRadius:T.radius,padding:"8px 14px",fontSize:12,border:`1px solid ${T.border}`,display:"flex",gap:12,alignItems:"center"}}>
