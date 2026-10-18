@@ -8029,128 +8029,142 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         ); })()}
       </div>
 
-      {/* Grid */}
+      {/* Grid — styled to match the Schedule tab's weekly grid */}
       <div className="grid-scroll" style={{borderRadius:T.radius,boxShadow:T.shadowMd,marginBottom:14}}>
-        <table className="sched-table" style={{borderCollapse:"collapse",width:"100%",background:T.surface,minWidth:600}}>
+        <table className="sched-table" style={{borderCollapse:"collapse",width:"100%",background:T.surface,minWidth:760,tableLayout:"fixed"}}>
           <colgroup>
-            <col style={{width:110}}/>{DAYS.map(d=><col key={d}/>)}<col style={{width:80}}/>
+            <col style={{width:200}}/>{DAYS.map(d=><col key={d}/>)}<col style={{width:90}}/>
           </colgroup>
           <thead>
             <tr style={{background:T.dark}}>
-              <th style={{padding:"11px 12px",textAlign:"left",color:"#666",fontSize:10,fontWeight:700,letterSpacing:"0.08em"}}>EMPLOYEE</th>
+              <th style={{padding:"13px 16px",textAlign:"left",color:"#777",fontSize:11,fontWeight:700,letterSpacing:"0.08em"}}>EMPLOYEE</th>
               {tsWkDates.map((dateStr,i)=>{
                 const dayTotal = employees.reduce((s,emp)=>s+calcActualHours(getDayPunches(emp.id,dateStr)),0);
+                const isToday = dateStr === demoToday;
                 return (
-                  <th key={dateStr} style={{padding:"9px 4px",textAlign:"center",color:"white",fontSize:11,fontWeight:700}}>
+                  <th key={dateStr} style={{padding:"12px 6px",textAlign:"center",color:"white",fontSize:13,fontWeight:700,background:isToday?T.accent:"transparent",borderRadius:isToday?"8px 8px 0 0":0}}>
                     <div>{DAYS[i]}</div>
-                    <div style={{fontSize:9,color:"#666",fontWeight:400}}>{dl(new Date(dateStr+"T00:00:00"))}</div>
-                    {dayTotal>0&&<div style={{fontSize:9,color:T.accent,fontWeight:700,marginTop:1}}>{dayTotal.toFixed(1)}h</div>}
+                    <div style={{fontSize:10,color:isToday?"rgba(255,255,255,0.85)":"#777",fontWeight:isToday?700:400,marginTop:2}}>{isToday?"Today":dl(new Date(dateStr+"T00:00:00"))}</div>
+                    {dayTotal>0&&<div style={{fontSize:10,color:isToday?"white":T.accent,fontWeight:700,marginTop:2}}>{parseFloat(dayTotal.toFixed(1))}h</div>}
                   </th>
                 );
               })}
-              <th style={{padding:"9px 6px",textAlign:"center",color:T.accent,fontSize:10,fontWeight:700,letterSpacing:"0.06em"}}>ACTUAL<br/>HRS</th>
+              <th style={{padding:"12px 8px",textAlign:"center",color:T.accent,fontSize:11,fontWeight:700,letterSpacing:"0.06em"}}>ACTUAL</th>
             </tr>
           </thead>
           <tbody>
             {employees.length===0&&(
-              <tr><td colSpan={9} style={{padding:"40px",textAlign:"center",color:T.sub}}>No employees yet.</td></tr>
+              <tr><td colSpan={9} style={{padding:"52px 24px",textAlign:"center"}}>
+                <div style={{fontWeight:700,fontSize:14,color:T.sub,marginBottom:6}}>No team members yet</div>
+                <div style={{fontSize:12,color:T.sub}}>Add your roster in <strong style={{color:T.text}}>Settings</strong>.</div>
+              </td></tr>
             )}
             {employees.map((emp,ei)=>{
               const totalActual = parseFloat(tsWkDates.reduce((s,dateStr)=>s+calcActualHours(getDayPunches(emp.id,dateStr)),0).toFixed(2));
               const totalSched  = parseFloat(tsWkDates.reduce((s,_,di)=>s+shiftHrs(getTsShift(emp.id,di)),0).toFixed(2));
-              const delta = parseFloat((totalActual-totalSched).toFixed(2));
+              const totalPay    = totalActual*(parseFloat(emp.hourlyRate)||0);
               return (
                 <tr key={emp.id} style={{borderBottom:`1px solid ${T.border}`,background:ei%2===0?T.surface:"#FDFCFA"}}>
-                  <td style={{padding:"9px 12px",verticalAlign:"middle"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:7}}>
-                      <div style={{width:26,height:26,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:10,flexShrink:0}}>{emp.name?emp.name[0].toUpperCase():"?"}</div>
-                      <div>
-                        <div style={{fontWeight:700,fontSize:12,color:T.text}}>{emp.name||"New"}</div>
-
+                  <td className="emp-name-cell" style={{padding:"10px 14px",verticalAlign:"middle",minWidth:180,maxWidth:220}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10}}>
+                      <div style={{width:34,height:34,borderRadius:"50%",background:emp.color,display:"flex",alignItems:"center",justifyContent:"center",color:"white",fontWeight:800,fontSize:13,flexShrink:0}}>{emp.name?emp.name[0].toUpperCase():"?"}</div>
+                      <div style={{minWidth:0}}>
+                        <div style={{fontWeight:700,fontSize:13,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",color:T.text}}>{emp.name||"New"}</div>
+                        {emp.role&&<div style={{fontSize:11,color:T.sub,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",marginTop:1}}>{emp.role}</div>}
                       </div>
                     </div>
                   </td>
                   {tsWkDates.map((dateStr,di)=>{
-                    const shift      = getTsShift(emp.id,di);
-                    const dp         = getDayPunches(emp.id,dateStr);
-                    const actual     = calcActualHours(dp);
-                    const sched      = shiftHrs(shift);
-                    const diff       = parseFloat((actual-sched).toFixed(2));
-                    const flags      = dp.flatMap(p=>p.flags||[]).filter(f=>["NO_SHIFT","ADJUSTMENT","LATE","EARLY_OUT"].includes(f));
-                    const hasPunch   = dp.length>0;
-                    const punchId    = dp[0]?.id;
-                    const status     = punchId?(punchReviews[punchId]||"pending"):null;
-                    const inP        = dp.find(p=>p.type==="in");
-                    const outP       = [...dp].reverse().find(p=>p.type==="out");
-                    const hasFlag    = flags.length>0;
-                    const statusColor = status==="approved"?"#4CAF7D":status==="rejected"?"#C0392B":status==="reviewed"?"#3A9BE8":"#E8A93A";
-
+                    const shift    = getTsShift(emp.id,di);
+                    const dp       = getDayPunches(emp.id,dateStr);
+                    const actual   = calcActualHours(dp);
+                    const flags    = dp.flatMap(p=>p.flags||[]).filter(f=>["NO_SHIFT","ADJUSTMENT","LATE","EARLY_OUT"].includes(f));
+                    const hasPunch = dp.length>0;
+                    const punchId  = dp[0]?.id;
+                    const status   = punchId?(punchReviews[punchId]||"pending"):null;
+                    const inP      = dp.find(p=>p.type==="in");
+                    const outP     = [...dp].reverse().find(p=>p.type==="out");
+                    const onClock  = !!inP && !outP && dateStr===demoToday;
+                    const topFlag  = flags[0];
+                    const flagColor = topFlag ? ({NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[topFlag]||"#E8A93A") : null;
+                    const flagLabel = topFlag ? ({NO_SHIFT:"NO SHIFT",LATE:"LATE",EARLY_OUT:"LEFT EARLY",ADJUSTMENT:"ADJUSTED"}[topFlag]||topFlag) : null;
+                    const chip = onClock ? "ON CLOCK" : flagLabel ? `● ${flagLabel}` : (status||"").toUpperCase();
+                    const t = d => new Date(d).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
+                    const open = ()=>setTsOpenCell({empId:emp.id,dateStr,dayIdx:di});
+                    const boxBase = {width:"100%",minHeight:64,borderRadius:10,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",boxSizing:"border-box"};
                     return (
-                      <td key={dateStr} style={{padding:"4px 3px",textAlign:"center",verticalAlign:"middle"}}>
-                        <div
-                          onClick={()=>(hasPunch||shift)&&setTsOpenCell({empId:emp.id,dateStr,dayIdx:di})}
-                          style={{
-                            borderRadius:8, padding:"4px 3px", minHeight:46,
-                            border:`1.5px solid ${hasFlag?(()=>{const f=flags[0];return({NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[f]||"#E8A93A")+"80"})():status==="approved"?"#4CAF7D40":status==="rejected"?"#C0392B40":(!hasPunch&&shift&&dateStr<demoToday)?"#E8A93A50":hasPunch?T.border:"transparent"}`,
-                            background:hasFlag?(()=>{const f=flags[0];return({NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[f]||"#E8A93A")+"11"})():status==="approved"?"#F0FFF420":status==="rejected"?"#FDECEA15":(!hasPunch&&shift&&dateStr<demoToday)?"#FEF3E210":hasPunch?T.surface:"transparent",
-                            cursor:(hasPunch||shift)?"pointer":"default",
-                            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-                            transition:"all 0.12s",
-                          }}>
-                          {!hasPunch&&!shift ? (
-                            <span style={{color:T.border,fontSize:11}}>—</span>
-                          ) : !hasPunch&&shift ? (
-                            <div style={{opacity:0.6,display:"flex",flexDirection:"column",alignItems:"center",gap:1}}>
-                              {dateStr < demoToday ? (
-                                <>
-                                  <span style={{fontSize:12}}>⚠️</span>
-                                  <div style={{fontSize:8,fontWeight:800,color:"#E8A93A"}}>CORRECTION</div>
-                                  <div style={{fontSize:7,color:"#E8A93A",fontWeight:700}}>NEEDED</div>
-                                </>
-                              ) : (
-                                <>
-                                  <div style={{fontSize:9,color:T.sub,fontWeight:700}}>No punch</div>
-                                  <div style={{fontSize:8,color:T.sub}}>{fmt(shift.start)}</div>
-                                  <div style={{fontSize:8,color:T.sub}}>{fmt(shift.end)}</div>
-                                </>
-                              )}
-                            </div>
-                          ) : (
-                            <>
-                              {inP&&<div style={{fontSize:9,color:T.sub,fontWeight:600}}>{new Date(inP.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</div>}
-                              {outP&&<div style={{fontSize:9,color:T.sub}}>{new Date(outP.time).toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"})}</div>}
-                              <div style={{fontWeight:800,fontSize:11,color:diff>0.25?"#E8A93A":diff<-0.25?"#C0392B":T.text,marginTop:2}}>{actual.toFixed(1)}h</div>
-                              {hasFlag&&(()=>{
-                                const topFlag = flags[0];
-                                const fc = {NO_SHIFT:"#C0392B",LATE:"#E8A93A",EARLY_OUT:"#E07020",ADJUSTMENT:"#3A9BE8"}[topFlag]||"#E8A93A";
-                                const fi = {NO_SHIFT:"🔴",LATE:"🟡",EARLY_OUT:"🟠",ADJUSTMENT:"🔵"}[topFlag]||"⚠";
-                                return <div style={{fontSize:10,color:fc,fontWeight:800,background:fc+"18",borderRadius:4,padding:"2px 5px",marginTop:2,letterSpacing:"0.02em"}}>{fi} {topFlag==="NO_SHIFT"?"No Shift":topFlag==="LATE"?"Late":topFlag==="EARLY_OUT"?"Early Out":"Manual"}</div>;
-                              })()}
-                              {status&&<div style={{fontSize:8,fontWeight:700,color:statusColor,textTransform:"uppercase",marginTop:1,letterSpacing:"0.04em"}}>{status}</div>}
-                            </>
-                          )}
-                        </div>
+                      <td key={dateStr} style={{padding:"6px 6px",textAlign:"center",verticalAlign:"middle"}}>
+                        {hasPunch ? (
+                          <div className="shift-badge" onClick={open} title={topFlag?`Flag: ${flagLabel}`:"Review punch"}
+                            style={{...boxBase,background:emp.color,color:"white",padding:"8px 6px",fontSize:11,lineHeight:1.4,opacity:status==="rejected"?0.55:1,boxShadow:flagColor?`0 0 0 2.5px ${flagColor}`:"none"}}>
+                            {chip&&<div style={{background:"rgba(255,255,255,0.22)",borderRadius:4,padding:"2px 6px",fontSize:9,fontWeight:800,marginBottom:4,letterSpacing:"0.05em",whiteSpace:"nowrap",maxWidth:"100%",overflow:"hidden",textOverflow:"ellipsis"}}>{chip}</div>}
+                            {inP&&<div style={{fontWeight:800,fontSize:12}}>{t(inP.time)}</div>}
+                            <div style={{opacity:0.85,fontSize:11}}>–{outP?t(outP.time):onClock?"now":"no out"}</div>
+                            {actual>0&&<div style={{fontWeight:800,fontSize:13,marginTop:3}}>{parseFloat(actual.toFixed(1))}h</div>}
+                          </div>
+                        ) : shift && dateStr < demoToday ? (
+                          <div onClick={open} title="Scheduled but no punch — tap to fix"
+                            style={{...boxBase,border:"1.5px dashed #E8A93A",background:"#FDF5E6",color:"#9A6510",fontSize:10,fontWeight:800,letterSpacing:"0.03em"}}>
+                            <div>MISSING</div><div>PUNCH</div>
+                          </div>
+                        ) : shift ? (
+                          <div onClick={open} title="Scheduled — fills in when they clock in"
+                            style={{...boxBase,border:`1.5px dashed ${T.border}`,color:T.sub,fontSize:10,lineHeight:1.4}}>
+                            <div style={{fontWeight:700}}>Scheduled</div>
+                            <div>{fmt(shift.start)}</div>
+                            <div>–{fmt(shift.end)}</div>
+                          </div>
+                        ) : (
+                          <button className="add-shift-btn" onClick={open} title="Add a manual time entry"
+                            style={{...boxBase,minHeight:46,background:"transparent",border:`1.5px dashed ${T.border}`,color:T.sub,fontSize:18}}>+</button>
+                        )}
                       </td>
                     );
                   })}
-                  <td style={{padding:"8px 6px",textAlign:"center",verticalAlign:"middle"}}>
-                    {totalActual>0?(
-                      <>
-                        <div style={{fontWeight:800,fontSize:12,color:delta>0.5?"#E8A93A":delta<-0.5?"#C0392B":T.text}}>{totalActual.toFixed(1)}h</div>
-                        {totalSched>0&&<div style={{fontSize:9,color:T.sub}}>{totalSched}h sched</div>}
-                        {delta!==0&&<div style={{fontSize:9,color:delta>0?"#E8A93A":"#C0392B",fontWeight:700}}>{delta>0?"+":""}{delta.toFixed(1)}</div>}
-                      </>
-                    ):<span style={{color:T.border,fontSize:11}}>—</span>}
+                  <td style={{padding:"12px 8px",textAlign:"center",verticalAlign:"middle"}}>
+                    {totalActual>0||totalSched>0 ? <>
+                      <div style={{fontWeight:800,fontSize:15,color:totalActual>40?"#C0392B":T.text}}>{parseFloat(totalActual.toFixed(1))}h</div>
+                      {totalSched>0&&<div style={{fontSize:10,color:T.sub,fontWeight:600,marginTop:1}}>/{totalSched}h sched</div>}
+                      {totalPay>0&&<div style={{fontSize:11,color:T.accent,fontWeight:700,marginTop:2}}>${totalPay.toFixed(0)}</div>}
+                      {totalActual>40&&<div style={{fontSize:9,color:"#C0392B",fontWeight:700,marginTop:2}}>OT</div>}
+                    </> : <span style={{color:T.border,fontSize:11}}>—</span>}
                   </td>
                 </tr>
               );
             })}
           </tbody>
+          <tfoot>
+            <tr style={{background:T.dark}}>
+              <td style={{padding:"13px 16px",color:"#777",fontWeight:700,fontSize:11,letterSpacing:"0.06em"}}>TOTALS</td>
+              {tsWkDates.map(dateStr=>{
+                const dh = employees.reduce((s,e)=>s+calcActualHours(getDayPunches(e.id,dateStr)),0);
+                const dpay = employees.reduce((s,e)=>s+calcActualHours(getDayPunches(e.id,dateStr))*(parseFloat(e.hourlyRate)||0),0);
+                return (
+                  <td key={dateStr} style={{padding:"12px 6px",textAlign:"center",fontWeight:700}}>
+                    {dh>0?<>
+                      <div style={{color:T.accent,fontSize:13}}>{parseFloat(dh.toFixed(1))}h</div>
+                      <div style={{color:"#4CAF7D",fontSize:11,fontWeight:700,marginTop:1}}>${dpay.toFixed(0)}</div>
+                    </>:<span style={{color:"#3A3A3A"}}>—</span>}
+                  </td>
+                );
+              })}
+              {(()=>{
+                const wh = employees.reduce((s,e)=>s+tsWkDates.reduce((d,ds)=>d+calcActualHours(getDayPunches(e.id,ds)),0),0);
+                const wp = employees.reduce((s,e)=>s+tsWkDates.reduce((d,ds)=>d+calcActualHours(getDayPunches(e.id,ds)),0)*(parseFloat(e.hourlyRate)||0),0);
+                return (
+                  <td style={{padding:"12px 8px",textAlign:"center"}}>
+                    <div style={{color:T.accent,fontWeight:800,fontSize:14}}>{parseFloat(wh.toFixed(1))}h</div>
+                    <div style={{color:T.accent,fontWeight:700,fontSize:12,marginTop:1}}>${wp.toFixed(0)}</div>
+                  </td>
+                );
+              })()}
+            </tr>
+          </tfoot>
         </table>
       </div>
 
       <div style={{fontSize:11,color:T.sub,textAlign:"center",marginBottom:14}}>
-        Tap any cell to review, adjust time, or approve · 📅 Jump to any week · 🔒 Lock when ready for payroll
+        Tap a punch to review or approve · Tap <strong>+</strong> to add a manual entry · 🔒 Lock when ready for payroll
       </div>
 
       {/* Timesheet History */}
