@@ -8322,7 +8322,25 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                   const barColor=over?"#C0392B":warn?"#E8A93A":"#4CAF7D";
                   const be = activeWeek ? computeBreakEven(activeWeek) : null;
                   const targetPct = laborTargetPct || 30;
-                  const laborPct = be && be.sales > 0 ? (be.labor / be.sales) * 100 : null;
+                  // Labor % for the strip: actual sales where they exist, the forecast where it has one,
+                  // otherwise the business's own average for that weekday. No 2-week minimum.
+                  const hasSchedule = !!be && be.labor > 0;
+                  const dowAvg = (() => {
+                    const t=[0,0,0,0,0,0,0], c=[0,0,0,0,0,0,0];
+                    salesData.forEach(d => { if (!activeWeek || d.date >= activeWeek || !(Number(d.revenue)>0)) return; const w=new Date(d.date+"T12:00:00").getDay(); t[w]+=Number(d.revenue); c[w]+=1; });
+                    return t.map((v,i)=>c[i]?v/c[i]:null);
+                  })();
+                  const stripSales = !be ? null : (() => {
+                    let total=0, any=false;
+                    be.days.forEach((d,i) => {
+                      if (d.closed) return;
+                      const v = d.sales!=null && d.sales>0 ? d.sales : dowAvg[i];
+                      if (v!=null) { total+=v; any=true; }
+                    });
+                    return any && total>0 ? total : null;
+                  })();
+                  const laborProjected = !!be && be.days.some(d => !d.closed && !d.isActual);
+                  const laborPct = hasSchedule && stripSales ? (be.labor / stripSales) * 100 : null;
                   const overtime = activeWeek ? employees.filter(e => eWkH(activeWeek, e.id) > 40) : [];
                   const money = n => `$${Math.round(n).toLocaleString()}`;
                   const saveBudget = raw => { const v=parseFloat(raw); const val=isNaN(v)||v<0?"":String(Math.round(v)); setWeeklyBudget(val); setEditingBudget(false); if(bizId) saveBizSettings({weekly_budget:parseFloat(val)||null}).catch(()=>{}); };
@@ -8366,7 +8384,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                       <div style={tile(laborTone)}>
                         <div style={lab(laborTone)}>Labor % of sales</div>
                         <div style={num(laborTone)}>{laborPct==null ? "—" : `${laborPct.toFixed(1)}%`}</div>
-                        <div style={det(laborTone)}>{laborPct==null ? "Needs 2 weeks of sales" : `Target ${targetPct}%`}</div>
+                        <div style={det(laborTone)}>{!hasSchedule ? "" : laborPct==null ? "No sales data yet" : `Target ${targetPct}%${laborProjected?" · projected":""}`}</div>
                       </div>
                       <div style={tile(otTone)} title={overtime.map(e=>`${e.name||"Unnamed"} · ${eWkH(activeWeek,e.id)}h`).join(", ")}>
                         <div style={lab(otTone)}>Overtime</div>
