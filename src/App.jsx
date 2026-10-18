@@ -9104,6 +9104,31 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
               return { emp, shift, status, openEntry, empPunches, clockedIn, clockedOut, lastPunchEntry, actualHours: parseFloat(actualHours.toFixed(2)) };
             }).filter(Boolean);
 
+            // How many times has this employee worked this kind of shift before the open one?
+            // Specific types (Opening, Closing…) match on that type; a plain "regular" shift counts any shift.
+            function shiftExperience(empId, openEntry) {
+              const want = toTypeArr(openEntry.originalShift?.type);
+              const specific = want.filter(t => t !== "regular");
+              const openDate = addDays(openEntry.weekKey, openEntry.dayIdx);
+              const label = specific.length ? (SHIFT_TYPES.find(st => st.id === specific[0])?.label || "this shift") : "shifts";
+              let count = 0, last = null;
+              for (const wk of Object.keys(schedule || {})) {
+                const days = schedule[wk]?.[empId];
+                if (!days) continue;
+                for (const [di, sh] of Object.entries(days)) {
+                  if (!sh) continue;
+                  const d = addDays(wk, Number(di));
+                  if (d >= openDate || d > demoToday) continue;
+                  const types = toTypeArr(sh.type);
+                  if (specific.length && !types.some(t => specific.includes(t))) continue;
+                  count++;
+                  if (!last || d > last) last = d;
+                }
+              }
+              const recent = !!last && last >= addDays(openDate, -30);
+              return { count, last, recent, label, specific: specific.length > 0 };
+            }
+
             // Rank replacement candidates for an open shift
             function rankCandidates(openEntry) {
               if (!openEntry) return [];
@@ -9119,17 +9144,18 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                   const hoursNeeded = shiftHrs(openEntry.originalShift);
                   const wouldOvertime = wkHours + hoursNeeded > 40;
                   const nearLimit = wkHours + hoursNeeded > availHours;
-                  const hasWorkedThisType = Object.values(schedule?.[weekKey]?.[e.id] || {}).some(s =>
-                    toTypeArr(s?.type).some(t => toTypeArr(openEntry.originalShift?.type).includes(t))
-                  );
-                  // Score: available days (40) + not already working (20) + has hours (20) + experience (10) + no overtime (10)
+                  // UI Batch 32 — experience from full history: every past shift of this type, not just this week
+                  const exp = shiftExperience(e.id, openEntry);
+                  const hasWorkedThisType = exp.count > 0;
+                  // Availability and "not already working" are filters below, so they don't score.
+                  // Score (100): experience in this shift type (40) + worked it in the last 30 days (10)
+                  //              + no overtime (30) + within their usual hours (20)
                   let score = 0;
-                  if (isAvailable)      score += 40;
-                  if (!alreadyWorking)  score += 20;
-                  if (!wouldOvertime)   score += 20;
-                  if (!nearLimit)       score += 10;
-                  if (hasWorkedThisType) score += 10;
-                  return { emp: e, score, isAvailable, alreadyWorking, wkHours, wouldOvertime, hasWorkedThisType };
+                  score += Math.min(40, exp.count * 4);
+                  if (exp.recent)       score += 10;
+                  if (!wouldOvertime)   score += 30;
+                  if (!nearLimit)       score += 20;
+                  return { emp: e, score, isAvailable, alreadyWorking, wkHours, wouldOvertime, hasWorkedThisType, exp };
                 })
                 .filter(c => c.isAvailable && !c.alreadyWorking)
                 .sort((a, b) => b.score - a.score);
@@ -9370,18 +9396,14 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                       </div>
                                       <div style={{fontSize:10, color:T.sub, marginTop:2, display:"flex", gap:8, flexWrap:"wrap"}}>
                                         <span>{c.wkHours}h this week</span>
-                                        {c.hasWorkedThisType && <span style={{color:"#4CAF7D"}}>✓ experience</span>}
+                                        {c.exp.count > 0
+                                          ? <span style={{color:"#2E7D57", fontWeight:700}}>✓ {c.exp.specific ? `Worked ${c.exp.label} ${c.exp.count}×` : `${c.exp.count} past shifts`}{c.exp.last ? ` · last ${dl(c.exp.last)}` : ""}</span>
+                                          : <span style={{color:"#8A5A00", fontWeight:700}}>{c.exp.specific ? `New to ${c.exp.label}` : "No past shifts"}</span>}
                                         {c.wouldOvertime && <span style={{color:"#C0392B"}}>⚠ OT risk</span>}
                                       </div>
                                     </div>
                                     <div style={{display:"flex", gap:6}}>
-                                      {/* Copy message button */}
-                                      <button onClick={()=>{
-                                        const msg = `Hi ${c.emp.name}! ${emp.name} can't make their ${fmt(shift.start)}–${fmt(shift.end)} shift today. Can you cover? Let me know ASAP. — ${biz}`;
-                                        navigator.clipboard?.writeText(msg).then(()=>showToast("Message copied to clipboard ✓")).catch(()=>showToast(msg, 6000));
-                                      }} style={{background:T.muted, color:T.sub, border:"none", borderRadius:7, padding:"6px 10px", fontSize:10, fontWeight:700, cursor:"pointer"}}>
-                                        Copy msg
-                                      </button>
+                                      {/* UI Batch 32 — no in-app messaging; owners contact staff themselves */}
                                       {/* Assign button */}
                                       <button onClick={()=>markClaimed(openEntry.id, c.emp.id)}
                                         style={{background:ci===0?T.accent:T.dark, color:"white", border:"none", borderRadius:7, padding:"6px 12px", fontSize:11, fontWeight:700, cursor:"pointer", whiteSpace:"nowrap"}}>
@@ -9457,6 +9479,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                   <div style={{width:20, height:20, borderRadius:"50%", background:c.emp.color, display:"flex", alignItems:"center", justifyContent:"center", color:"white", fontSize:9, fontWeight:800}}>{c.emp.name?c.emp.name[0]:""}</div>
                                   <span style={{fontSize:11, fontWeight:600, color:T.text}}>{c.emp.name}</span>
                                   <span style={{fontSize:10, color:T.sub}}>{c.wkHours}h</span>
+                                  <span style={{fontSize:10, fontWeight:700, color:c.exp.count>0?"#2E7D57":"#8A5A00"}}>{c.exp.count>0 ? `${c.exp.count}× ${c.exp.specific ? c.exp.label : "shifts"}` : (c.exp.specific ? `New to ${c.exp.label}` : "New")}</span>
                                   <button onClick={()=>markClaimed(o.id, c.emp.id)}
                                     style={{background:T.accent+"15", color:T.accent, border:`1px solid ${T.accent}30`, borderRadius:5, padding:"2px 7px", fontSize:10, fontWeight:700, cursor:"pointer"}}>
                                     Assign
