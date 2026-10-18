@@ -1578,6 +1578,7 @@ export default function App() {
   const [bizAddress,     setBizAddress]     = useState({ line:"", city:"", state:"", zip:"" });
   const [addrDraft,      setAddrDraft]      = useState(null);   // editing copy in Settings
   const [weatherInfo,    setWeatherInfo]    = useState({ status:null, latestDate:null });
+  const [weatherNow,     setWeatherNow]     = useState(null); // current + forecast from /api/weather
   const [costs,          setCosts]          = useState([]);   // business_costs rows
   const [costsOpen,      setCostsOpen]      = useState(false);
   const [costDraft,      setCostDraft]      = useState(null); // {id?, name, amount, kind, frequency} while adding/editing
@@ -2117,6 +2118,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           latestDate = w?.[0]?.weather_date || null;
         } catch {}
         setWeatherInfo({ status: business.geocode_status || null, latestDate });
+        if ((business.address_line || business.zip) && !business.is_demo) refreshWeather(business.id);
       }
       try {
         const costRows = await dbGet(`business_costs?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`);
@@ -6631,6 +6633,28 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     try { localStorage.setItem("sw_theme", themeId); } catch {}
   }, [themeId]);
 
+  // Weather: asks the server to fill any missing recent days and return current
+  // conditions + forecast. Runs on load and after the address is saved, so
+  // tracking never depends on the nightly job alone.
+  async function refreshWeather(businessId) {
+    if (!businessId) return;
+    try {
+      const r = await fetch("/api/weather", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${getToken()}` },
+        body: JSON.stringify({ business_id: businessId }),
+      });
+      const d = await r.json().catch(() => null);
+      if (!r.ok || !d) { console.warn("Weather refresh failed:", d?.error || r.status); return; }
+      if (d.errors?.length) console.warn("Weather notes:", d.errors);
+      setWeatherNow(d.status === "ok" ? d : null);
+      setWeatherInfo(w => ({
+        status: d.status === "not_found" ? "not_found" : d.status === "ok" ? "ok" : w.status,
+        latestDate: d.latestRecorded || w.latestDate,
+      }));
+    } catch (e) { console.warn("Weather refresh failed:", e); }
+  }
+
   function exportData() {
     const data = { _v:2, _at:new Date().toISOString(), biz,weekMode,wk1Start,wk2Start,weeklyBudget,employees,schedule,published,themeId,activeWeek,punches,auditLog,recognition,shiftTypes,salesData: rawSales };
     const a = document.createElement("a");
@@ -7580,10 +7604,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     </button>
   );
 })()}
-              <label style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>
-                Import<input type="file" accept=".json" onChange={e=>{importData(e.target.files[0]);e.target.value="";}} style={{display:"none"}}/>
-              </label>
-              <button onClick={exportData} style={{background:"rgba(255,255,255,0.08)",color:"#bbb",border:"1px solid rgba(255,255,255,0.12)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}}>Export</button>
               <button onClick={handleSignOut} style={{background:"rgba(255,255,255,0.05)",color:"#666",border:"1px solid rgba(255,255,255,0.08)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}} title="Sign Out">⎋</button>
             </div>
           </div>
@@ -10112,7 +10132,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                           const status = !has ? null
                             : weatherInfo.status === "not_found" ? { c:"#A93226", t:"We couldn't find that address. Check the street and ZIP, then save again." }
                             : weatherInfo.latestDate ? { c:"#2D6A4F", t:`Weather tracking is on · last recorded ${dl(weatherInfo.latestDate)}` }
-                            : { c:T.sub, t:"Weather tracking starts tonight." };
+                            : { c:T.sub, t:"Looking up weather for this address…" };
                           return (
                             <div style={{display:"flex",flexDirection:"column",gap:8}}>
                               <input value={a.line} onChange={e=>setA({line:e.target.value})} placeholder="Street address" aria-label="Street address" autoComplete="street-address" style={inp}/>
@@ -10132,6 +10152,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                       await dbPatch(`businesses?id=eq.${bizId}`, { address_line:d.line||null, city:d.city||null, state:d.state||null, zip:d.zip||null, latitude:null, longitude:null, weather_station:null, geocode_status:null });
                                       setBizAddress(d); setAddrDraft(null);
                                       setWeatherInfo(w => ({ ...w, status:null }));
+                                      if (d.line || d.zip) refreshWeather(bizId);
                                       showToast("Address saved ✓");
                                     } catch (e) { showError(friendlyError(e, "Couldn't save the address — try again.")); }
                                   }} style={{background:T.accent,border:"none",borderRadius:9,padding:"11px 0",fontWeight:700,fontSize:13,color:"white",cursor:"pointer"}}>Save address</button>
