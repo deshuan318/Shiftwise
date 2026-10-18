@@ -4792,61 +4792,102 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     return () => { live = false; };
   }, [editEmpId, bizId]);
 
+  // UI Batch 24 — value is measured on OPEN weeks the employee actually WORKED:
+  // per-hour and per-shift rates, so time off the schedule (or a closed season)
+  // never counts against them. Closed for the season → uses last season.
   async function computeExitSummary(emp, exitDate, reason) {
-    const start12 = addDays(exitDate, -83), start90 = addDays(exitDate, -89);
-    const [attr, p90res, firstRows, noShowRows] = await Promise.all([
-      computeShiftTypeAttribution(start12, exitDate),
-      fetchPunchesForRange(bizId, start90, exitDate),
+    const si = seasonInfo(exitDate, season);
+    const basisKind = si.seasonal && !si.open && si.last ? "season" : "recent";
+    const winStart = basisKind === "season" ? si.last.start : addDays(exitDate, -83);
+    const winEnd   = basisKind === "season" ? si.last.end : exitDate;
+    const [attr, pRes, firstRows, noShowRows] = await Promise.all([
+      computeShiftTypeAttribution(winStart, winEnd),
+      fetchPunchesForRange(bizId, winStart, winEnd),
       dbGet(`punches?select=punched_at&business_id=eq.${bizId}&employee_id=eq.${emp.id}&order=punched_at.asc&limit=1`).catch(() => []),
-      dbGet(`attendance_events?select=event_date&business_id=eq.${bizId}&employee_id=eq.${emp.id}&status=eq.open&event_date=gte.${start90}&event_date=lte.${exitDate}`).catch(() => []),
+      dbGet(`attendance_events?select=employee_id,event_date&business_id=eq.${bizId}&event_type=eq.NO_SHOW&event_date=gte.${winStart}&event_date=lte.${winEnd}&limit=5000`).catch(() => []),
     ]);
     const firstName = (emp.name || "They").split(" ")[0];
     const firstPunch = firstRows?.[0]?.punched_at ? toLocalDateStr(new Date(String(firstRows[0].punched_at).replace(" ","T"))) : null;
     const created = emp.createdAt ? String(emp.createdAt).slice(0,10) : null;
     const tenureStart = [firstPunch, created].filter(Boolean).sort()[0] || null;
     const tenureDays = tenureStart ? Math.max(1, Math.round((new Date(exitDate+"T12:00:00") - new Date(tenureStart+"T12:00:00")) / 86400000) + 1) : null;
-    const weeksIn = tenureDays ? Math.min(12, Math.max(1, Math.ceil(tenureDays / 7))) : 12;
 
+    // Open weeks in the window (a week counts if any day in it was open)
+    const openWeeks = new Set();
+    for (let d = winStart; d <= winEnd; d = addDays(d, 1)) if (openDay(d)) openWeeks.add(getSunday(d));
     const es = attr.empStats?.[emp.id] || { minutes:0, cost:0, revenue:0, byType:{}, dates:new Set() };
-    const totalMin = Object.values(attr.empStats || {}).reduce((s, x) => s + x.minutes, 0);
-    const avgWeeklyHours = es.minutes / 60 / weeksIn;
+    const workedDays = [...es.dates].filter(d => openDay(d));
+    const weeksWorked = new Set(workedDays.map(d => getSunday(d))).size;
+    const hours = es.minutes / 60;
+    const hoursPerWeek = weeksWorked ? hours / weeksWorked : 0;
+    const salesPerHour = hours > 0 ? es.revenue / hours : null;
+    const costPerHour = hours > 0 ? es.cost / hours : null;
+    const teamMin = Object.values(attr.empStats || {}).reduce((s, x) => s + x.minutes, 0);
+    const teamRev = Object.values(attr.empStats || {}).reduce((s, x) => s + x.revenue, 0);
+    const teamSalesPerHour = teamMin > 0 ? teamRev / (teamMin / 60) : null;
 
     const dowCounts = [0,0,0,0,0,0,0];
-    [...es.dates].forEach(d => { dowCounts[new Date(d+"T12:00:00").getDay()]++; });
-    let usual = dowCounts.map((c, i) => ({ i, c })).filter(x => x.c >= Math.max(2, Math.ceil(weeksIn * 0.33)));
+    workedDays.forEach(d => { dowCounts[new Date(d+"T12:00:00").getDay()]++; });
+    let usual = dowCounts.map((c, i) => ({ i, c })).filter(x => x.c >= Math.max(2, Math.ceil(weeksWorked * 0.33)));
     if (!usual.length) usual = dowCounts.map((c, i) => ({ i, c })).filter(x => x.c > 0).sort((a,b) => b.c - a.c).slice(0, 3);
     const usualIdx = usual.map(x => x.i).sort((a,b) => a - b);
 
     const mainTypeKey = Object.entries(es.byType).sort((a,b) => b[1] - a[1])[0]?.[0] || null;
     const typeTotalMin = mainTypeKey ? Object.values(attr.byDateType).reduce((s, types) => s + (types[mainTypeKey]?.minutes || 0), 0) : 0;
 
-    const mine = (p90res.rows || []).filter(p => p.empId === emp.id);
-    const workedDates = new Set(mine.filter(p => p.type === "in" && p.time).map(p => toLocalDateStr(new Date(p.time))));
-    const countFlag = f => mine.filter(p => (p.flags || []).includes(f)).length;
+    // Reliability per shift worked (a shift = a day with a clock-in), for them and the team
+    const rows = pRes.rows || [];
+    const shiftsBy = {}, flagBy = {};
+    rows.forEach(p => {
+      if (!p.time) return;
+      const ds = toLocalDateStr(new Date(p.time));
+      if (p.type === "in") (shiftsBy[p.empId] ||= new Set()).add(ds);
+      (p.flags || []).forEach(f => { const k = `${p.empId}|${f}`; flagBy[k] = (flagBy[k] || 0) + 1; });
+    });
+    const shiftsWorked = shiftsBy[emp.id]?.size || 0;
+    const late = flagBy[`${emp.id}|LATE`] || 0, earlyOut = flagBy[`${emp.id}|EARLY_OUT`] || 0;
+    const noShows = (noShowRows || []).filter(r => r.employee_id === emp.id).length;
+    const teamShifts = Object.values(shiftsBy).reduce((s, x) => s + x.size, 0);
+    const teamLate = Object.entries(flagBy).filter(([k]) => k.endsWith("|LATE")).reduce((s, [, v]) => s + v, 0);
+    const rate = (n, d) => d > 0 ? n / d : null;
 
     const peers = employees.filter(e => e.id !== emp.id && emp.role && e.role === emp.role && parseFloat(e.hourlyRate) > 0);
     const replaceRate = peers.length ? peers.reduce((s, e) => s + parseFloat(e.hourlyRate), 0) / peers.length : (parseFloat(emp.hourlyRate) || 0);
     const rateBasis = peers.length ? `the average ${emp.role} rate on your team` : `${firstName}'s rate`;
-    const replaceWeekly = avgWeeklyHours * replaceRate;
+    const replaceWeekly = hoursPerWeek * replaceRate;
 
     const gaps = usualIdx.map(i => {
       const others = employees.filter(e => e.id !== emp.id && (e.availableDays ?? [0,1,2,3,4,5,6]).includes(i));
       return others.length <= 1 ? { day: DAY_FULL[i], names: others.map(e => e.name || "Unnamed") } : null;
     }).filter(Boolean);
 
+    const basisText = basisKind === "season"
+      ? `Closed since ${dl(si.last.end)}. Using the ${si.last.start.slice(0,4)} season (${dl(si.last.start)} – ${dl(si.last.end)}), where ${firstName} worked ${weeksWorked} of ${openWeeks.size} open weeks.`
+      : `Last 12 weeks: ${firstName} worked ${weeksWorked} of ${openWeeks.size} open week${openWeeks.size!==1?"s":""}.`;
     let headline;
-    if (es.minutes === 0) headline = `${firstName} worked no hours in the 12 weeks before leaving, so there's no coverage to replace.`;
-    else headline = `Losing ${firstName} costs about ${fmtMoney(replaceWeekly)} a week to replace${gaps.length ? ` and leaves ${gaps.map(g => g.day).join(" and ")} thin.` : "."}`;
+    if (es.minutes === 0) headline = `${firstName} didn't work any open weeks in this period, so there are no hours to replace.`;
+    else {
+      headline = `Losing ${firstName} costs about ${fmtMoney(replaceWeekly)} a week to replace${gaps.length ? ` and leaves ${gaps.map(g => g.day).join(" and ")} thin` : ""}.`;
+      if (salesPerHour != null && teamSalesPerHour != null && attr.hasHourly) {
+        const cmp = salesPerHour >= teamSalesPerHour * 1.05 ? "above" : salesPerHour <= teamSalesPerHour * 0.95 ? "below" : "about even with";
+        headline += ` ${firstName} brings in ${fmtMoney(salesPerHour)} of sales per hour worked — ${cmp} the team's ${fmtMoney(teamSalesPerHour)}.`;
+      }
+    }
 
     return {
-      v: 1, name: emp.name || "", role: emp.role || "", color: emp.color || "#888888",
+      v: 2, name: emp.name || "", role: emp.role || "", color: emp.color || "#888888",
       exitedAt: exitDate, reason: reason || "", tenureStart, tenureDays,
+      basis: { kind: basisKind, start: winStart, end: winEnd, openWeeks: openWeeks.size, weeksWorked, text: basisText },
       usualDays: usualIdx.map(i => DAYS[i]), mainType: mainTypeKey ? shiftTypeMeta(mainTypeKey).label : null,
-      avgWeeklyHours, weeksIn,
-      shiftsWorked90: workedDates.size, late90: countFlag("LATE"), earlyOut90: countFlag("EARLY_OUT"), noShow90: (noShowRows || []).length,
-      coverageShare: totalMin > 0 ? es.minutes / totalMin : 0,
+      // v1 names kept so older screens still read: weeksIn = weeks worked, avg = per week worked
+      avgWeeklyHours: hoursPerWeek, weeksIn: weeksWorked,
+      hoursWorked: hours, salesPerHour, costPerHour, teamSalesPerHour,
+      shiftsWorked90: shiftsWorked, late90: late, earlyOut90: earlyOut, noShow90: noShows,
+      lateRate: rate(late, shiftsWorked), earlyOutRate: rate(earlyOut, shiftsWorked), noShowRate: rate(noShows, shiftsWorked + noShows),
+      teamLateRate: rate(teamLate, teamShifts),
+      coverageShare: teamMin > 0 ? es.minutes / teamMin : 0,
       typeShare: typeTotalMin > 0 && mainTypeKey ? (es.byType[mainTypeKey] || 0) / typeTotalMin : 0,
-      salesDuring: es.revenue, weeklySales: es.revenue / weeksIn,
+      salesDuring: es.revenue, weeklySales: weeksWorked ? es.revenue / weeksWorked : 0,
       salesEstimated: !attr.hasHourly ? "all" : attr.estimatedRevenue > 0 ? "some" : "none",
       replaceRate, rateBasis, replaceWeekly, gaps, headline,
       keepUntil: addYearsStr(exitDate, 3),
@@ -5043,8 +5084,10 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 <div style={{padding:"12px 16px",fontSize:13,lineHeight:1.6,color:T.text}}><strong>{s.headline}</strong></div>
                 <Row label="Tenure" value={tenureStr(s.tenureDays)} sub={s.tenureStart ? `${dl(s.tenureStart)} – ${dl(s.exitedAt)}` : null}/>
                 <Row label="Usual schedule" value={s.usualDays?.length ? s.usualDays.join(" · ") : "—"}
-                  sub={`${s.mainType ? `Mostly ${s.mainType} · ` : ""}${(s.avgWeeklyHours||0).toFixed(1)}h a week on average (last ${s.weeksIn} week${s.weeksIn!==1?"s":""})`}/>
-                <Row label="Reliability, last 90 days" value={`${s.late90} late · ${s.noShow90} no-show${s.noShow90!==1?"s":""}`}
+                  sub={`${s.mainType ? `Mostly ${s.mainType} · ` : ""}${(s.avgWeeklyHours||0).toFixed(1)}h a week ${s.v >= 2 ? `across the ${s.weeksIn} week${s.weeksIn!==1?"s":""} worked` : `on average (last ${s.weeksIn} week${s.weeksIn!==1?"s":""})`}`}/>
+                {s.v >= 2 && s.basis?.text && <Row label="Measured on" value={s.basis.kind === "season" ? "Last season" : "Last 12 weeks"} sub={s.basis.text}/>}
+                {s.v >= 2 && <Row label="Sales per hour worked" value={s.salesPerHour != null ? `${fmtMoney(s.salesPerHour)} / hr` : "—"} sub={s.teamSalesPerHour != null ? `Team average ${fmtMoney(s.teamSalesPerHour)} / hr` : null}/>}
+                <Row label={s.v >= 2 ? "Reliability, per shift" : "Reliability, last 90 days"} value={s.v >= 2 ? `${s.late90} of ${s.shiftsWorked90} late · ${s.noShow90} no-show${s.noShow90!==1?"s":""}` : `${s.late90} late · ${s.noShow90} no-show${s.noShow90!==1?"s":""}`}
                   sub={`${s.earlyOut90} early clock-out${s.earlyOut90!==1?"s":""} · ${s.shiftsWorked90} shift${s.shiftsWorked90!==1?"s":""} worked`}/>
                 <Row label="Share of coverage" value={`${pctStr(s.coverageShare)} of all hours`} sub={s.mainType ? `${pctStr(s.typeShare)} of ${s.mainType} hours` : null}/>
                 <Row label={`Sales during ${first}'s shifts`} value={fmtMoney(s.salesDuring || 0)}
@@ -10344,7 +10387,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                               <section aria-label="Exit review" style={{display:"flex",flexDirection:"column",gap:10}}>
                                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
                                   <h3 style={{margin:0,fontSize:12,fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",color:T.sub}}>Exit review</h3>
-                                  <span style={{fontSize:11.5,color:T.sub}}>Preview · as of today</span>
+                                  <span style={{fontSize:11.5,color:T.sub}}>Open weeks only · as of today</span>
                                 </div>
                                 {!emp.name ? (
                                   <div style={{fontSize:13,color:T.sub}}>Add a name to see this employee's exit review.</div>
@@ -10354,17 +10397,21 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                   <div style={{fontSize:13,color:T.sub}}>Couldn't build the exit review right now.</div>
                                 ) : (
                                   <>
+                                    {(()=>{ const P = v => v == null ? "—" : `${Math.round(v*100)}%`; const hrly = v => v == null ? "—" : `${fmtMoney(v)} / hr`; return (<>
+                                    {s.basis?.kind === "season" && (
+                                      <div style={{background:"#F6EEE3",border:"1px solid #E8D6BD",borderRadius:10,padding:"10px 12px",fontSize:12.5,lineHeight:1.5,color:T.text}}>{s.basis.text}</div>
+                                    )}
                                     <div style={{background:T.accent+"12",border:`1px solid ${T.accent}40`,borderRadius:10,padding:"12px 14px",fontSize:13.5,lineHeight:1.5,color:T.text}}>
-                                      <strong>If {(emp.name||"").split(" ")[0]} left:</strong> {s.headline.replace(/^Losing [^ ]+ costs/, "it would cost").replace(/^[^ ]+ worked no hours/, "they worked no hours")}
+                                      <strong>If {(emp.name||"").split(" ")[0]} left:</strong> {s.headline.replace(/^Losing [^ ]+ costs/, "it would cost").replace(/^[^ ]+ didn't work/, "they didn't work")}
                                     </div>
                                     <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8}}>
-                                      {stat("Time on team", tenure(s.tenureDays), s.tenureStart ? `Since ${dl(s.tenureStart)}` : null)}
-                                      {stat("Avg hours / week", `${s.avgWeeklyHours.toFixed(1)}h`, `Last ${s.weeksIn} week${s.weeksIn!==1?"s":""}`)}
-                                      {stat("Usual days", s.usualDays.length ? s.usualDays.join(", ") : "—")}
-                                      {stat("Main shift type", s.mainType || "—", s.mainType && s.typeShare ? `${Math.round(s.typeShare*100)}% of those hours` : null)}
-                                      {stat("Shifts · last 90 days", String(s.shiftsWorked90))}
-                                      {stat("Late · early out · no-show", `${s.late90} · ${s.earlyOut90} · ${s.noShow90}`, null, (s.late90 + s.earlyOut90 + s.noShow90) > 0)}
-                                      {stat("Sales during shifts", `${fmtMoney(s.weeklySales)} / wk`, s.salesEstimated === "all" ? "Estimated" : s.salesEstimated === "some" ? "Partly estimated" : null)}
+                                      {stat("Sales per hour worked", hrly(s.salesPerHour), s.teamSalesPerHour != null ? `Team average ${fmtMoney(s.teamSalesPerHour)} / hr${s.salesEstimated !== "none" ? " · estimated" : ""}` : null)}
+                                      {stat("Cost per hour worked", hrly(s.costPerHour), "Their pay")}
+                                      {stat("Hours per week worked", `${(s.avgWeeklyHours||0).toFixed(1)}h`, `Across the ${s.weeksIn} week${s.weeksIn!==1?"s":""} they worked`)}
+                                      {stat("Weeks worked", `${s.basis?.weeksWorked ?? s.weeksIn} of ${s.basis?.openWeeks ?? "—"}`, s.basis?.kind === "season" ? "Open weeks last season" : "Open weeks · last 12")}
+                                      {stat("Late", `${s.late90} of ${s.shiftsWorked90} shifts`, `${P(s.lateRate)}${s.teamLateRate != null ? ` · team ${P(s.teamLateRate)}` : ""}`, s.lateRate != null && s.teamLateRate != null && s.lateRate > s.teamLateRate)}
+                                      {stat("Early out · no-show", `${P(s.earlyOutRate)} · ${P(s.noShowRate)}`, `${s.earlyOut90} of ${s.shiftsWorked90} shifts · ${s.noShow90} of ${s.shiftsWorked90 + s.noShow90} scheduled`, s.noShow90 > 0)}
+                                      {stat("Usual days", s.usualDays.length ? s.usualDays.join(", ") : "—", s.mainType ? `Mostly ${s.mainType}` : null)}
                                       {stat("Cost to replace", `${fmtMoney(s.replaceWeekly)} / wk`, `Using ${s.rateBasis}`)}
                                     </div>
                                     {s.gaps?.length > 0 && (
@@ -10372,6 +10419,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                         <strong>Thin days:</strong> {s.gaps.map(g => `${g.day} (${g.names.length ? g.names.join(", ") : "no one else"} available)`).join("; ")}
                                       </div>
                                     )}
+                                    <div style={{fontSize:11.5,color:T.sub}}>Rates use shifts they actually worked, so weeks they weren't scheduled don't count against them.</div>
+                                    </>); })()}
                                     <div style={{fontSize:11.5,color:T.sub}}>These numbers are saved to the exit record if you offboard.</div>
                                   </>
                                 )}
