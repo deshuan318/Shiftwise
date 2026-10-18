@@ -6672,10 +6672,10 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   async function backfillWeatherHistory(businessId) {
     if (!businessId) return;
     try {
-      const r = await fetch("/api/weather-history", {
+      const r = await fetch("/api/weather", {
         method: "POST",
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${getToken()}` },
-        body: JSON.stringify({ business_id: businessId }),
+        body: JSON.stringify({ business_id: businessId, action: "history" }),
       });
       const d = await r.json().catch(() => null);
       if (!r.ok) { console.warn("Weather history failed:", d?.error || r.status); return; }
