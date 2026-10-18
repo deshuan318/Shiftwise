@@ -1500,6 +1500,7 @@ export default function App() {
   const [payWeek,     setPayWeek]      = useState(defaultSun);
   const [printView,   setPrintView]    = useState("weekly");
   const [weeklyBudget,setWeeklyBudget] = useState("");
+  const [editingBudget,setEditingBudget] = useState(false);
   const [clipboard,   setClipboard]    = useState(null);
   const [employees,   setEmployees]    = useState([]);       // active only — everything operational uses this
   const [formerEmployees, setFormerEmployees] = useState([]); // deactivated — kept for history + exit summaries
@@ -8203,9 +8204,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
 
 
 {schedSubTab==="schedule" && <>
-              <Card T={T} style={{marginBottom:14,padding:0,overflow:"visible",position:"relative",zIndex:300}}>
+              <Card T={T} style={{marginBottom:14,padding:0,overflow:"visible",position:"relative",zIndex:300,background:"transparent",boxShadow:"none"}}>
                 {/* UI Batch 6 — Option B: controls row + always-visible budget/checks strip */}
-                <div className="controls-bar" style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",padding:"10px 14px"}}>
+                <div className="controls-bar" style={{display:"flex",gap:14,alignItems:"center",flexWrap:"wrap",padding:"0 0 12px"}}>
                   <div>
                     <div style={{display:"flex",gap:5}}>
                       {[["daily","Day"],["weekly","Week"],["monthly","Month"]].map(([v,lbl])=>(
@@ -8317,44 +8318,54 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                   const targetPct = laborTargetPct || 30;
                   const laborPct = be && be.sales > 0 ? (be.labor / be.sales) * 100 : null;
                   const overtime = activeWeek ? employees.filter(e => eWkH(activeWeek, e.id) > 40) : [];
-                  const statLabel = {fontSize:11.5,color:T.sub,fontWeight:600};
-                  const statVal = {fontSize:14,fontWeight:800,marginTop:2,color:T.text};
-                  const statCell = {borderLeft:`1px solid ${T.accent}40`,paddingLeft:16,minWidth:0};
+                  const money = n => `$${Math.round(n).toLocaleString()}`;
+                  const saveBudget = raw => { const v=parseFloat(raw); const val=isNaN(v)||v<0?"":String(Math.round(v)); setWeeklyBudget(val); setEditingBudget(false); if(bizId) saveBizSettings({weekly_budget:parseFloat(val)||null}).catch(()=>{}); };
+                  const TONES = {
+                    good:{bg:"#EAF3DE",lab:"#3B6D11",num:"#173404"},
+                    warn:{bg:"#FAEEDA",lab:"#854F0B",num:"#412402"},
+                    bad:{bg:"#FCEBEB",lab:"#A32D2D",num:"#501313"},
+                    none:{bg:T.muted,lab:T.sub,num:T.text},
+                  };
+                  const budgetTone = budget<=0 ? "none" : over ? "bad" : warn ? "warn" : "good";
+                  const laborTone = laborPct==null ? "none" : laborPct>targetPct ? "bad" : laborPct>=targetPct-2 ? "warn" : "good";
+                  const otTone = overtime.length ? "bad" : "good";
+                  const tile = tone => ({background:TONES[tone].bg,borderRadius:T.radius,padding:"12px 16px",position:"relative",minWidth:0,display:"flex",flexDirection:"column"});
+                  const lab = tone => ({fontSize:11,lineHeight:"16px",height:16,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.06em",color:TONES[tone].lab,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",paddingRight:22});
+                  const num = tone => ({fontSize:24,lineHeight:"30px",height:30,fontWeight:800,marginTop:4,color:TONES[tone].num,fontVariantNumeric:"tabular-nums",letterSpacing:"-0.01em",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"});
+                  const det = tone => ({fontSize:12,lineHeight:"20px",height:20,marginTop:2,color:TONES[tone].lab,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center",gap:4});
+                  const pencil = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 20h4L18.5 9.5a2.1 2.1 0 0 0-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg>;
+                  const otNames = overtime.map(e=>`${(e.name||"Unnamed").split(" ")[0]} ${eWkH(activeWeek,e.id)}h`).join(", ");
                   return (
-                    <div className="sched-strip" style={{background:`${T.accent}1F`,borderTop:`1px solid ${T.accent}55`,borderRadius:`0 0 ${T.radius}px ${T.radius}px`,padding:"12px 14px",display:"grid",gridTemplateColumns:"minmax(280px,1.6fr) repeat(2,minmax(0,1fr))",gap:18,alignItems:"center"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0}}>
-                        <label htmlFor="sw-weekly-budget" style={{fontSize:12,fontWeight:700,color:T.sub,whiteSpace:"nowrap"}}>Weekly budget</label>
-                        <div style={{position:"relative",flexShrink:0}}>
-                          <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",fontWeight:700,fontSize:13,color:T.sub}}>$</span>
-                          <input id="sw-weekly-budget" type="number" min="0" step="10" value={weeklyBudget}
-                            onChange={e=>{ const v=e.target.value; if(v===""||(!isNaN(v)&&parseFloat(v)>=0)) setWeeklyBudget(v); }}
-                            onBlur={e=>{ const v=parseFloat(e.target.value); const val=isNaN(v)||v<0?"":String(Math.round(v)); setWeeklyBudget(val); if(bizId) saveBizSettings({weekly_budget:parseFloat(val)||null}).catch(()=>{}); }}
-                            placeholder="Set budget"
-                            style={{width:100,height:34,border:`1.5px solid ${budget>0?"#4CAF7D":T.border}`,borderRadius:8,padding:"0 8px 0 22px",fontSize:13,outline:"none",fontWeight:700,background:T.surface,color:T.text,boxSizing:"border-box",transition:"border 0.15s"}}/>
-                        </div>
-                        <div style={{flex:1,minWidth:120}}>
-                          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:5,gap:8}}>
-                            <span style={{fontWeight:800,fontSize:14,color:over?"#C0392B":T.text}}>${spent.toFixed(0)}{budget>0&&<span style={{fontWeight:400,fontSize:12,color:T.sub}}> of ${budget.toFixed(0)}</span>}</span>
-                            {budget>0&&<span style={{fontSize:12,fontWeight:700,color:barColor,whiteSpace:"nowrap"}}>{over?`$${(spent-budget).toFixed(0)} over`:`$${(budget-spent).toFixed(0)} left`}</span>}
-                          </div>
-                          <div style={{height:6,background:T.surface,borderRadius:4,overflow:"hidden"}}>
-                            <div style={{height:"100%",width:`${pct}%`,background:barColor,borderRadius:4,transition:"width 0.3s,background 0.3s"}}/>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="sched-stat" style={statCell}>
-                        <div style={statLabel}>Labor % of sales</div>
-                        <div style={{...statVal,color:laborPct!=null&&laborPct>targetPct?"#C0392B":T.text}}>
-                          {laborPct==null ? <span style={{fontWeight:600,fontSize:12,color:T.sub}}>Needs 2+ weeks of sales history</span>
-                            : <>{laborPct.toFixed(0)}% <span style={{fontWeight:500,fontSize:12,color:T.sub}}>target {targetPct}%</span></>}
+                    <div className="sched-strip" style={{display:"grid",gridTemplateColumns:"minmax(0,1.5fr) minmax(0,1fr) minmax(0,1fr)",gap:12}}>
+                      <div style={tile(budgetTone)}>
+                        <label htmlFor="sw-weekly-budget" style={lab(budgetTone)}>Scheduled vs. budget</label>
+                        {!editingBudget && (
+                          <button onClick={()=>setEditingBudget(true)} title={budget>0?"Edit weekly budget":"Set weekly budget"} aria-label={budget>0?"Edit weekly budget":"Set weekly budget"}
+                            style={{position:"absolute",top:10,right:10,width:22,height:22,background:"none",border:"none",padding:0,cursor:"pointer",color:TONES[budgetTone].lab,display:"flex",alignItems:"center",justifyContent:"center",borderRadius:4}}>{pencil}</button>
+                        )}
+                        <div style={num(budgetTone)}>{money(spent)}</div>
+                        <div style={det(budgetTone)}>
+                          {editingBudget ? (
+                            <>of $
+                              <input id="sw-weekly-budget" type="number" min="0" step="10" autoFocus defaultValue={weeklyBudget}
+                                onKeyDown={e=>{ if(e.key==="Enter") saveBudget(e.target.value); if(e.key==="Escape") setEditingBudget(false); }}
+                                onBlur={e=>saveBudget(e.target.value)}
+                                style={{width:80,height:20,border:`1.5px solid ${TONES[budgetTone].lab}`,borderRadius:5,padding:"0 6px",fontSize:12,fontWeight:700,outline:"none",background:"#fff",color:"#1C2B22",boxSizing:"border-box"}}/>
+                            </>
+                          ) : budget>0 ? (
+                            <span>of {money(budget)} · <b style={{fontWeight:700}}>{over?`${money(spent-budget)} over`:`${money(budget-spent)} left`}</b></span>
+                          ) : <span>No budget set</span>}
                         </div>
                       </div>
-                      <div className="sched-stat" style={statCell}>
-                        <div style={statLabel}>Over 40 hours</div>
-                        <div style={{...statVal,color:overtime.length?"#C0392B":T.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}
-                          title={overtime.map(e=>`${e.name||"Unnamed"} · ${eWkH(activeWeek,e.id)}h`).join(", ")}>
-                          {overtime.length===0 ? "No one" : overtime.map(e=>`${(e.name||"Unnamed").split(" ")[0]} · ${eWkH(activeWeek,e.id)}h`).join(", ")}
-                        </div>
+                      <div style={tile(laborTone)}>
+                        <div style={lab(laborTone)}>Labor % of sales</div>
+                        <div style={num(laborTone)}>{laborPct==null ? "—" : `${laborPct.toFixed(1)}%`}</div>
+                        <div style={det(laborTone)}>{laborPct==null ? "Needs 2 weeks of sales" : `Target ${targetPct}%`}</div>
+                      </div>
+                      <div style={tile(otTone)} title={overtime.map(e=>`${e.name||"Unnamed"} · ${eWkH(activeWeek,e.id)}h`).join(", ")}>
+                        <div style={lab(otTone)}>Overtime</div>
+                        <div style={num(otTone)}>{overtime.length===0 ? "None" : `${overtime.length} ${overtime.length===1?"person":"people"}`}</div>
+                        <div style={det(otTone)}>{overtime.length===0 ? "No one over 40 hrs" : otNames}</div>
                       </div>
                     </div>
                   );
