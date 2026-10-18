@@ -304,18 +304,19 @@ async function handleHistory(req, res, token, business_id) {
     const today = hCentralDate(Date.now());
     const end = hAddDays(today, -RECENT_GAP_DAYS);
     const floor = hAddDays(today, -365 * MAX_YEARS_BACK);
-    const [first] = await hSbGet(`sales_data?select=date&business_id=eq.${b.id}&order=date.asc&limit=1`);
-    if (!first?.date) return res.status(200).json({ status: "no_sales" });
-    const start = first.date > floor ? first.date : floor;
+    const [first] = await hSbGet(`sales_data?select=sale_date&business_id=eq.${b.id}&order=sale_date.asc&limit=1`);
+    if (!first?.sale_date) return res.status(200).json({ status: "no_sales" });
+    const firstDay = String(first.sale_date).slice(0, 10);
+    const start = firstDay > floor ? firstDay : floor;
     if (start > end) return res.status(200).json({ status: "up_to_date", inserted: 0 });
 
     // Which sales days are still missing weather?
     const [salesDays, haveDays] = await Promise.all([
-      sbGetAll(`sales_data?select=date&business_id=eq.${b.id}&date=gte.${start}&date=lte.${end}&order=date.asc`),
+      sbGetAll(`sales_data?select=sale_date&business_id=eq.${b.id}&sale_date=gte.${start}&sale_date=lte.${end}&order=sale_date.asc`),
       sbGetAll(`daily_weather?select=weather_date&business_id=eq.${b.id}&weather_date=gte.${start}&weather_date=lte.${end}&order=weather_date.asc`),
     ]);
     const have = new Set((haveDays || []).map(r => r.weather_date));
-    const missing = [...new Set((salesDays || []).map(r => r.date))].filter(d => !have.has(d)).sort();
+    const missing = [...new Set((salesDays || []).map(r => String(r.sale_date).slice(0, 10)))].filter(d => !have.has(d)).sort();
     if (!missing.length) return res.status(200).json({ status: "up_to_date", inserted: 0 });
 
     const station = await findStation(Number(b.latitude), Number(b.longitude), missing[0], missing[missing.length - 1]);
