@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useEffect, useCallback } from "react";
+import { useState, useMemo, useRef, useEffect, useCallback, Fragment } from "react";
 import {
   ResponsiveContainer, LineChart as RLineChart, BarChart as RBarChart,
   AreaChart as RAreaChart, ComposedChart as RComposedChart,
@@ -1596,6 +1596,7 @@ export default function App() {
   const [addrDraft,      setAddrDraft]      = useState(null);   // editing copy in Settings
   const [weatherInfo,    setWeatherInfo]    = useState({ status:null, latestDate:null });
   const [weatherNow,     setWeatherNow]     = useState(null); // current + forecast from /api/weather
+  const [wxOpenDay,      setWxOpenDay]      = useState(null); // UI Batch 33 — expanded Weather Outlook row
   const [weatherOpen,    setWeatherOpen]    = useState(false);
   const [costs,          setCosts]          = useState([]);   // business_costs rows
   const [costsOpen,      setCostsOpen]      = useState(false);
@@ -2777,6 +2778,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             };
           }
         } catch (e) { console.warn("Shift type attribution failed (Pulse continues without it):", e); }
+        try { snapshot.weatherOutlook = await computeWeatherOutlook(); }
+        catch (e) { console.warn("Weather outlook failed (Pulse continues without it):", e); }
         const result   = computePulse(snapshot);
         const now = new Date().toISOString();
         const weekStart = wk1Start;
@@ -3326,7 +3329,34 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       nextWeekFocus = `Review your operating hours in Settings and make sure they reflect when you're actually open. Accurate hours let ShiftWise detect coverage gaps automatically and give the Pulse engine better data to work with next week.`;
     }
 
-    return { pulse, headline, score: { value: score, label: scoreLabel, reason: scoreReason }, sections: sections.slice(0, 6), actions: actions.slice(0, 5), positives: positives.slice(0, 3), nextWeekFocus };
+    // ── UI Batch 33: Weather Outlook (bottom of sections; top 2 calls at the end of Action Items)
+    const wo = snap.weatherOutlook;
+    const wxActions = [];
+    let wxSection = null;
+    if (wo?.days?.length) {
+      const LONG = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+      const word = { sunny:"sunny", cloudy:"cloudy", rainy:"rain", storm:"storms", snowy:"snow" };
+      const calls = wo.days.filter(d => d.call === "add" || d.call === "cut").sort((a, b) => b.diff - a.diff);
+      calls.slice(0, 2).forEach(d => {
+        const day = LONG[d.dow];
+        const why = `Your last ${d.matches.length} ${d.wet ? "wet" : "similar"} ${day}s averaged ${$$(d.expected)}. At your ${wo.tgtPct}% labor target that supports about ${d.suggested} hours; ${d.scheduled} are scheduled.`;
+        wxActions.push(d.call === "add"
+          ? { action: `Add about ${d.diff} hours ${day}: ${d.highF}° and ${d.wet ? word[d.condition] || "rain" : word[d.condition] || "clear"}`, why, weather: true }
+          : { action: `Cut about ${d.diff} hours ${day}: ${d.wet ? `${d.condition === "storm" ? "storms are" : "rain is"} forecast` : `${d.highF}° and ${word[d.condition] || "clear"}`}`, why, weather: true });
+      });
+      const rated = wo.days.filter(d => d.call !== "none");
+      const insight = !rated.length
+        ? `Not enough history yet to make weather calls for the next week. Each day needs at least 3 past days with the same weekday and similar weather. This fills in as you log more days.`
+        : calls.length
+        ? `${calls.length === 1 ? "One day looks" : `${calls.length} days look`} off for the forecast. Suggested hours use your past days with similar weather and your ${wo.tgtPct}% labor target.`
+        : `Your schedule lines up with the forecast. Suggested hours use your past days with similar weather and your ${wo.tgtPct}% labor target.`;
+      wxSection = { title: "Weather Outlook", icon: "🌦️", urgency: calls.length >= 2 ? "medium" : "low", insight, weatherDays: wo.days };
+    }
+    const mainActions = actions.slice(0, 5 - wxActions.length);
+    const allActions = [...mainActions.sort((a, b) => a.priority - b.priority), ...wxActions].map((a, i) => ({ ...a, priority: i + 1 }));
+    const allSections = [...sections.slice(0, 6), ...(wxSection ? [wxSection] : [])];
+
+    return { pulse, headline, score: { value: score, label: scoreLabel, reason: scoreReason }, sections: allSections, actions: allActions, positives: positives.slice(0, 3), nextWeekFocus };
   }
   // ── end computePulse ───────────────────────────────────────────────────────
 
@@ -4292,6 +4322,58 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     return out;
   }
 
+  // ── UI Batch 33 — Weather Outlook ──────────────────────────────────────────
+  // For each forecast day: find past days with the same weekday, the same wet/dry
+  // weather and a high within 8°, average what they sold, and turn that into the
+  // hours the labor target supports. Needs 3+ similar days to make a call.
+  async function computeWeatherOutlook() {
+    const fc = (weatherNow?.daily || []).filter(d => d?.date && d.highF != null);
+    if (!fc.length || !bizId) return null;
+    const realToday = toLocalDateStr(new Date());
+    // Demo: line the real forecast up with the demo's virtual week
+    const shiftDays = isDemoBiz ? Math.round((new Date(demoToday + "T12:00:00") - new Date(realToday + "T12:00:00")) / 86400000) : 0;
+    const hist = [];
+    for (let off = 0; off < 5000; off += 1000) {
+      const page = await dbGet(`daily_weather?select=weather_date,condition,high_f&business_id=eq.${bizId}&order=weather_date.asc&limit=1000&offset=${off}`);
+      hist.push(...(page || []));
+      if (!page || page.length < 1000) break;
+    }
+    const revByDate = {};
+    salesData.forEach(sd => { revByDate[sd.date] = (revByDate[sd.date] || 0) + (Number(sd.revenue) || 0); });
+    const isWet = c => ["rainy", "storm", "snowy"].includes(c);
+    const past = hist
+      .filter(h => h.high_f != null && revByDate[h.weather_date] > 0 && h.weather_date < demoToday)
+      .map(h => ({ date: h.weather_date, dow: new Date(h.weather_date + "T12:00:00").getDay(), wet: isWet(h.condition), high: Number(h.high_f), rev: revByDate[h.weather_date] }));
+    const rates = employees.filter(e => e.status !== "inactive").map(e => parseFloat(e.hourlyRate) || 0).filter(r => r > 0);
+    const avgWage = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : null;
+    const tgtPct = laborTargetPct || 30;
+    const days = [];
+    for (const f of fc.slice(0, 7)) {
+      const date = addDays(f.date, shiftDays);
+      if (date < demoToday) continue;
+      if (season.on && !openDay(date)) continue;
+      const dow = new Date(date + "T12:00:00").getDay();
+      const wet = isWet(f.condition) || (f.pop ?? 0) >= 50;
+      const matches = past.filter(p => p.dow === dow && p.wet === wet && Math.abs(p.high - f.highF) <= 8)
+        .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 8);
+      const wk = getSunday(date);
+      const sched = Math.round(employees.reduce((sum, e) => sum + eDayH(wk, e.id, dow), 0) * 10) / 10;
+      const row = { date, dow, condition: f.condition, highF: f.highF, pop: f.pop ?? null, wet, scheduled: sched, matches: matches.map(m => m.date), call: "none" };
+      if (matches.length >= 3 && avgWage) {
+        const expected = matches.reduce((sum, m) => sum + m.rev, 0) / matches.length;
+        const suggested = Math.round(expected * (tgtPct / 100) / avgWage);
+        const diff = suggested - sched;
+        row.expected = Math.round(expected);
+        row.suggested = suggested;
+        row.diff = Math.round(Math.abs(diff));
+        row.call = sched === 0 ? "plan"
+          : (Math.abs(diff) >= 2 && Math.abs(diff) >= 0.2 * Math.max(suggested, 1)) ? (diff > 0 ? "add" : "cut") : "on";
+      }
+      days.push(row);
+    }
+    return days.length ? { days, tgtPct } : null;
+  }
+
   async function computeShiftTypeAttribution(startDate, endDate) {
     const [{ rows: rawPunches, truncated }, hourlyRows] = await Promise.all([
       fetchPunchesForRange(bizId, startDate, endDate),
@@ -4568,6 +4650,67 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   }
 
   // Insights card body for Shift Type Efficiency
+  // UI Batch 33 — Weather Outlook rows under the Pulse section
+  function renderWeatherDays(days) {
+    const cond = { sunny:"Sunny", cloudy:"Cloudy", rainy:"Rain", storm:"Storms", snowy:"Snow" };
+    const CALL = {
+      on:   d => ({ label:"On track", bg:"#E4F0E8", color:"#234733" }),
+      cut:  d => ({ label:`Cut ~${d.diff}h`, bg:"#F3EBDA", color:"#6B5221" }),
+      add:  d => ({ label:`Add ~${d.diff}h`, bg:"#E4EFFB", color:"#1D4F86" }),
+      plan: d => ({ label:`Plan ~${d.suggested}h`, bg:"#E4EFFB", color:"#1D4F86" }),
+      none: d => ({ label:"No call yet", bg:T.muted, color:T.sub }),
+    };
+    const th = { padding:"8px 10px", fontWeight:700, fontSize:10.5, color:T.sub, textTransform:"uppercase", letterSpacing:"0.06em", textAlign:"left" };
+    return (
+      <div style={{borderTop:`1px solid ${T.border}`}}>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%", minWidth:720, borderCollapse:"collapse", fontSize:12.5, fontVariantNumeric:"tabular-nums", color:T.text}}>
+            <thead><tr>
+              <th scope="col" style={{...th, paddingLeft:16}}>Day</th>
+              <th scope="col" style={th}>Forecast</th>
+              <th scope="col" style={th}>Days like it sold</th>
+              <th scope="col" style={{...th, textAlign:"right"}}>Scheduled</th>
+              <th scope="col" style={{...th, textAlign:"right"}}>Suggested</th>
+              <th scope="col" style={{...th, paddingRight:16}}>Call</th>
+            </tr></thead>
+            <tbody>
+              {days.map(d => {
+                const c = CALL[d.call](d);
+                const open = wxOpenDay === d.date;
+                const flagged = d.call === "add" || d.call === "cut";
+                return (
+                  <Fragment key={d.date}>
+                    <tr style={{borderTop:`1px solid ${T.border}`, background: flagged ? "#FFFCF5" : "transparent"}}>
+                      <th scope="row" style={{padding:"11px 16px", textAlign:"left", fontWeight:700, whiteSpace:"nowrap"}}>{DAYS[d.dow]}, {dl(d.date)}</th>
+                      <td style={{padding:"11px 10px", whiteSpace:"nowrap"}}>{cond[d.condition] || "—"}{d.wet && d.pop != null ? ` ${d.pop}%` : ""} · {d.highF}°</td>
+                      <td style={{padding:"11px 10px"}}>
+                        {d.expected != null ? (
+                          <button onClick={() => setWxOpenDay(open ? null : d.date)} aria-expanded={open}
+                            style={{background:"none", border:"none", padding:"4px 0", font:"inherit", fontSize:12.5, color:T.text, cursor:"pointer", textDecoration:"underline", textDecorationColor:T.border, textUnderlineOffset:3}}>
+                            {fmtMoney(d.expected)} · {d.matches.length} days
+                          </button>
+                        ) : <span style={{color:T.sub}}>Not enough history</span>}
+                      </td>
+                      <td style={{padding:"11px 10px", textAlign:"right"}}>{d.scheduled > 0 ? `${d.scheduled}h` : "—"}</td>
+                      <td style={{padding:"11px 10px", textAlign:"right", fontWeight:700}}>{d.suggested != null ? `${d.suggested}h` : "—"}</td>
+                      <td style={{padding:"11px 16px 11px 10px"}}><span style={{fontSize:11, fontWeight:800, padding:"3px 8px", borderRadius:6, background:c.bg, color:c.color, whiteSpace:"nowrap"}}>{c.label}</span></td>
+                    </tr>
+                    {open && (
+                      <tr style={{background:T.muted}}>
+                        <td colSpan={6} style={{padding:"8px 16px 12px", fontSize:12, color:T.sub}}>Based on: {d.matches.map(m => dl(m)).join(", ")}</td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div style={{padding:"9px 16px 12px", fontSize:11, color:T.sub}}>Tap a day's sales to see which past days it's based on.</div>
+      </div>
+    );
+  }
+
   function renderShiftTypeRows(data) {
     const STATUS = {
       over: { label:"Over target", color:"#A93226" },
@@ -10102,7 +10245,10 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                               fontWeight:800, fontSize:12, marginTop:1,
                             }}>{action.priority}</div>
                             <div style={{flex:1, minWidth:0}}>
-                              <div style={{fontWeight:700, fontSize:13, color:T.text, marginBottom:3}}>{action.action}</div>
+                              <div style={{fontWeight:700, fontSize:13, color:T.text, marginBottom:3, display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
+                                {action.action}
+                                {action.weather && <span style={{fontSize:10, fontWeight:800, padding:"2px 7px", borderRadius:5, background:"#E4EFFB", color:"#1D4F86", letterSpacing:"0.04em"}}>WEATHER</span>}
+                              </div>
                               <div style={{fontSize:11, color:T.sub, lineHeight:1.5}}>{action.why}</div>
                             </div>
                           </div>
@@ -10129,6 +10275,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                             </div>
                             <div style={{padding:"13px 16px", fontSize:13, color:T.text, lineHeight:1.7}}>{section.insight}</div>
                             {section.shiftTypes && renderShiftTypeRows(section.shiftTypes)}
+                            {section.weatherDays && renderWeatherDays(section.weatherDays)}
                           </Card>
                         ))}
                       </div>

@@ -184,7 +184,7 @@ async function getNow(b) {
         const pop = p.probabilityOfPrecipitation?.value;
         if (pop != null) row.pop = Math.max(row.pop ?? 0, pop);
       }
-      out.daily = days.slice(0, 5);
+      out.daily = days.slice(0, 7); // widget shows 5; the Pulse weather outlook uses 7
     }
   }
   return out;
