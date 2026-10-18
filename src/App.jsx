@@ -1564,6 +1564,9 @@ export default function App() {
   const [showDailyBreakdown, setShowDailyBreakdown] = useState(false);
   const [cashMode,    setCashMode]    = useState(false);
   const [cashEntries, setCashEntries] = useState({}); // { "YYYY-MM-DD": amount }
+  // UI Batch 25 — Daily breakdown detail view: cash form (day index 0–6 + draft amount)
+  const [ddCashDay,   setDdCashDay]   = useState(null);
+  const [ddCashDraft, setDdCashDraft] = useState("");
   const [laborPctMode, setLaborPctMode] = useState("projected"); // "projected" | "actual"
   // UI Batch 19 — payroll card: projected (schedule) vs actual (punches) for the Overview week
   const [payrollMode,  setPayrollMode]  = useState("projected"); // "projected" | "actual"
@@ -1596,7 +1599,7 @@ const [timesheetHistory, setTimesheetHistory] = useState([]);
 const [punchReviews,   setPunchReviews]   = useState({}); // { punchId: "pending"|"reviewed"|"approved"|"rejected" }
 const [alertsOpen,     setAlertsOpen]     = useState(false);
 const [schedSubTab,    setSchedSubTab]    = useState("schedule"); // "schedule" | "timesheet"
-const [dashSub,        setDashSub]        = useState("overview"); // Dashboard tab: "overview" | "reports"
+const [dashSub,        setDashSub]        = useState("overview"); // Dashboard tab: "overview" | "reports" | "daily" (UI Batch 25)
 
   // ── Coverage / Open Shifts ───────────────────────────────────────────────
   // openShifts: { id, weekKey, empId, dayIdx, originalShift, reason, status, createdAt, claimedBy }
@@ -5806,9 +5809,10 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             <section style={panel} aria-label="Daily breakdown">
               <div style={panelHead}>
                 <h2 style={panelTitle}>Daily breakdown</h2>
-                <button onClick={toggleCashMode} aria-pressed={cashMode}
-                  style={{ ...btnGhost, padding: "0 10px", height: 32, fontSize: 11.5, color: cashMode ? "#1F6B48" : C.sub, borderColor: cashMode ? "#9CCFB5" : C.line }}>
-                  {cashMode ? "Cash entry on" : "Enter cash sales"}
+                <button onClick={() => { setDdCashDay(null); setDdCashDraft(""); setDashSub("daily"); }}
+                  style={{ ...btnGhost, padding: "0 10px", height: 32, fontSize: 11.5, color: "#1F6B48", borderColor: "#9CCFB5", display: "inline-flex", alignItems: "center", gap: 5 }}>
+                  View
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
                 </button>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "44px minmax(0,1fr) minmax(0,1fr) 64px", gap: 8, padding: "0 0 6px", fontSize: 11, fontWeight: 700, color: C.sub, textTransform: "uppercase", letterSpacing: "0.05em" }}>
@@ -5820,14 +5824,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 return (
                   <div key={d.date} style={{ display: "grid", gridTemplateColumns: "44px minmax(0,1fr) minmax(0,1fr) 64px", alignItems: "center", gap: 8, padding: "7px 0", borderTop: `1px solid ${C.line}`, fontVariantNumeric: "tabular-nums", fontSize: 12.5 }}>
                     <span style={{ fontWeight: 700, color: C.ink }}>{DAYS[i]}</span>
-                    {cashMode ? (
-                      <input type="number" min="0" step="0.01" aria-label={`Cash sales ${DAYS[i]}`} placeholder="Cash $"
-                        defaultValue={cashEntries[d.date] > 0 ? cashEntries[d.date] : ""} key={`cash-${d.date}-${cashEntries[d.date]}`}
-                        onBlur={e => saveCashEntry(d.date, e.target.value)} onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
-                        style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${C.line}`, borderRadius: 8, padding: "6px 8px", fontSize: 12.5, background: "white", color: C.ink, textAlign: "right" }} />
-                    ) : (
-                      <span style={{ color: d.revenue > 0 ? C.ink : C.sub, textAlign: "right" }}>{d.revenue > 0 ? fmtMoney(d.revenue) : "—"}</span>
-                    )}
+                    <span style={{ color: d.revenue > 0 ? C.ink : C.sub, textAlign: "right" }}>{d.revenue > 0 ? fmtMoney(d.revenue) : "—"}</span>
                     <span style={{ color: labor > 0 ? C.ink : C.sub, textAlign: "right" }}>{labor > 0 ? fmtMoney(labor) : "—"}</span>
                     <span style={{ textAlign: "right", fontWeight: 700, color: p == null ? C.sub : p > tgt + 5 ? "#A93226" : p > tgt - 5 ? "#8A5A00" : "#1F6B48" }}>{p != null ? `${p.toFixed(0)}%` : "—"}</span>
                   </div>
@@ -5863,6 +5860,180 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             ) : (
               <div className="ov-widgets">{widgets.map(w => renderWidgetCard(w))}</div>
             )}
+          </section>
+        </div>
+      </div>
+    );
+  }
+
+  // ── UI Batch 25 — Daily breakdown detail view (opens from View on the Overview's
+  // Daily breakdown). Same week as the Overview (payWeek). Square = every non-cash
+  // sales row for the day; Cash = the day's cash row; Total = both (as salesData sums them).
+  // Labor hours/$ = scheduled (eDayH × hourly rate), same as the Daily breakdown panel.
+  function renderDailyDetail() {
+    const ink = "#1C2B22", sub = "#5E6B63", line = "#E6E8E4", green = "#2F5A43", tan = "#CDB98F";
+    const card = { background: "#FFFFFF", borderRadius: 14, padding: 20, border: `1px solid ${line}`, boxSizing: "border-box" };
+    const ghost = { background: "#FFFFFF", border: `1px solid ${line}`, borderRadius: 9, padding: "8px 12px", fontSize: 12, fontWeight: 700, color: ink, cursor: "pointer", minHeight: 36, fontFamily: "inherit" };
+    const tgt = laborTargetPct || 30;
+    const paySun = getSunday(demoToday);
+    const dates = weekDatesFromSunday(payWeek).map(toInputDate);
+    const wkLabel = dl(dates[0]) + " – " + dl(dates[6]);
+    const r2 = n => "$" + n.toFixed(2);
+
+    const rows = dates.map((date, i) => {
+      const dayRows = rawSales.filter(r => r.date === date);
+      const square = dayRows.filter(r => r.source !== "cash").reduce((s, r) => s + (Number(r.revenue) || 0), 0);
+      const cash = dayRows.filter(r => r.source === "cash").reduce((s, r) => s + (Number(r.revenue) || 0), 0);
+      const total = square + cash;
+      const hrs = employees.reduce((s, e) => s + eDayH(payWeek, e.id, i), 0);
+      const labor = employees.reduce((s, e) => s + eDayH(payWeek, e.id, i) * (parseFloat(e.hourlyRate) || 0), 0);
+      const rate = total > 0 && hrs > 0 ? total / hrs : null;
+      const pct = total > 0 && labor > 0 ? labor / total * 100 : null;
+      const closed = season.on && !openDay(date);
+      return { date, i, square, cash, total, hrs, labor, rate, pct, closed };
+    });
+    const rated = rows.filter(r => r.rate != null);
+    const maxRate = rated.length ? Math.max(...rated.map(r => r.rate)) : 0;
+    const minRate = rated.length > 1 ? Math.min(...rated.map(r => r.rate)) : null;
+    const wk = rows.reduce((a, r) => ({ square: a.square + r.square, cash: a.cash + r.cash, total: a.total + r.total, hrs: a.hrs + r.hrs, labor: a.labor + r.labor }), { square: 0, cash: 0, total: 0, hrs: 0, labor: 0 });
+    const wkRate = wk.total > 0 && wk.hrs > 0 ? wk.total / wk.hrs : null;
+    const wkPct = wk.total > 0 && wk.labor > 0 ? wk.labor / wk.total * 100 : null;
+    const pctColor = p => p == null ? sub : p > tgt + 5 ? "#A93226" : p > tgt - 5 ? "#8A5A00" : "#1F6B48";
+    const money = n => n > 0 ? fmtMoney(n) : "—";
+    const hrsTxt = h => h > 0 ? `${Math.round(h * 10) / 10}h` : "—";
+
+    // Cash form defaults to today (or the week's last day when viewing another week)
+    const todayIdx = dates.indexOf(demoToday);
+    const pick = ddCashDay != null ? ddCashDay : (todayIdx >= 0 ? todayIdx : 6);
+    const pickDate = dates[pick];
+    const draft = ddCashDay != null || ddCashDraft !== "" ? ddCashDraft : (cashEntries[pickDate] > 0 ? String(cashEntries[pickDate]) : "");
+    const saveCash = () => {
+      const v = parseFloat(String(draft).replace(/[^0-9.]/g, ""));
+      if (draft !== "" && isNaN(v)) { showToast("Enter a dollar amount", 3000, "error"); return; }
+      saveCashEntry(pickDate, draft === "" ? "" : v);
+      setDdCashDraft(draft === "" ? "" : String(v));
+      showToast(draft === "" ? `Cash cleared for ${DAYS[pick]} ✓` : `Cash saved for ${DAYS[pick]} ✓`);
+    };
+    const syncTxt = squareLastSync ? (() => {
+      const d = new Date(squareLastSync);
+      const sameDay = toLocalDateStr(d) === toLocalDateStr(new Date());
+      return (sameDay ? "" : d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) + ", ") + d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    })() : null;
+    const squarePct = wk.total > 0 ? wk.square / wk.total * 100 : 0;
+
+    return (
+      <div style={{ display: "flex", flexDirection: "column", gap: 14, color: ink }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <button onClick={() => setDashSub("overview")} style={{ background: "none", border: "none", color: green, fontWeight: 700, fontSize: 14, cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 6, minHeight: 44, padding: 0, fontFamily: "inherit" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+            Back to Overview
+          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "#F7F8F6", border: `1px solid ${line}`, borderRadius: 12, padding: 4 }}>
+            <button aria-label="Previous week" onClick={() => { setPayWeek(getSunday(addDays(payWeek, -7))); setDdCashDay(null); setDdCashDraft(""); }} style={{ ...ghost, width: 40, padding: 0 }}>‹</button>
+            <span style={{ fontSize: 12.5, fontWeight: 700, padding: "0 4px", whiteSpace: "nowrap", minWidth: 120, textAlign: "center" }}>{payWeek === paySun ? "This week" : wkLabel}</span>
+            <button aria-label="Next week" onClick={() => { setPayWeek(getSunday(addDays(payWeek, 7))); setDdCashDay(null); setDdCashDraft(""); }} style={{ ...ghost, width: 40, padding: 0 }}>›</button>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 14, alignItems: "stretch" }}>
+          {/* Left column */}
+          <div style={{ flex: "1 1 250px", maxWidth: 300, minWidth: 240, display: "flex", flexDirection: "column", gap: 12 }}>
+            <section style={{ ...card, display: "flex", flexDirection: "column", gap: 10 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: "0.06em", color: sub }}>SALES THIS WEEK</div>
+              <div style={{ fontSize: 32, fontWeight: 800, lineHeight: 1.1 }}>{wk.total > 0 ? fmtMoney(wk.total) : "—"}</div>
+              <div style={{ height: 10, borderRadius: 5, background: wk.total > 0 ? tan : line, overflow: "hidden" }}>
+                <div style={{ width: `${squarePct}%`, height: "100%", background: "#3E6B52" }} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, color: sub }}>
+                <span>Square {fmtMoney(wk.square)}</span><span>Cash {fmtMoney(wk.cash)}</span>
+              </div>
+            </section>
+
+            {squareConnected && (
+              <section aria-label="Square connection" style={{ background: "#FFFFFF", border: `1px solid ${line}`, borderRadius: 999, padding: "4px 4px 4px 14px", display: "flex", alignItems: "center", gap: 8, minHeight: 44, boxSizing: "border-box" }}>
+                <span aria-hidden="true" style={{ width: 8, height: 8, borderRadius: "50%", background: "#2E7D57", flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                  <strong>Square</strong> <span style={{ color: sub }}>{squareSyncing ? "· syncing…" : syncTxt ? `· synced ${syncTxt}` : "· connected"}</span>
+                </span>
+                <button aria-label="Sync Square now" onClick={handleSyncSquare} disabled={squareSyncing}
+                  style={{ width: 36, height: 36, border: `1px solid ${line}`, background: "#FFFFFF", borderRadius: "50%", cursor: squareSyncing ? "default" : "pointer", color: green, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, opacity: squareSyncing ? 0.5 : 1, padding: 0 }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M3 21v-5h5"/></svg>
+                </button>
+              </section>
+            )}
+
+            <section style={{ ...card, flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", gap: 12 }}>
+              <div style={{ fontSize: 15, fontWeight: 700 }}>Add cash sales</div>
+              <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: sub }}>Day
+                <select value={pick} onChange={e => { const k = parseInt(e.target.value, 10); setDdCashDay(k); setDdCashDraft(cashEntries[dates[k]] > 0 ? String(cashEntries[dates[k]]) : ""); }}
+                  style={{ minHeight: 44, padding: "0 12px", border: `1px solid ${line}`, borderRadius: 8, fontSize: 14, color: ink, background: "#FFFFFF", fontFamily: "inherit" }}>
+                  {dates.map((d, k) => <option key={d} value={k}>{DAYS[k]}, {dl(d)}</option>).reverse()}
+                </select>
+              </label>
+              <label style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12.5, color: sub }}>Cash total
+                <input type="text" inputMode="decimal" placeholder="$0" value={draft}
+                  onChange={e => { setDdCashDay(pick); setDdCashDraft(e.target.value); }}
+                  onKeyDown={e => { if (e.key === "Enter") saveCash(); }}
+                  style={{ minHeight: 44, padding: "0 12px", border: `1.5px solid ${ink}`, borderRadius: 8, fontSize: 15, fontWeight: 600, color: ink, boxSizing: "border-box", fontFamily: "inherit" }} />
+              </label>
+              <button onClick={saveCash} style={{ minHeight: 46, border: "none", borderRadius: 10, background: green, color: "#FFFFFF", fontSize: 14, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" }}>Save cash sales</button>
+            </section>
+          </div>
+
+          {/* Sales & Labor table */}
+          <section style={{ ...card, flex: "999 1 560px", minWidth: 0, padding: "20px 0 8px" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "baseline", gap: 8, padding: "0 20px 14px" }}>
+              <h2 style={{ margin: 0, fontSize: 16, fontWeight: 800 }}>Sales &amp; Labor · {wkLabel}</h2>
+              {wkRate != null && <span style={{ fontSize: 12.5, fontWeight: 700, color: green }}>Avg {r2(wkRate)} / labor hr</span>}
+            </div>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", minWidth: 760, borderCollapse: "collapse", fontSize: 13.5, fontVariantNumeric: "tabular-nums" }}>
+                <thead>
+                  <tr style={{ background: "#F2F0EA", textAlign: "left", fontSize: 11, letterSpacing: "0.06em", color: sub }}>
+                    {["DAY","SQUARE","CASH","TOTAL","LABOR","LABOR HRS","LABOR %","REVENUE / LABOR HR"].map((h, k) => (
+                      <th key={h} scope="col" style={{ padding: k === 0 ? "11px 20px" : k === 7 ? "11px 20px 11px 10px" : "11px 10px", fontWeight: 700 }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(r => {
+                    const best = r.rate != null && r.rate === maxRate && rated.length > 1;
+                    const low = r.rate != null && minRate != null && r.rate === minRate && minRate !== maxRate;
+                    return (
+                      <tr key={r.date} style={{ borderBottom: "1px solid #ECE9E1", background: best ? "#EEF3EF" : "#FFFFFF", color: r.closed ? sub : ink }}>
+                        <th scope="row" style={{ padding: "13px 20px", textAlign: "left", fontWeight: 700 }}>{DAYS[r.i]}</th>
+                        <td style={{ padding: "13px 10px" }}>{money(r.square)}</td>
+                        <td style={{ padding: "13px 10px" }}>{money(r.cash)}</td>
+                        <td style={{ padding: "13px 10px", fontWeight: 600 }}>{r.closed && r.total === 0 ? "Closed" : money(r.total)}</td>
+                        <td style={{ padding: "13px 10px" }}>{money(r.labor)}</td>
+                        <td style={{ padding: "13px 10px" }}>{hrsTxt(r.hrs)}</td>
+                        <td style={{ padding: "13px 10px", fontWeight: 700, color: pctColor(r.pct) }}>{r.pct != null ? `${r.pct.toFixed(0)}%` : "—"}</td>
+                        <td style={{ padding: "13px 20px 13px 10px" }}>
+                          {r.rate == null ? <span style={{ color: sub }}>—</span> : (
+                            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                              <span style={{ fontWeight: 700, minWidth: 58 }}>{r2(r.rate)}</span>
+                              <div style={{ height: 7, borderRadius: 4, width: Math.max(6, Math.round(r.rate / maxRate * 100)), background: low ? "#B89B5E" : "#3E6B52" }} />
+                              {best && <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 7px", borderRadius: 5, background: "#DCE8DF", color: "#234733" }}>Best</span>}
+                              {low && <span style={{ fontSize: 11, fontWeight: 700, padding: "3px 7px", borderRadius: 5, background: "#F3EBDA", color: "#6B5221" }}>Lowest</span>}
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  <tr style={{ fontWeight: 800 }}>
+                    <th scope="row" style={{ padding: "13px 20px", textAlign: "left" }}>Week</th>
+                    <td style={{ padding: "13px 10px" }}>{money(wk.square)}</td>
+                    <td style={{ padding: "13px 10px" }}>{money(wk.cash)}</td>
+                    <td style={{ padding: "13px 10px" }}>{money(wk.total)}</td>
+                    <td style={{ padding: "13px 10px" }}>{money(wk.labor)}</td>
+                    <td style={{ padding: "13px 10px" }}>{hrsTxt(wk.hrs)}</td>
+                    <td style={{ padding: "13px 10px", color: pctColor(wkPct) }}>{wkPct != null ? `${wkPct.toFixed(1)}%` : "—"}</td>
+                    <td style={{ padding: "13px 20px 13px 10px" }}>{wkRate != null ? r2(wkRate) : "—"}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </section>
         </div>
       </div>
@@ -9239,13 +9410,13 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             <div>
               <div role="tablist" aria-label="Dashboard sections" style={{display:"flex",gap:6,marginBottom:14}}>
                 {[["overview","Overview"],["reports","Report Builder"]].map(([v,lbl])=>(
-                  <button key={v} role="tab" aria-selected={dashSub===v} onClick={()=>setDashSub(v)} style={{
-                    background:dashSub===v?T.dark:T.muted, color:dashSub===v?"white":T.sub,
+                  <button key={v} role="tab" aria-selected={dashSub===v || (v==="overview" && dashSub==="daily")} onClick={()=>setDashSub(v)} style={{
+                    background:(dashSub===v || (v==="overview" && dashSub==="daily"))?T.dark:T.muted, color:(dashSub===v || (v==="overview" && dashSub==="daily"))?"white":T.sub,
                     border:"none",borderRadius:8,padding:"8px 18px",fontWeight:700,fontSize:13,cursor:"pointer",transition:"all 0.15s",minHeight:40
                   }}>{lbl}</button>
                 ))}
               </div>
-              {dashSub==="overview" ? renderOverview() : renderReportBuilderPanel()}
+              {dashSub==="overview" ? renderOverview() : dashSub==="daily" ? renderDailyDetail() : renderReportBuilderPanel()}
             </div>
           )}
 
