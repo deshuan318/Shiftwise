@@ -1,28 +1,21 @@
 // ShiftWise Kiosk — v2.1 (ticker removed)
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
-const SUPABASE_URL      = "https://kyrjgfeowmflazywsuir.supabase.co";
-const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt5cmpnZmVvd21mbGF6eXdzdWlyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzk0NzMzMTQsImV4cCI6MjA5NTA0OTMxNH0.njuDREVF4oIgTYN6wLXKw6Hw_KsFzKPoMabkld_jy0E";
-
-async function kbFetch(path, opts = {}) {
-  const url = `${SUPABASE_URL}/rest/v1/${path}`;
-  const res = await fetch(url, {
-    ...opts,
-    headers: {
-      "apikey":        SUPABASE_ANON_KEY,
-      "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
-      "Content-Type":  "application/json",
-      "Prefer":        opts.prefer || "return=representation",
-      ...(opts.headers || {}),
-    },
+// Security batch: the kiosk only talks to /api/kiosk. No database key, no PINs,
+// no pay rates ever reach this page — PINs are checked on the server.
+class KioskApiError extends Error {
+  constructor(message, status, code, extra) { super(message); this.status = status; this.code = code; this.extra = extra || {}; }
+}
+async function kioskApi(method, body, query = "") {
+  const res = await fetch(`/api/kiosk${query}`, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
-  if (!res.ok) {
-    let msg = text || res.statusText;
-    try { const parsed = JSON.parse(text); msg = parsed.message || parsed.error_description || parsed.error || msg; } catch {}
-    throw new Error(msg);
-  }
-  return text ? JSON.parse(text) : null;
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch {}
+  if (!res.ok) throw new KioskApiError((data && data.error) || res.statusText || "Request failed", res.status, data && data.error, data);
+  return data;
 }
 
 // Translates raw network/Postgres errors into plain English for the kiosk screen.
@@ -42,42 +35,16 @@ function kioskFriendlyError(err, fallback) {
 const DATA_LAYER = {
   async getBusinessData(bizId) {
     if (!bizId) return null;
-    const bizRows = await kbFetch(`businesses?select=*&id=eq.${bizId}&limit=1`);
-    const business = bizRows?.[0];
-    if (!business) return null;
-    const [empRows, weekRows] = await Promise.all([
-      kbFetch(`employees?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`),
-      kbFetch(`schedule_weeks?select=*&business_id=eq.${business.id}&order=week_start.asc`),
-    ]);
-    // Deactivated (former) employees can't clock in
-    const activeEmpRows = (empRows || []).filter(e => e.status !== "inactive");
-    const wkIds = (weekRows || []).map(w => w.id);
-    const shiftRows = wkIds.length ? await kbFetch(`shifts?select=*&week_id=in.(${wkIds.join(",")})`) : [];
-    const schedule = {};
-    for (const row of (shiftRows || [])) {
-      const wk = (weekRows || []).find(w => w.id === row.week_id);
-      if (!wk) continue;
-      if (!schedule[wk.week_start]) schedule[wk.week_start] = {};
-      if (!schedule[wk.week_start][row.employee_id]) schedule[wk.week_start][row.employee_id] = {};
-      schedule[wk.week_start][row.employee_id][row.day_index] = {
-        start: parseFloat(row.start_dec), end: parseFloat(row.end_dec),
-        type: row.shift_types || ["regular"], notes: row.notes || "",
-      };
-    }
-    return {
-      businessId: business.id, businessName: business.name || "ShiftWise",
-      employees: activeEmpRows.map(e => ({ id: e.id, name: e.name, role: e.role || "", pin: e.pin || "", color: e.color || "#2D6A4F", availableDays: e.available_days || [0,1,2,3,4,5,6] })),
-      schedule, weeks: (weekRows || []).map(w => w.week_start),
-    };
+    try { return await kioskApi("GET", null, `?bizId=${encodeURIComponent(bizId)}`); }
+    catch (e) { if (e.status === 404 || e.status === 400) return null; throw e; }
   },
-  async writePunch(punch, businessId) {
-    await kbFetch("punches", { method: "POST", body: JSON.stringify({ business_id: businessId, employee_id: punch.empId, employee_name: punch.empName, punch_type: punch.type, punched_at: punch.time || toCSTPunchTime(), scheduled_start: punch.scheduled?.start ?? null, scheduled_end: punch.scheduled?.end ?? null, flags: punch.flags || [] }) });
+  async verifyPin(bizId, empId, pin) {
+    const r = await kioskApi("POST", { action: "verify", bizId, empId, pin });
+    return r.punches || [];
   },
-  async getTodayPunchesForEmp(empId) {
-    const todayStart = new Date(); todayStart.setHours(0,0,0,0);
-    const todayCST = toLocalDateStr(new Date());
-    const rows = await kbFetch(`punches?select=*&employee_id=eq.${empId}&punched_at=gte.${todayCST}T00:00:00&order=punched_at.asc`);
-    return (rows || []).map(r => ({ id: r.id, type: r.punch_type, time: r.punched_at, scheduled: r.scheduled_start ? { start: parseFloat(r.scheduled_start), end: parseFloat(r.scheduled_end) } : null, flags: r.flags || [] }));
+  async writePunch(punch, bizId) {
+    const { pin, ...rest } = punch;
+    await kioskApi("POST", { action: "punch", bizId, empId: punch.empId, pin, punch: rest });
   },
 };
 
@@ -245,7 +212,11 @@ export default function ShiftWiseKiosk() {
     let syncedAny = false;
     for (const item of queue) {
       try { await DATA_LAYER.writePunch(item.punch, bizId); syncedAny = true; }
-      catch(e) { remaining.push(item); if (!isConnectivityError(e)) console.warn("Queued punch failed permanently:", e); }
+      catch(e) {
+        // Wrong PIN / removed employee / bad data can never succeed — drop it. Retry everything else.
+        if (e instanceof KioskApiError && [400, 401, 403, 404].includes(e.status)) { console.warn("Queued punch rejected:", e.code); continue; }
+        remaining.push(item);
+      }
     }
     KioskStorage.setQueue(bizId, remaining);
     setQueueCount(remaining.length);
@@ -308,28 +279,34 @@ export default function ShiftWiseKiosk() {
   function handleKey(k) {
     if (pin.length>=6) return;
     const next = pin+k; setPin(next);
-    if (selectedEmp && selectedEmp.pin && next===selectedEmp.pin) {
-      setTimeout(()=>submitPin(next),120);
-    }
   }
 
   function handleBackspace() { setPin(p=>p.slice(0,-1)); }
 
   async function submitPin(pinVal) {
-    const val = pinVal||pin; if (!val || !selectedEmp) return;
-    if (val !== selectedEmp.pin) { setResultMsg({ok:false,message:"PIN not recognized. Please try again.",icon:"❌"}); setScreen("result"); return; }
-    const emp = selectedEmp;
-    setMatchedEmp(emp);
+    const val = pinVal||pin; if (!val || !selectedEmp || submitting) return;
+    if (!selectedEmp.hasPin) { setResultMsg({ok:false,message:"No PIN is set for you yet. Ask your manager.",icon:"🔒"}); setScreen("result"); return; }
+    const emp = { ...selectedEmp, pin: val }; // PIN rides along to the server with the punch; never stored past the queue
     const todayStr = toLocalDateStr(new Date());
     const queuedToday = KioskStorage.getQueue(bizId)
       .filter(q => q.punch.empId === emp.id && q.punch.time.slice(0,10) === todayStr)
       .map(q => ({ id: `queued-${q.punch.time}`, type: q.punch.type, time: q.punch.time, scheduled: q.punch.scheduled, flags: q.punch.flags }));
+    setSubmitting(true);
     try {
-      const punches = await DATA_LAYER.getTodayPunchesForEmp(emp.id);
+      const punches = await DATA_LAYER.verifyPin(bizId, emp.id, val);
       const merged = [...punches, ...queuedToday].sort((a,b)=>new Date(a.time)-new Date(b.time));
       setTodayPunches(merged);
+    } catch(e) {
+      setSubmitting(false);
+      if (isConnectivityError(e)) { setTodayPunches(queuedToday); setMatchedEmp(emp); setIsOffline(true); setScreen("confirm"); return; } // offline — PIN is checked when the punch syncs
+      const msg = e.code === "locked" ? "Too many wrong PINs. Try again in 5 minutes or ask your manager."
+        : e.code === "no_pin" ? "No PIN is set for you yet. Ask your manager."
+        : e.status === 401 ? "PIN not recognized. Please try again."
+        : kioskFriendlyError(e, "Couldn't check your PIN. Try again.");
+      setResultMsg({ok:false,message:msg,icon:e.code === "locked" ? "🔒" : "❌"}); setScreen("result"); return;
     }
-    catch(e) { setTodayPunches(queuedToday); } // offline — go on what we know locally
+    setSubmitting(false);
+    setMatchedEmp(emp);
     setScreen("confirm");
   }
 
@@ -355,7 +332,7 @@ export default function ShiftWiseKiosk() {
       message = flags.includes("EARLY_OUT") ? `Clocked out early. Shift ends at ${fmt(todayData.shift.end)}.` : "Clocked out. Have a great rest of your day!";
     }
 
-    const punch = { empId:emp.id, empName:emp.name, type:action, time:toCSTPunchTime(), scheduled:todayData?.shift||null, flags };
+    const punch = { empId:emp.id, empName:emp.name, pin:emp.pin, type:action, time:toCSTPunchTime(), scheduled:todayData?.shift||null, flags };
     try {
       await DATA_LAYER.writePunch(punch,bizData.businessId);
       setMatchedEmp(emp);
