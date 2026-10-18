@@ -4671,7 +4671,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   async function checkSquareStatus(businessId) {
     if (!businessId) { setSquareLoading(false); return; }
     try {
-      const res = await fetch(`/api/square-status?business_id=${businessId}`);
+      const res = await fetch(`/api/square-status?business_id=${businessId}`, { headers: { Authorization: `Bearer ${getToken()}` } });
       if (!res.ok) throw new Error("not connected");
       const data = await res.json();
       setSquareConnected(!!data.connected);
@@ -4686,9 +4686,20 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     }
   }
 
-  function handleConnectSquare() {
+  async function handleConnectSquare() {
     if (!bizId) return;
-    window.location.href = `/api/square-oauth-start?business_id=${bizId}`;
+    try {
+      const res = await fetch("/api/square-oauth-start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+        body: JSON.stringify({ business_id: bizId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.url) throw new Error(data.error || "Couldn't start the Square connection");
+      window.location.href = data.url;
+    } catch (err) {
+      showError(friendlyError(err, "Couldn't start the Square connection — try again."));
+    }
   }
 
   async function handleSyncSquare() {
@@ -4697,7 +4708,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     try {
       const res = await fetch("/api/square-sync", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
         body: JSON.stringify({ business_id: bizId }),
       });
       if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.error || "Sync failed"); }
@@ -4721,7 +4732,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     try {
       const res = await fetch("/api/square-disconnect", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
         body: JSON.stringify({ business_id: bizId }),
       });
       if (!res.ok) throw new Error("Could not disconnect");
