@@ -7714,7 +7714,11 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 );
               })()}
 
-              <button onClick={handleSignOut} style={{background:"rgba(255,255,255,0.05)",color:"#666",border:"1px solid rgba(255,255,255,0.08)",borderRadius:7,padding:"5px 11px",fontSize:11,fontWeight:700,cursor:"pointer"}} title="Sign Out">⎋</button>
+              <button onClick={handleSignOut} aria-label="Sign out" title="Sign out"
+                style={{width:40,height:40,borderRadius:10,border:"1px solid rgba(255,255,255,0.28)",background:"rgba(255,255,255,0.14)",color:"white",cursor:"pointer",padding:0,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                {/* UI Batch 30 — matches the bell and weather buttons */}
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/></svg>
+              </button>
             </div>
           </div>
         </div>
