@@ -4717,6 +4717,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         setRawSales(prev => mergeSalesRows(prev, "square", data.salesData));
       }
       setSquareLastSync(data.lastSyncedAt || new Date().toISOString());
+      backfillWeatherHistory(bizId); // new sales days → fill their weather
       showToast(`Square sales synced ✓${data.daysSynced ? ` (${data.daysSynced} days)` : ""}`, 4000);
       addAudit("Square Sync", `Synced sales data from Square${data.daysSynced ? ` — ${data.daysSynced} days` : ""}`);
     } catch(err) {
@@ -6665,6 +6666,23 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   // Weather: asks the server to fill any missing recent days and return current
   // conditions + forecast. Runs on load and after the address is saved, so
   // tracking never depends on the nightly job alone.
+  // Weather history batch — backfill past weather (NOAA) for every day with sales.
+  // Runs once per session after weather loads, and again after a Square sync.
+  const weatherHistoryRanRef = useRef(false);
+  async function backfillWeatherHistory(businessId) {
+    if (!businessId) return;
+    try {
+      const r = await fetch("/api/weather-history", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${getToken()}` },
+        body: JSON.stringify({ business_id: businessId }),
+      });
+      const d = await r.json().catch(() => null);
+      if (!r.ok) { console.warn("Weather history failed:", d?.error || r.status); return; }
+      if (d?.status === "ok" && d.inserted > 0) console.info(`Weather history: ${d.inserted} days from ${d.station?.name || d.station?.id}`);
+    } catch (e) { console.warn("Weather history failed:", e); }
+  }
+
   async function refreshWeather(businessId) {
     if (!businessId) return;
     try {
@@ -6677,6 +6695,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       if (!r.ok || !d) { console.warn("Weather refresh failed:", d?.error || r.status); return; }
       if (d.errors?.length) console.warn("Weather notes:", d.errors);
       setWeatherNow(d.status === "ok" ? d : null);
+      if (d.status === "ok" && !weatherHistoryRanRef.current) { weatherHistoryRanRef.current = true; backfillWeatherHistory(businessId); }
       setWeatherInfo(w => ({
         status: d.status === "not_found" ? "not_found" : d.status === "ok" ? "ok" : w.status,
         latestDate: d.latestRecorded || w.latestDate,
