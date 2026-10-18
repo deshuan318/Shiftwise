@@ -10709,9 +10709,11 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                                 </div>
                                 <div style={{marginBottom:14,padding:"10px 12px",background:T.accent+"10",borderRadius:10,border:`1px solid ${T.accent}25`}}>
                                   <label style={{fontSize:10,color:T.accent,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Clock-In PIN</label>
-                                  <input type="password" inputMode="numeric" maxLength={6} value={emp.pin||""} onChange={e=>updEmp(emp.id,{pin:e.target.value.replace(/[^0-9]/g,"")})} placeholder="Set a 4–6 digit PIN"
+                                  <input type="password" inputMode="numeric" maxLength={4} value={emp.pin||""} onChange={e=>updEmp(emp.id,{pin:e.target.value.replace(/[^0-9]/g,"").slice(0,4)})} placeholder="Set a 4-digit PIN"
                                     style={{width:"100%",border:`2px solid ${emp.pin?T.accent:T.border}`,borderRadius:8,padding:"9px 11px",fontSize:16,outline:"none",background:T.surface,letterSpacing:"0.2em",transition:"border 0.15s"}}/>
-                                  <div style={{fontSize:10,color:T.sub,marginTop:6}}>Employee enters this on the kiosk screen to clock in and out.</div>
+                                  {emp.pin && emp.pin.length !== 4
+                                    ? <div role="alert" style={{fontSize:10,color:"#A93226",marginTop:6,fontWeight:700}}>PIN must be exactly 4 digits — this one won't work on the kiosk.</div>
+                                    : <div style={{fontSize:10,color:T.sub,marginTop:6}}>Employee enters this 4-digit PIN on the kiosk screen to clock in and out.</div>}
                                 </div>
                                 <div style={{marginBottom:14}}>
                                   <label style={{fontSize:10,color:T.sub,display:"block",marginBottom:5,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.05em"}}>Notes</label>

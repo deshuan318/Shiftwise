@@ -135,7 +135,7 @@ export default async function handler(req, res) {
     if (!UUID.test(String(bizId || "")) || !UUID.test(String(empId || ""))) {
       return res.status(400).json({ error: "Invalid business or employee" });
     }
-    if (!/^\d{4,6}$/.test(String(pin || ""))) return res.status(401).json({ error: "bad_pin" });
+    if (!/^\d{4}$/.test(String(pin || ""))) return res.status(401).json({ error: "bad_pin" });
 
     const emp = await loadActiveEmployee(bizId, empId);
     if (!emp) return res.status(404).json({ error: "Employee not found" });

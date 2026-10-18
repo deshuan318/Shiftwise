@@ -277,8 +277,9 @@ export default function ShiftWiseKiosk() {
   useEffect(() => { if (screen==="pin") setTimeout(()=>pinRef.current?.focus(),100); }, [screen]);
 
   function handleKey(k) {
-    if (pin.length>=6) return;
+    if (pin.length>=4) return;
     const next = pin+k; setPin(next);
+    if (next.length===4) setTimeout(()=>submitPin(next),120); // 4 digits = submit
   }
 
   function handleBackspace() { setPin(p=>p.slice(0,-1)); }
@@ -436,9 +437,9 @@ export default function ShiftWiseKiosk() {
         </div>
         <div style={{marginBottom:20}}>
           <input ref={pinRef} type="password" inputMode="numeric" value={pin}
-            onChange={e=>{const v=e.target.value.replace(/\D/g,"").slice(0,6);setPin(v);}}
-            onKeyDown={e=>{if(e.key==="Enter"&&pin.length>=4)submitPin();}}
-            className="pin-input" placeholder="• • • •" maxLength={6}/>
+            onChange={e=>{const v=e.target.value.replace(/\D/g,"").slice(0,4);setPin(v);if(v.length===4)setTimeout(()=>submitPin(v),120);}}
+            onKeyDown={e=>{if(e.key==="Enter"&&pin.length===4)submitPin();}}
+            className="pin-input" placeholder="• • • •" maxLength={4}/>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:14}}>
           {["1","2","3","4","5","6","7","8","9"].map(k=>(
@@ -448,7 +449,7 @@ export default function ShiftWiseKiosk() {
           <button className="key-btn" onClick={()=>handleKey("0")}>0</button>
           <button className="key-btn" onClick={()=>{setScreen("idle");setPin("");setSelectedAction(null);setSelectedEmp(null);}} style={{fontSize:14,color:"#8B949E"}}>← Back</button>
         </div>
-        <button onClick={()=>submitPin()} disabled={pin.length<4}
+        <button onClick={()=>submitPin()} disabled={pin.length!==4}
           style={{width:"100%",padding:"18px 0",borderRadius:14,border:"none",fontSize:16,fontWeight:700,background:pin.length>=4?(selectedEmp?.color||"#2D6A4F"):"#161B22",color:pin.length>=4?"white":"#8B949E"}}>
           Confirm
         </button>
