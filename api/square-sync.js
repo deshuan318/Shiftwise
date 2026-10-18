@@ -28,6 +28,22 @@ const SQUARE_BASE = process.env.SQUARE_ENV === "sandbox"
 
 const SUPABASE_URL   = process.env.SUPABASE_URL || "https://kyrjgfeowmflazywsuir.supabase.co";
 const SERVICE_KEY    = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+// ── Owner check: caller must be signed in AND own this business ──────────
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+async function requireOwner(req, businessId) {
+  if (!UUID_RE.test(String(businessId || ""))) return null;
+  const token = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "");
+  if (!token) return null;
+  const u = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${token}` } });
+  if (!u.ok) return null;
+  const user = await u.json();
+  if (!user?.id) return null;
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/businesses?select=id&id=eq.${businessId}&owner_id=eq.${user.id}&limit=1`,
+    { headers: { apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}` } });
+  const rows = r.ok ? await r.json() : [];
+  return rows?.[0] ? user : null;
+}
 const SQUARE_VERSION = "2024-01-18";
 const FULL_BACKFILL_DAYS     = 1095; // ~3 years, first sync only
 const INCREMENTAL_OVERLAP_DAYS = 3;  // re-check a small buffer on repeat syncs
@@ -72,6 +88,10 @@ export default async function handler(req, res) {
   const { business_id } = req.body || {};
   if (!business_id) {
     return res.status(400).json({ error: "Missing business_id" });
+  }
+
+  if (!(await requireOwner(req, business_id))) {
+    return res.status(403).json({ error: "Not authorized for this business" });
   }
 
   try {
