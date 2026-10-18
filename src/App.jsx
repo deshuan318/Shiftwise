@@ -3511,6 +3511,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       let cur = startDate;
       while (cur <= endDate) { keys.push(cur); cur = addDays(cur,1); }
     }
+    // UI Batch 23 — a closed day (or a week with no open days) isn't a $0 row
+    if (season.on) return keys.filter(k => grouping === "Week" ? [0,1,2,3,4,5,6].some(i => openDay(addDays(k, i))) : openDay(k));
     return keys;
   }
 
@@ -5133,8 +5135,17 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
 
   function evaluatePriceChange(key, it, date, oldPrice, newPrice, bizDays, totalByDate) {
     const beforeStart = addDays(date, -28), afterEnd = addDays(date, 27) < demoToday ? addDays(date, 27) : demoToday;
-    const before = bizDays.filter(ds => ds >= beforeStart && ds < date);
-    const after  = bizDays.filter(ds => ds >= date && ds <= afterEnd);
+    let before = bizDays.filter(ds => ds >= beforeStart && ds < date);
+    let after  = bizDays.filter(ds => ds >= date && ds <= afterEnd);
+    // UI Batch 23 — seasonal: use the last ~4 open weeks before and the first ~4 open
+    // weeks after, so a change made while closed compares to the end of last season.
+    let acrossSeasons = false;
+    if (season.on) {
+      const sorted = [...bizDays].filter(ds => openDay(ds)).sort();
+      before = sorted.filter(ds => ds < date).slice(-24);
+      after  = sorted.filter(ds => ds >= date && ds <= demoToday).slice(0, 24);
+      acrossSeasons = before.length > 0 && before[before.length - 1] < addDays(date, -28);
+    }
     const group = dates => {
       const by = {};
       dates.forEach(ds => {
@@ -5152,7 +5163,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     const tooEarly = after.length < 14;
     const verdict = tooEarly ? "early" : rev.pct == null ? "flat" : rev.pct >= 2 ? "working" : rev.pct <= -2 ? "not" : "flat";
     return { key, name: it.name, date, oldPrice, newPrice, pricePct: oldPrice > 0 ? (newPrice - oldPrice) / oldPrice * 100 : null,
-      afterDays: after.length, weeksAfter: Math.floor(after.length / 7), qty, rev, total, tooEarly, verdict };
+      afterDays: after.length, weeksAfter: Math.floor(after.length / 7), qty, rev, total, tooEarly, verdict, acrossSeasons };
   }
 
   function renderPriceChangesPanel() {
@@ -5175,7 +5186,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:12,gap:12}}>
           <div>
             <div style={{fontWeight:800,fontSize:14,color:T.text}}>💲 Price Changes</div>
-            <div style={{fontSize:11,color:T.sub,marginTop:2,lineHeight:1.5}}>Found automatically from your Square prices. Each compares the 4 weeks before and after the change, same weekdays.</div>
+            <div style={{fontSize:11,color:T.sub,marginTop:2,lineHeight:1.5}}>Found automatically from your Square prices. Each compares the 4 weeks before and after the change, same weekdays{season.on ? " — open weeks only, so a change made while closed compares to the end of last season" : ""}.</div>
           </div>
           <button onClick={()=>setInsightsPanel(null)} aria-label="Close" style={{background:T.muted,border:"none",borderRadius:"50%",width:28,height:28,fontSize:16,cursor:"pointer",color:T.sub,flexShrink:0}}>×</button>
         </div>
@@ -5196,7 +5207,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                   <span style={{fontWeight:800,fontSize:14,color:T.text}}>{c.name}</span>
                   <span style={{fontWeight:800,fontSize:13,color:T.text,flexShrink:0}}>{money2(c.oldPrice)} → {money2(c.newPrice)}</span>
                 </div>
-                <div style={{fontSize:11,color:T.sub,marginTop:-5}}>Changed {dl(c.date)}{c.pricePct!=null ? ` · ${signPct(c.pricePct)}` : ""}{c.tooEarly ? "" : ` · ${c.weeksAfter >= 4 ? "4 weeks" : `${c.weeksAfter} week${c.weeksAfter!==1?"s":""}`} after so far`}</div>
+                <div style={{fontSize:11,color:T.sub,marginTop:-5}}>Changed {dl(c.date)}{c.acrossSeasons ? " (while closed)" : ""}{c.pricePct!=null ? ` · ${signPct(c.pricePct)}` : ""}{c.tooEarly ? "" : ` · ${c.weeksAfter >= 4 ? "4 weeks" : `${c.weeksAfter} week${c.weeksAfter!==1?"s":""}`} after so far`}</div>
                 {c.tooEarly ? (
                   <>
                     <div style={{fontSize:12,color:T.text}}>Too early to tell: {c.afterDays} of 14 days of sales so far.</div>
@@ -5252,6 +5263,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     const days = dates.map((date, i) => {
       const fixedShare = openIdx.includes(i) ? fixedPerOpenDay : 0;
       const labor = laborByDay[i];
+      // UI Batch 23 — closed for the season: no sales expected, nothing to flag
+      if (season.on && !openDay(date)) return { date, day: DAYS[i], labor, fixedShare, breakEven: null, targetNeed: 0, sales: null, isActual: false, closed: true };
       const breakEven = pctOk ? (labor + fixedShare) / (1 - pctCosts) : null;
       const targetNeed = labor / target;
       let sales = null, isActual = false;
@@ -5260,9 +5273,11 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       return { date, day: DAYS[i], labor, fixedShare, breakEven, targetNeed, sales, isActual };
     });
     const sum = k => days.reduce((s, d) => s + (d[k] || 0), 0);
-    const salesKnown = days.every(d => d.sales != null);
+    const openDays = days.filter(d => !d.closed);
+    const salesKnown = openDays.length > 0 && openDays.every(d => d.sales != null);
+    const weekClosed = openDays.length === 0;
     return {
-      days, salesKnown, pctOk, pctCosts, fixedWeekly, target,
+      days, salesKnown, pctOk, pctCosts, fixedWeekly, target, weekClosed, closedDays: days.length - openDays.length,
       labor: sum("labor"), breakEven: pctOk ? sum("breakEven") : null, targetNeed: sum("targetNeed"),
       sales: salesKnown ? sum("sales") : null, anyActual: days.some(d => d.isActual),
     };
@@ -5319,7 +5334,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     const short = be.days.filter(d => d.sales != null && d[needKey] > 0 && d.sales < d[needKey]);
     const thinnest = be.days.filter(d => d.sales != null && d[needKey] > 0).sort((a,b) => (a.sales - a[needKey]) - (b.sales - b[needKey]))[0];
     let summary = null;
-    if (need != null && be.days.some(d => d.sales != null)) {
+    if (be.weekClosed) {
+      summary = `Closed for the season this week. Fixed costs still run ${fmtMoney(be.fixedWeekly)} a week.`;
+    } else if (need != null && be.days.some(d => d.sales != null)) {
       summary = short.length
         ? `${short.map(d => d.day).join(", ")} ${short.length === 1 ? "doesn't" : "don't"} cover ${isTarget ? `labor at ${laborTargetPct}%` : "costs"}.`
         : thinnest ? `Every day covers ${isTarget ? `labor at ${laborTargetPct}%` : "its costs"}. ${thinnest.day} has the thinnest cushion at ${fmtMoney(thinnest.sales - thinnest[needKey])}.` : null;
