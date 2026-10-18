@@ -8319,9 +8319,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                   const overtime = activeWeek ? employees.filter(e => eWkH(activeWeek, e.id) > 40) : [];
                   const statLabel = {fontSize:11.5,color:T.sub,fontWeight:600};
                   const statVal = {fontSize:14,fontWeight:800,marginTop:2,color:T.text};
-                  const statCell = {borderLeft:`1px solid ${T.border}`,paddingLeft:16,minWidth:0};
+                  const statCell = {borderLeft:`1px solid ${T.accent}40`,paddingLeft:16,minWidth:0};
                   return (
-                    <div className="sched-strip" style={{background:T.muted,borderTop:`1px solid ${T.border}`,borderRadius:`0 0 ${T.radius}px ${T.radius}px`,padding:"12px 14px",display:"grid",gridTemplateColumns:"minmax(280px,1.6fr) repeat(2,minmax(0,1fr))",gap:18,alignItems:"center"}}>
+                    <div className="sched-strip" style={{background:`${T.accent}1F`,borderTop:`1px solid ${T.accent}55`,borderRadius:`0 0 ${T.radius}px ${T.radius}px`,padding:"12px 14px",display:"grid",gridTemplateColumns:"minmax(280px,1.6fr) repeat(2,minmax(0,1fr))",gap:18,alignItems:"center"}}>
                       <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0}}>
                         <label htmlFor="sw-weekly-budget" style={{fontSize:12,fontWeight:700,color:T.sub,whiteSpace:"nowrap"}}>Weekly budget</label>
                         <div style={{position:"relative",flexShrink:0}}>
