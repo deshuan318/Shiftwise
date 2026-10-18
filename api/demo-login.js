@@ -114,7 +114,8 @@ export default async function handler(req, res) {
     const rest = [
       'published_schedules', 'sales_data', 'pulse_history', 'punch_reviews', 'dashboard_widgets',
       'business_hours', 'shift_types', 'business_costs',
-      'sales_hourly', 'sales_items_daily', 'sales_item_names', 'catalog_price_history', 'daily_weather',
+      'sales_hourly', 'sales_items_daily', 'catalog_price_history', 'daily_weather',
+      // sales_item_names is a view built from sales_items_daily — it fills itself, never insert into it
       'attendance_events', 'employee_exits', 'open_shifts', 'templates', 'timesheet_locks', 'recognition',
     ];
     await Promise.all(rest.map((t) => cloneTable(t, newBusinessId, idMap)));
