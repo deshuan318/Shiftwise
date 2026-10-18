@@ -7405,11 +7405,12 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
         {/* Logo — original ShiftWise | Veredian lockup */}
         <div style={{textAlign:"center",marginBottom:32}}>
           <div style={{width:56,height:56,background:T.accent,borderRadius:14,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,margin:"0 auto 16px"}}>📅</div>
-          <div style={{fontSize:26,fontWeight:900,color:T.text,letterSpacing:"-0.01em",display:"inline-flex",alignItems:"center",gap:0}}>
+          {/* UI Batch 31 — Beta sits outside the text flow so the wordmark centers on the card */}
+          <div style={{fontSize:26,fontWeight:900,color:T.text,letterSpacing:"-0.01em",display:"inline-flex",alignItems:"center",gap:0,position:"relative"}}>
             ShiftWise
             <span style={{color:T.sub,margin:"0 7px",fontWeight:300}}>|</span>
             Veredian
-            <span style={{fontSize:11,fontWeight:400,color:T.accent,position:"relative",bottom:"9px",marginLeft:3,letterSpacing:"0.06em"}}>Beta</span>
+            <span style={{fontSize:11,fontWeight:400,color:T.accent,position:"absolute",left:"100%",top:-2,marginLeft:4,letterSpacing:"0.06em"}}>Beta</span>
           </div>
           <div style={{fontSize:13,color:T.sub,marginTop:4}}>Schedule smarter. Run better.</div>
           <div style={{fontSize:12,color:T.sub,marginTop:6,opacity:0.8}}>{authToday}</div>
@@ -7420,10 +7421,6 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           {content}
         </div>
 
-        <div style={{textAlign:"center",marginTop:20,fontSize:11,color:T.sub,lineHeight:1.6}}>
-          Your data is stored securely in Supabase.<br/>
-          Schedule, payroll, and team data sync across all your devices.
-        </div>
       </div>
     </div>
   );
