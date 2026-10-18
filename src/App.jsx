@@ -2136,7 +2136,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
           latestDate = w?.[0]?.weather_date || null;
         } catch {}
         setWeatherInfo({ status: business.geocode_status || null, latestDate });
-        if ((business.address_line || business.zip) && !business.is_demo) refreshWeather(business.id);
+        if (business.address_line || business.zip) refreshWeather(business.id); // demo too — live display only, no backfill
       }
       try {
         const costRows = await dbGet(`business_costs?select=*&business_id=eq.${business.id}&order=sort_order.asc,created_at.asc`);

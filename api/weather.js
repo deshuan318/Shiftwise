@@ -203,7 +203,6 @@ export default async function handler(req, res) {
     const rows = await sbGet(`businesses?select=*&id=eq.${business_id}&owner_id=eq.${user.id}&limit=1`);
     let b = rows?.[0];
     if (!b) return res.status(403).json({ error: "Not your business" });
-    if (b.is_demo) return res.status(200).json({ status: "demo" });
     if (!b.address_line && !b.zip) return res.status(200).json({ status: "no_address" });
     if (b.geocode_status === "not_found") return res.status(200).json({ status: "not_found" });
 
@@ -217,7 +216,8 @@ export default async function handler(req, res) {
     const haveSet = new Set((have || []).map(r => r.weather_date));
     let recorded = 0;
     const errors = [];
-    for (const d of want.filter(d => !haveSet.has(d))) {
+    // Demo sandboxes show live weather but never backfill — their history comes from the template clone
+    for (const d of (b.is_demo ? [] : want.filter(d => !haveSet.has(d)))) {
       try { recorded += await recordDay(b, d); } catch (e) { errors.push(`${d}: ${e.message || e}`); }
     }
     const latestRow = await sbGet(`daily_weather?select=weather_date,condition,high_f,low_f&business_id=eq.${b.id}&order=weather_date.desc&limit=1`);
