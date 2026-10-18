@@ -2723,6 +2723,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   // ─────────────────────────────────────────────────────────────────────────
   async function generateInsight(fromNotification=false) {
     if (insightLoading) return;
+    if (!seasonNow.open) return; // UI Batch 22 — Pulse pauses while closed for the season
     setInsightLoading(true);
     setInsightError(null);
 
@@ -5471,10 +5472,29 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     const pwHrs = employees.reduce((s, e) => s + eWkH(payWeek, e.id), 0);
     const pwStaff = employees.filter(e => eWkH(payWeek, e.id) > 0).length;
 
+    // UI Batch 22 — seasons. A fully closed week shows last season instead of zeros,
+    // and a week right after reopening compares to the same week last season.
+    const weekClosed = season.on && pwDates.every(d => !openDay(d));
+    const lastWeekClosed = season.on && weekDatesFromSunday(lastWkStart).map(toInputDate).every(d => !openDay(d));
+    const cmpStart = lastWeekClosed && !weekClosed ? addDays(payWeek, -364) : lastWkStart;
+    const cmpLabel = cmpStart === lastWkStart ? "last week" : "last season";
+    const salesCmp = cmpStart === lastWkStart ? salesLast : getSales("thisWeek", salesData, getSunday(cmpStart));
+    const viewSeason = weekClosed ? seasonInfo(pwDates[0], season) : null;
+    let lastSeasonSales = 0, lastSeasonLabor = 0;
+    if (viewSeason?.last) {
+      const { start, end } = viewSeason.last;
+      salesData.forEach(d => { if (d.date >= start && d.date <= end) lastSeasonSales += d.revenue || 0; });
+      for (let d = start; d <= end; d = addDays(d, 1)) {
+        const ws = getSunday(d), di = Math.round((new Date(d+"T00:00:00") - new Date(ws+"T00:00:00")) / 86400000);
+        lastSeasonLabor += employees.reduce((s,e) => s + eDayH(ws, e.id, di) * (parseFloat(e.hourlyRate)||0), 0);
+      }
+    }
+    const lastSeasonPct = lastSeasonSales > 0 && lastSeasonLabor > 0 ? lastSeasonLabor / lastSeasonSales * 100 : null;
+
     // Sales vs. last week — same days only (so a week in progress compares fairly)
     const daysIn = salesWk.days.filter(d => d.date <= demoToday).length;
     const curToDate = salesWk.days.slice(0, daysIn).reduce((s, d) => s + d.revenue, 0);
-    const prevToDate = salesLast.days.slice(0, daysIn).reduce((s, d) => s + d.revenue, 0);
+    const prevToDate = salesCmp.days.slice(0, daysIn).reduce((s, d) => s + d.revenue, 0);
     const salesDelta = daysIn > 0 && prevToDate > 0 && curToDate > 0 ? (curToDate - prevToDate) / prevToDate * 100 : null;
 
     // Labor % (actual = labor on days that had sales ÷ those sales)
@@ -5485,6 +5505,8 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     const shownPct = laborPctMode === "projected" ? projPct : actualPct;
     const pctTone = shownPct == null ? T.sub : shownPct > tgt + 5 ? "#A93226" : shownPct > tgt - 5 ? "#8A5A00" : "#1F6B48";
     const forecastNext7 = getForecast("next7", salesData, isDemoBiz ? DEMO_TODAY_ANCHOR : undefined);
+    // Closed now → forecast the first week back instead of the (closed) next 7 days
+    const forecastReopen = !seasonNow.open && seasonNow.reopens ? getForecast("thisWeek", salesData, seasonNow.reopens) : null;
 
     // Suggested budget (unchanged logic)
     const wkSalesDays = salesWk.days.filter(d => d.hasData);
@@ -5496,9 +5518,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
       day: DAYS[i],
       Sales: d.hasData ? Math.round(d.revenue) : null,
       Labor: Math.round(laborWk.days[i].labor),
-      "Last week": salesLast.days[i].hasData ? Math.round(salesLast.days[i].revenue) : null,
+      "Last week": salesCmp.days[i].hasData ? Math.round(salesCmp.days[i].revenue) : null,
     }));
-    const hasLastWeek = salesLast.days.some(d => d.hasData);
+    const hasLastWeek = salesCmp.days.some(d => d.hasData);
     const hoursData = employees.map(e => ({ name: (e.name || "Unnamed").split(" ")[0], hours: Math.round(eWkH(payWeek, e.id) * 10) / 10, color: e.color || T.accent }))
       .filter(x => x.hours > 0).sort((a, b) => b.hours - a.hours);
 
@@ -5559,12 +5581,18 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
             </div>
           </div>
 
+          {seasonNow.seasonal && !seasonNow.open && (
+            <div role="status" style={{ background: "#F6EEE3", border: "1px solid #E8D6BD", borderRadius: 12, padding: "12px 16px", fontSize: 14, color: C.ink }}>
+              <strong>Closed for the season.</strong> Reopens {fmtLongDate(seasonNow.reopens)}.
+            </div>
+          )}
+
           {/* KPI cards */}
           <div className="ov-kpis">
             <div style={kpi(C.blue)}>
               <div style={kpiHead}><span style={kpiLabel}>Sales this week</span></div>
-              <span style={kpiValue}>{totalRevenue > 0 ? fmtMoney(totalRevenue) : "—"}</span>
-              <span style={{ fontSize: 11.5, color: C.sub }}>{salesDelta != null ? <>{deltaChip(salesDelta)} vs. same days last week</> : totalRevenue > 0 ? `${wkSalesDays.length} day${wkSalesDays.length !== 1 ? "s" : ""} of sales` : "No sales recorded yet"}</span>
+              <span style={kpiValue}>{weekClosed && totalRevenue === 0 ? "Closed" : totalRevenue > 0 ? fmtMoney(totalRevenue) : "—"}</span>
+              <span style={{ fontSize: 11.5, color: C.sub }}>{weekClosed && totalRevenue === 0 ? (lastSeasonSales > 0 ? `Last season: ${fmtMoney(lastSeasonSales)} total` : "Closed for the season") : salesDelta != null ? <>{deltaChip(salesDelta)} vs. same days {cmpLabel}</> : totalRevenue > 0 ? `${wkSalesDays.length} day${wkSalesDays.length !== 1 ? "s" : ""} of sales` : "No sales recorded yet"}</span>
             </div>
             {(() => {
               // Payroll this week. Projected = scheduled hours × hourly pay (same math as the
@@ -5605,6 +5633,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                       ? (pp?.error ? <>Couldn't load punches. <button onClick={() => loadOverviewPayPunches(payWeek)} style={{ background: "none", border: "none", color: T.accent, fontWeight: 700, cursor: "pointer", padding: 0, fontSize: 11.5 }}>Try again</button></>
                         : pp?.loading || !pp ? "Loading punches…"
                         : `${actualHrs.toFixed(1)}h worked · projected ${fmtMoney(payWeekLabor)}`)
+                      : weekClosed && pwHrs === 0 ? "No shifts while closed"
                       : `${pwHrs.toFixed(1)}h · ${pwStaff} of ${employees.length} staff scheduled${bgt > 0 ? ` · budget ${fmtMoney(bgt)}` : ""}`}
                   </span>
                 </div>
@@ -5620,13 +5649,24 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                   ))}
                 </span>
               </span>
+              {weekClosed && shownPct == null ? (<>
+                <span style={kpiValue}>{lastSeasonPct != null ? `${lastSeasonPct.toFixed(1)}%` : "—"}</span>
+                <span style={{ fontSize: 11.5, color: C.sub }}>{lastSeasonPct != null ? `Last season's average · target ${tgt}%` : "Closed for the season"}</span>
+              </>) : (<>
               <span style={{ ...kpiValue, color: pctTone }}>{shownPct != null ? `${shownPct.toFixed(1)}%` : "—"}</span>
               <span style={{ fontSize: 11.5, color: C.sub }}>{shownPct != null ? `Target ${tgt}%` : laborPctMode === "projected" ? "Needs recent sales history" : "No sales recorded yet"}</span>
+              </>)}
             </div>
             <div style={kpi(C.sand)}>
+              {forecastReopen ? (<>
+                <div style={kpiHead}><span style={kpiLabel}>Forecast · first week open</span></div>
+                <span style={kpiValue}>{forecastReopen.hasEnoughData ? fmtMoney(forecastReopen.total) : "—"}</span>
+                <span style={{ fontSize: 11.5, color: C.sub }}>{forecastReopen.hasEnoughData ? `Week of ${dl(forecastReopen.dates[0])} · from last season` : "Not enough last-season sales yet"}</span>
+              </>) : (<>
               <div style={kpiHead}><span style={kpiLabel}>Forecast · next 7 days</span></div>
               <span style={kpiValue}>{forecastNext7.hasEnoughData ? fmtMoney(forecastNext7.total) : "—"}</span>
               <span style={{ fontSize: 11.5, color: C.sub }}>{forecastNext7.hasEnoughData ? `Suggested labor ${fmtMoney(forecastNext7.total * tgt / 100)}` : "No recent sales to forecast from"}</span>
+              </>)}
             </div>
           </div>
 
@@ -5638,7 +5678,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 <div style={{ display: "flex", gap: 12, fontSize: 11.5, color: C.sub }}>
                   <span><span style={{ display: "inline-block", width: 10, height: 2, background: C.ink, verticalAlign: "middle", marginRight: 5 }} />Sales</span>
                   <span><span style={{ display: "inline-block", width: 10, height: 2, background: T.accent, verticalAlign: "middle", marginRight: 5 }} />Labor</span>
-                  {hasLastWeek && <span><span style={{ display: "inline-block", width: 10, borderTop: "2px dashed #8EA4D2", verticalAlign: "middle", marginRight: 5 }} />Last week</span>}
+                  {hasLastWeek && <span><span style={{ display: "inline-block", width: 10, borderTop: "2px dashed #8EA4D2", verticalAlign: "middle", marginRight: 5 }} />{cmpLabel === "last week" ? "Last week" : "Same week last season"}</span>}
                 </div>
               </div>
               {totalRevenue === 0 && payWeekLabor === 0 ? (
@@ -6068,6 +6108,11 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
     const result = { kind:"history" };
     if (config.data_source !== "labor") result.sales = getSales(config.time_range, salesData, anchor);
     if (config.data_source !== "sales") result.labor = getLabor(config.time_range, salesData, employees, eDayH, anchor);
+    if (season.on) { // UI Batch 22 — closed days aren't $0 days
+      const trim = r => { if (!r) return r; const days = r.days.filter(d => openDay(d.date)); const total = days.reduce((s,d) => s + (d.revenue ?? d.labor ?? 0), 0);
+        return { ...r, days, dates: days.map(d => d.date), total, ...(r.daysWithData !== undefined ? { daysWithData: days.filter(d => d.hasData).length } : {}) }; };
+      result.sales = trim(result.sales); result.labor = trim(result.labor);
+    }
     return result;
   }
 
@@ -6335,6 +6380,9 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
   // real businesses, the fixed demo anchor for Cedar & Sage (whose seeded
   // data lives in June 2026, not whenever this is actually being viewed).
   const demoToday = isDemoBiz ? DEMO_TODAY_ANCHOR : toLocalDateStr(new Date());
+  // UI Batch 22 — season status for today; openDay() is the shared "were we open?" check
+  const seasonNow = seasonInfo(demoToday, season);
+  const openDay = d => isSeasonOpen(d, season);
 
   const weeks = useMemo(() => {
     const base = [{ key:wk1Start, label:"Week 1", dates:weekDatesFromSunday(wk1Start) }];
@@ -9429,6 +9477,11 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 )}
 
                 {/* Error */}
+                {!insightsPanel && !seasonNow.open && (
+                  <div role="status" style={{background:"#F6EEE3",border:"1px solid #E8D6BD",borderRadius:12,padding:"14px 16px",fontSize:14,color:T.text,marginBottom:12}}>
+                    <strong>Closed for the season.</strong> The Weekly Pulse resumes when you reopen on {fmtLongDate(seasonNow.reopens)}.
+                  </div>
+                )}
                 {!insightsPanel && insightError && (
                   <div style={{background:"#FDECEA", border:"1.5px solid #C0392B30", borderRadius:T.radius, padding:"14px 18px", color:"#C0392B", fontSize:13, fontWeight:600}}>
                     ⚠️ {insightError}
@@ -9448,7 +9501,7 @@ const [dashSub,        setDashSub]        = useState("overview"); // Dashboard t
                 )}
 
                 {/* Empty state — first-run checklist */}
-                {!insightsPanel && !insightLoading && !insight && !insightError && (() => {
+                {!insightsPanel && !insightLoading && !insight && !insightError && seasonNow.open && (() => {
                   const hasEmployees = employees.length > 0;
                   const hasShifts = hasEmployees && Object.keys(schedule).some(wk =>
                     employees.some(e => DAYS.some((_, di) => getShift(wk, e.id, di)))
